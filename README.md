@@ -16,7 +16,11 @@ A native Android investment-wallet tracker for the US market. Kotlin + Jetpack C
 
 ## Install
 
-Download `app-debug.apk` from the [latest release](../../releases/latest), open it on your Android phone (allow "Install unknown apps"), then:
+Scan with your phone camera to download the latest APK directly:
+
+<img src="install-qr.png" alt="Scan to install Aurum" width="260" />
+
+Or download `aurum.apk` from the [latest release](../../releases/latest). Open it on your Android phone (allow "Install unknown apps"), then:
 
 1. Open **Settings → Bank sync → Enable** to grant Notification Access (needed for bank-alert capture).
 2. Add your first trade with the gold **+** button, or let a bank notification arrive and import it from the **Feed** tab.
