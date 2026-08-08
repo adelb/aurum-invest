@@ -24,9 +24,10 @@ abstract class AurumDatabase : RoomDatabase() {
     abstract fun picksDao(): PicksDao
 
     companion object {
+        // No destructive fallback: the user's ledger must survive every app
+        // update. Any future schema change MUST ship an explicit Migration.
         fun build(context: Context): AurumDatabase =
             Room.databaseBuilder(context, AurumDatabase::class.java, "aurum.db")
-                .fallbackToDestructiveMigration()
                 .build()
     }
 }

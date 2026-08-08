@@ -34,14 +34,21 @@ import com.aurum.invest.analytics.TechniqueAnalysis
 import com.aurum.invest.analytics.TechniqueResult
 import com.aurum.invest.analytics.TechniqueVerdict
 import com.aurum.invest.core.Fmt
+import com.aurum.invest.ui.components.AdxDiagram
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.BollingerDiagram
 import com.aurum.invest.ui.components.EmptyState
+import com.aurum.invest.ui.components.FibonacciDiagram
+import com.aurum.invest.ui.components.FvgDiagram
+import com.aurum.invest.ui.components.IchimokuDiagram
 import com.aurum.invest.ui.components.MaTrendDiagram
 import com.aurum.invest.ui.components.MacdDiagram
+import com.aurum.invest.ui.components.ObvDiagram
 import com.aurum.invest.ui.components.PillTag
 import com.aurum.invest.ui.components.RsiDiagram
+import com.aurum.invest.ui.components.StochasticDiagram
 import com.aurum.invest.ui.components.SupportResistanceDiagram
+import com.aurum.invest.ui.components.rememberDiagramViewport
 import com.aurum.invest.ui.theme.AurumColors
 
 @Composable
@@ -109,7 +116,13 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
                 ) {
                     item {
                         OutlookCard(analysis = analysis, price = state.price)
-                        Spacer(Modifier.height(28.dp))
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = "Pinch or double-tap a diagram to zoom · drag to move through time",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AurumColors.textDim
+                        )
+                        Spacer(Modifier.height(18.dp))
                     }
                     analysis.results.forEachIndexed { index, result ->
                         item {
@@ -223,6 +236,7 @@ private fun RangeBar(low: Double, high: Double, price: Double) {
 
 @Composable
 private fun TechniqueCard(result: TechniqueResult, analysis: TechniqueAnalysis) {
+    val viewport = rememberDiagramViewport(analysis.timestamps.size)
     AurumCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -240,13 +254,20 @@ private fun TechniqueCard(result: TechniqueResult, analysis: TechniqueAnalysis) 
             )
         }
         Spacer(Modifier.height(14.dp))
-        val diagramModifier = Modifier.fillMaxWidth().height(170.dp)
+        val m = Modifier.fillMaxWidth()
+        val ts = analysis.timestamps
         when (result.key) {
-            "ma" -> MaTrendDiagram(data = analysis.maData, modifier = diagramModifier)
-            "rsi" -> RsiDiagram(data = analysis.rsiData, modifier = diagramModifier)
-            "macd" -> MacdDiagram(data = analysis.macdData, modifier = diagramModifier)
-            "bollinger" -> BollingerDiagram(data = analysis.bollingerData, modifier = diagramModifier)
-            else -> SupportResistanceDiagram(data = analysis.srData, modifier = diagramModifier)
+            "ma" -> MaTrendDiagram(analysis.maData, ts, viewport, m)
+            "rsi" -> RsiDiagram(analysis.rsiData, ts, viewport, m)
+            "macd" -> MacdDiagram(analysis.macdData, ts, viewport, m)
+            "bollinger" -> BollingerDiagram(analysis.bollingerData, ts, viewport, m)
+            "sr" -> SupportResistanceDiagram(analysis.srData, ts, viewport, m)
+            "fvg" -> FvgDiagram(analysis.fvgData, ts, viewport, m)
+            "fib" -> FibonacciDiagram(analysis.fibData, ts, viewport, m)
+            "ichimoku" -> IchimokuDiagram(analysis.ichimokuData, ts, viewport, m)
+            "stoch" -> StochasticDiagram(analysis.stochData, ts, viewport, m)
+            "obv" -> ObvDiagram(analysis.obvData, analysis.maData.closes, ts, viewport, m)
+            else -> AdxDiagram(analysis.adxData, ts, viewport, m)
         }
         Spacer(Modifier.height(12.dp))
         Text(

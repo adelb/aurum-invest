@@ -362,3 +362,33 @@ Position awareness: the VM loads the open position for the entered symbol (portf
 - AurumRoot: Routes.ANALYSIS "analysis/{symbol}" + analysis(symbol), Routes.REPORTS "reports", ADD route gains &side={side}; new composable entries; updated screen callbacks.
 - PositionDetailScreen: Sell/Buy pass their side; adds a "5-day analysis" entry point; signature gains onOpenAnalysis.
 - DashboardScreen: header gains a reports icon. WatchlistScreen rows gain an analysis icon.
+
+---
+
+# Phase 3 — 11-technique analysis (`analytics/Techniques.kt` extension)
+
+TechniqueAnalysis gains `val timestamps: List<Long>` (epoch millis of each candle used, index-aligned with every series) and six new data fields; `results` becomes EXACTLY 11 entries in order: ma, rsi, macd, bollinger, sr, fvg, fib, ichimoku, stoch, obv, adx. The outlook aggregates all 11 (same strength-weighted rule; first summary sentence says "N of 11 techniques...").
+
+```kotlin
+data class FvgZone(val startIndex: Int, val low: Double, val high: Double, val bullish: Boolean, val filled: Boolean)
+data class FvgData(val closes: List<Double>, val zones: List<FvgZone>)                    // max 12 most recent zones
+data class FibonacciData(val closes: List<Double>, val swingLow: Double, val swingHigh: Double, val levels: List<Pair<String, Double>>) // "0.236".."0.786" + "0.0"/"1.0", price levels from window swing low->high
+data class IchimokuData(val closes: List<Double>, val tenkan: List<Double?>, val kijun: List<Double?>, val senkouA: List<Double?>, val senkouB: List<Double?>) // senkou arrays displaced +26 and aligned to candle index (null where undefined)
+data class StochasticData(val k: List<Double?>, val d: List<Double?>)                     // %K(14) smoothed 3, %D = SMA3 of K
+data class ObvData(val obv: List<Double>)                                                  // cumulative on-balance volume
+data class AdxData(val adx: List<Double?>, val plusDi: List<Double?>, val minusDi: List<Double?>)  // Wilder 14
+```
+
+New technique keys/names/verdicts:
+- "fvg" / "Fair value gap": 3-candle gaps over the window (bullish: high[i-2] < low[i], zone = [high[i-2], low[i]]; bearish mirrored). Zone filled when a later candle trades fully through it (bullish: low <= zone.low; bearish: high >= zone.high). Verdict: nearest UNFILLED bullish zone below price within 5% -> BULLISH (gap acts as support magnet); nearest unfilled bearish zone above within 5% -> BEARISH; else NEUTRAL. Summary cites the zone bounds.
+- "fib" / "Fibonacci retracement": swing low/high of the window; price within 1.5% of the 0.382/0.5/0.618 level while above the 0.618 -> BULLISH (buy-the-dip zone); price below the 0.786 -> BEARISH (retracement failed); within 1.5% of 0.236 or above -> mild BULLISH momentum; else NEUTRAL. Summary names the nearest level and its price.
+- "ichimoku" / "Ichimoku Cloud": tenkan(9), kijun(26), senkouA=(tenkan+kijun)/2 displaced +26, senkouB=(52-high+low)/2 displaced +26 (needs highs/lows from candles). Price above the cloud with tenkan>kijun -> BULLISH; below the cloud -> BEARISH; inside -> NEUTRAL.
+- "stoch" / "Stochastic oscillator": %K<20 with K>=D (crossing up) -> BULLISH; %K>80 with K<=D -> BEARISH; else NEUTRAL with direction noted.
+- "obv" / "On-balance volume": 20-bar OBV slope up while price 20-bar change <= 0 -> BULLISH (accumulation divergence); OBV slope down while price up -> BEARISH (distribution divergence); slopes agreeing -> NEUTRAL confirming, verdict follows price direction at lower strength.
+- "adx" / "ADX trend strength": ADX>25 and +DI>-DI -> BULLISH; ADX>25 and -DI>+DI -> BEARISH; ADX<20 -> NEUTRAL "no trend".
+
+All summaries terse with concrete numbers, sentence case. Existing five techniques and their rules unchanged.
+
+## Phase 3 — diagram viewport (TechniqueCharts.kt, coordinator-owned)
+
+Every diagram gains `timestamps: List<Long>` + `viewport: DiagramViewport` and renders only the visible window with 3 date labels (first/mid/last visible, Fmt.dateShort) along the bottom. `rememberDiagramViewport(total)` + gestures: two-finger pinch zooms (up to ~8x, min 15 points), single-finger horizontal drag pans (vertical drags still scroll the page), double-tap steps zoom 1x -> 2x -> 4x -> reset. Six new diagram composables for the Phase-3 data classes.

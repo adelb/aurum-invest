@@ -10,10 +10,11 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
- * Five-technique chart analysis over daily candles. Pure Kotlin — no Android
+ * Eleven-technique chart analysis over daily candles. Pure Kotlin — no Android
  * dependencies, never throws. All rolling series are index-aligned with the
  * (last <= 120) candles the analysis ran on: entry i belongs to candle i, and
- * is null until enough history exists at that index.
+ * is null until enough history exists at that index. [TechniqueAnalysis.timestamps]
+ * carries the epoch millis of those same candles, one per index.
  */
 
 enum class TechniqueVerdict { BULLISH, BEARISH, NEUTRAL }
@@ -45,6 +46,33 @@ data class SupportResistanceData(
     val resistances: List<Double>
 )
 
+/** One 3-candle fair value gap. [startIndex] is the first candle of the pattern. */
+data class FvgZone(val startIndex: Int, val low: Double, val high: Double, val bullish: Boolean, val filled: Boolean)
+
+data class FvgData(val closes: List<Double>, val zones: List<FvgZone>)
+
+data class FibonacciData(
+    val closes: List<Double>,
+    val swingLow: Double,
+    val swingHigh: Double,
+    val levels: List<Pair<String, Double>>
+)
+
+/** Senkou arrays are displaced +26 and aligned to candle index; null where undefined. */
+data class IchimokuData(
+    val closes: List<Double>,
+    val tenkan: List<Double?>,
+    val kijun: List<Double?>,
+    val senkouA: List<Double?>,
+    val senkouB: List<Double?>
+)
+
+data class StochasticData(val k: List<Double?>, val d: List<Double?>)
+
+data class ObvData(val obv: List<Double>)
+
+data class AdxData(val adx: List<Double?>, val plusDi: List<Double?>, val minusDi: List<Double?>)
+
 data class TechniqueResult(
     val key: String,
     val name: String,
@@ -67,13 +95,20 @@ data class FiveDayOutlook(
 
 data class TechniqueAnalysis(
     val symbol: String,
+    val timestamps: List<Long>,
     val results: List<TechniqueResult>,
     val outlook: FiveDayOutlook,
     val maData: MaTrendData,
     val rsiData: RsiData,
     val macdData: MacdData,
     val bollingerData: BollingerData,
-    val srData: SupportResistanceData
+    val srData: SupportResistanceData,
+    val fvgData: FvgData,
+    val fibData: FibonacciData,
+    val ichimokuData: IchimokuData,
+    val stochData: StochasticData,
+    val obvData: ObvData,
+    val adxData: AdxData
 )
 
 object Techniques {
@@ -83,12 +118,22 @@ object Techniques {
     private const val SR_LOOKBACK = 90
     private const val SR_CLUSTER_PCT = 1.5
     private const val SR_NEAR_PCT = 2.0
+    private const val FVG_NEAR_PCT = 5.0
+    private const val FIB_NEAR_PCT = 1.5
+    private const val ICHIMOKU_SHIFT = 26
+    private const val OBV_WINDOW = 20
+
+    private val FIB_RATIOS = listOf(
+        "0.0" to 0.0, "0.236" to 0.236, "0.382" to 0.382, "0.5" to 0.5,
+        "0.618" to 0.618, "0.786" to 0.786, "1.0" to 1.0
+    )
 
     /** Null when fewer than 30 daily candles are supplied. Uses the last <= 120 candles. */
     fun analyze(symbol: String, candles: List<Candle>): TechniqueAnalysis? {
         if (candles.size < MIN_CANDLES) return null
         val cs = candles.takeLast(SERIES_MAX)
         val closes = cs.map { it.close }
+        val timestamps = cs.map { it.ts }
         val n = closes.size
         val price = closes.last()
         if (price <= 0.0) return null
@@ -106,26 +151,45 @@ object Techniques {
         val macdData = MacdData(macdS.macd, macdS.signal, macdS.histogram)
         val bollData = BollingerData(closes, bollS.upper, bollS.middle, bollS.lower)
         val srData = SupportResistanceData(closes, supports.map { it.level }, resistances.map { it.level })
+        val fvgData = FvgData(closes, fvgZones(cs))
+        val fibData = fibonacciData(cs, closes)
+        val ichiData = ichimokuData(cs, closes)
+        val stochData = stochasticData(cs)
+        val obvData = ObvData(obvSeries(cs))
+        val adxData = adxSeries(cs, 14)
 
         val results = listOf(
             maResult(n, price, sma20, sma50),
             rsiResult(n, rsiS),
             macdResult(n, price, macdS),
             bollingerResult(price, bollS),
-            srResult(price, supports, resistances)
+            srResult(price, supports, resistances),
+            fvgResult(price, fvgData.zones),
+            fibResult(price, fibData),
+            ichimokuResult(n, price, ichiData),
+            stochResult(n, stochData),
+            obvResult(closes, obvData.obv),
+            adxResult(n, adxData)
         )
 
         val outlook = buildOutlook(cs, price, results, supports, resistances)
 
         return TechniqueAnalysis(
             symbol = symbol,
+            timestamps = timestamps,
             results = results,
             outlook = outlook,
             maData = maData,
             rsiData = rsiData,
             macdData = macdData,
             bollingerData = bollData,
-            srData = srData
+            srData = srData,
+            fvgData = fvgData,
+            fibData = fibData,
+            ichimokuData = ichiData,
+            stochData = stochData,
+            obvData = obvData,
+            adxData = adxData
         )
     }
 
@@ -361,6 +425,423 @@ object Techniques {
         }
     }
 
+    // -- technique 6: fair value gap ----------------------------------------
+
+    /**
+     * 3-candle gaps over the window. Bullish: high[i-2] < low[i], zone
+     * [high[i-2], low[i]]; bearish mirrored. A zone is filled when a later
+     * candle trades fully through it. Keeps the 12 most recent zones.
+     */
+    private fun fvgZones(candles: List<Candle>): List<FvgZone> {
+        val n = candles.size
+        val zones = ArrayList<FvgZone>()
+        for (i in 2 until n) {
+            val prevHigh = candles[i - 2].high
+            val prevLow = candles[i - 2].low
+            val curLow = candles[i].low
+            val curHigh = candles[i].high
+            if (prevHigh < curLow) {
+                var filled = false
+                for (j in i + 1 until n) {
+                    if (candles[j].low <= prevHigh) { filled = true; break }
+                }
+                zones.add(FvgZone(i - 2, prevHigh, curLow, bullish = true, filled = filled))
+            }
+            if (prevLow > curHigh) {
+                var filled = false
+                for (j in i + 1 until n) {
+                    if (candles[j].high >= prevLow) { filled = true; break }
+                }
+                zones.add(FvgZone(i - 2, curHigh, prevLow, bullish = false, filled = filled))
+            }
+        }
+        return if (zones.size > 12) zones.takeLast(12) else zones
+    }
+
+    private fun fvgResult(price: Double, zones: List<FvgZone>): TechniqueResult {
+        val name = "Fair value gap"
+        if (zones.isEmpty()) {
+            return TechniqueResult(
+                "fvg", name, TechniqueVerdict.NEUTRAL, 25,
+                "No 3-candle gaps in the window around ${Fmt.money(price)}."
+            )
+        }
+        val unfilled = zones.filter { !it.filled }
+        val below = unfilled.filter { it.bullish && it.high <= price }.maxByOrNull { it.high }
+        val above = unfilled.filter { !it.bullish && it.low >= price }.minByOrNull { it.low }
+        val belowPct = below?.let { (price - it.high) / price * 100.0 }
+        val abovePct = above?.let { (it.low - price) / price * 100.0 }
+        val nearBelow = belowPct != null && belowPct <= FVG_NEAR_PCT
+        val nearAbove = abovePct != null && abovePct <= FVG_NEAR_PCT
+
+        // When both sides qualify, the closer zone decides.
+        val pickBelow = nearBelow && (!nearAbove || belowPct!! <= abovePct!!)
+        val pickAbove = nearAbove && !pickBelow
+
+        return when {
+            pickBelow -> TechniqueResult(
+                "fvg", name, TechniqueVerdict.BULLISH,
+                (55.0 + (FVG_NEAR_PCT - belowPct!!) * 7.0).roundToInt().coerceIn(55, 90),
+                "Unfilled bullish gap ${Fmt.money(below!!.low)}–${Fmt.money(below.high)} sits ${fmt1(belowPct)}% below price."
+            )
+            pickAbove -> TechniqueResult(
+                "fvg", name, TechniqueVerdict.BEARISH,
+                (55.0 + (FVG_NEAR_PCT - abovePct!!) * 7.0).roundToInt().coerceIn(55, 90),
+                "Unfilled bearish gap ${Fmt.money(above!!.low)}–${Fmt.money(above.high)} sits ${fmt1(abovePct)}% above price."
+            )
+            else -> TechniqueResult(
+                "fvg", name, TechniqueVerdict.NEUTRAL, 30,
+                "No unfilled gap within ${fmt0(FVG_NEAR_PCT)}% of ${Fmt.money(price)}; " +
+                    "${zones.size} ${zones(zones.size)} tracked, ${unfilled.size} unfilled."
+            )
+        }
+    }
+
+    // -- technique 7: Fibonacci retracement ---------------------------------
+
+    /** Levels from the window swing low -> high: level r sits at high - r * range. */
+    private fun fibonacciData(candles: List<Candle>, closes: List<Double>): FibonacciData {
+        val swingLow = candles.minOf { it.low }
+        val swingHigh = candles.maxOf { it.high }
+        val range = swingHigh - swingLow
+        val levels = FIB_RATIOS.map { (label, r) -> label to (swingHigh - r * range) }
+        return FibonacciData(closes, swingLow, swingHigh, levels)
+    }
+
+    private fun fibResult(price: Double, fib: FibonacciData): TechniqueResult {
+        val name = "Fibonacci retracement"
+        val range = fib.swingHigh - fib.swingLow
+        if (range <= 0.0 || fib.swingHigh <= 0.0) {
+            return TechniqueResult(
+                "fib", name, TechniqueVerdict.NEUTRAL, 20,
+                "Window is flat at ${Fmt.money(price)}; no swing to retrace."
+            )
+        }
+        val level = fib.levels.toMap()
+        val l236 = level.getValue("0.236")
+        val l382 = level.getValue("0.382")
+        val l50 = level.getValue("0.5")
+        val l618 = level.getValue("0.618")
+        val l786 = level.getValue("0.786")
+
+        fun distPct(l: Double): Double = if (l > 0.0) abs(price - l) / l * 100.0 else Double.MAX_VALUE
+        val dipLevels = listOf("0.382" to l382, "0.5" to l50, "0.618" to l618)
+        val nearestDip = dipLevels.minByOrNull { distPct(it.second) }!!
+        val dipDist = distPct(nearestDip.second)
+
+        return when {
+            price > l618 && dipDist <= FIB_NEAR_PCT -> TechniqueResult(
+                "fib", name, TechniqueVerdict.BULLISH,
+                (65.0 + (FIB_NEAR_PCT - dipDist) * 10.0).roundToInt().coerceIn(65, 80),
+                "Price ${Fmt.money(price)} holds the ${nearestDip.first} retracement at ${Fmt.money(nearestDip.second)} " +
+                    "of the ${Fmt.money(fib.swingLow)}–${Fmt.money(fib.swingHigh)} swing."
+            )
+            price < l786 -> {
+                val depth = if (l786 > 0.0) (l786 - price) / l786 * 100.0 else 0.0
+                TechniqueResult(
+                    "fib", name, TechniqueVerdict.BEARISH,
+                    (70.0 + depth * 2.0).roundToInt().coerceIn(70, 90),
+                    "Price ${Fmt.money(price)} is ${fmt1(depth)}% under the 0.786 level ${Fmt.money(l786)}; " +
+                        "the ${Fmt.money(fib.swingLow)}–${Fmt.money(fib.swingHigh)} retracement failed."
+                )
+            }
+            price >= l236 || distPct(l236) <= FIB_NEAR_PCT -> TechniqueResult(
+                "fib", name, TechniqueVerdict.BULLISH, 50,
+                "Price ${Fmt.money(price)} holds at or above the 0.236 level ${Fmt.money(l236)}; shallow pullback keeps momentum."
+            )
+            else -> {
+                val nearest = fib.levels.minByOrNull { distPct(it.second) }!!
+                TechniqueResult(
+                    "fib", name, TechniqueVerdict.NEUTRAL, 30,
+                    "Price ${Fmt.money(price)} sits nearest the ${nearest.first} level ${Fmt.money(nearest.second)}; " +
+                        "no level tagged within ${fmt1(FIB_NEAR_PCT)}%."
+                )
+            }
+        }
+    }
+
+    // -- technique 8: Ichimoku Cloud ----------------------------------------
+
+    /** Tenkan(9), kijun(26), senkou spans displaced +26; the tail beyond the last candle is dropped. */
+    private fun ichimokuData(candles: List<Candle>, closes: List<Double>): IchimokuData {
+        val n = candles.size
+        val tenkan = midSeries(candles, 9)
+        val kijun = midSeries(candles, 26)
+        val rawB = midSeries(candles, 52)
+        val senkouA = arrayOfNulls<Double>(n)
+        val senkouB = arrayOfNulls<Double>(n)
+        for (i in ICHIMOKU_SHIFT until n) {
+            val src = i - ICHIMOKU_SHIFT
+            val t = tenkan[src]
+            val k = kijun[src]
+            if (t != null && k != null) senkouA[i] = (t + k) / 2.0
+            senkouB[i] = rawB[src]
+        }
+        return IchimokuData(closes, tenkan, kijun, senkouA.toList(), senkouB.toList())
+    }
+
+    private fun ichimokuResult(n: Int, price: Double, data: IchimokuData): TechniqueResult {
+        val name = "Ichimoku Cloud"
+        val t = data.tenkan.last()
+        val k = data.kijun.last()
+        val a = data.senkouA.last()
+        val b = data.senkouB.last()
+        if (t == null || k == null || a == null || b == null) {
+            return TechniqueResult(
+                "ichimoku", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 78 daily candles for the displaced cloud; $n available."
+            )
+        }
+        val cloudTop = max(a, b)
+        val cloudBottom = min(a, b)
+        return when {
+            price > cloudTop && t > k -> {
+                val distPct = if (cloudTop > 0.0) (price - cloudTop) / cloudTop * 100.0 else 0.0
+                TechniqueResult(
+                    "ichimoku", name, TechniqueVerdict.BULLISH,
+                    (70.0 + distPct * 3.0).roundToInt().coerceIn(70, 92),
+                    "Close ${Fmt.money(price)} is ${fmt1(distPct)}% above the ${Fmt.money(cloudBottom)}–${Fmt.money(cloudTop)} cloud; " +
+                        "tenkan ${Fmt.money(t)} over kijun ${Fmt.money(k)}."
+                )
+            }
+            price < cloudBottom -> {
+                val distPct = if (cloudBottom > 0.0) (cloudBottom - price) / cloudBottom * 100.0 else 0.0
+                TechniqueResult(
+                    "ichimoku", name, TechniqueVerdict.BEARISH,
+                    (70.0 + distPct * 3.0).roundToInt().coerceIn(70, 92),
+                    "Close ${Fmt.money(price)} is ${fmt1(distPct)}% below the ${Fmt.money(cloudBottom)}–${Fmt.money(cloudTop)} cloud."
+                )
+            }
+            price > cloudTop -> TechniqueResult(
+                "ichimoku", name, TechniqueVerdict.NEUTRAL, 40,
+                "Close ${Fmt.money(price)} is above the ${Fmt.money(cloudBottom)}–${Fmt.money(cloudTop)} cloud, " +
+                    "but tenkan ${Fmt.money(t)} under kijun ${Fmt.money(k)} withholds confirmation."
+            )
+            else -> TechniqueResult(
+                "ichimoku", name, TechniqueVerdict.NEUTRAL, 30,
+                "Close ${Fmt.money(price)} is inside the ${Fmt.money(cloudBottom)}–${Fmt.money(cloudTop)} cloud; no trend signal."
+            )
+        }
+    }
+
+    // -- technique 9: stochastic oscillator ---------------------------------
+
+    /** Slow stochastic: raw %K(14), smoothed over 3; %D = SMA3 of the smoothed K. */
+    private fun stochasticData(candles: List<Candle>): StochasticData {
+        val n = candles.size
+        val rawK = arrayOfNulls<Double>(n)
+        val hh = highSeries(candles, 14)
+        val ll = lowSeries(candles, 14)
+        for (i in 13 until n) {
+            val h = hh[i] ?: continue
+            val l = ll[i] ?: continue
+            val range = h - l
+            rawK[i] = if (range > 0.0) (candles[i].close - l) / range * 100.0 else 50.0
+        }
+        val k = sma3Nullable(rawK.toList())
+        val d = sma3Nullable(k)
+        return StochasticData(k, d)
+    }
+
+    private fun stochResult(n: Int, data: StochasticData): TechniqueResult {
+        val name = "Stochastic oscillator"
+        val k = data.k.last()
+        val d = data.d.last()
+        if (k == null || d == null) {
+            return TechniqueResult(
+                "stoch", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 18 daily candles for stochastic(14,3,3); $n available."
+            )
+        }
+        return when {
+            k < 20.0 && k >= d -> TechniqueResult(
+                "stoch", name, TechniqueVerdict.BULLISH,
+                (70.0 + (20.0 - k)).roundToInt().coerceIn(70, 90),
+                "%K ${fmt0(k)} crossing up over %D ${fmt0(d)} in the sub-20 oversold zone."
+            )
+            k > 80.0 && k <= d -> TechniqueResult(
+                "stoch", name, TechniqueVerdict.BEARISH,
+                (70.0 + (k - 80.0)).roundToInt().coerceIn(70, 90),
+                "%K ${fmt0(k)} rolling under %D ${fmt0(d)} in the over-80 overbought zone."
+            )
+            else -> {
+                val zone = when {
+                    k < 20.0 -> " in the oversold zone, no turn yet"
+                    k > 80.0 -> " in the overbought zone, no turn yet"
+                    else -> " mid-range"
+                }
+                val dir = if (k >= d) "rising" else "easing"
+                TechniqueResult(
+                    "stoch", name, TechniqueVerdict.NEUTRAL, 30,
+                    "%K ${fmt0(k)} vs %D ${fmt0(d)}, $dir$zone."
+                )
+            }
+        }
+    }
+
+    // -- technique 10: on-balance volume ------------------------------------
+
+    /** Cumulative OBV starting at 0: volume added on up closes, subtracted on down closes. */
+    private fun obvSeries(candles: List<Candle>): List<Double> {
+        val n = candles.size
+        val out = ArrayList<Double>(n)
+        var obv = 0.0
+        out.add(obv)
+        for (i in 1 until n) {
+            val d = candles[i].close - candles[i - 1].close
+            if (d > 0.0) obv += candles[i].volume.toDouble()
+            else if (d < 0.0) obv -= candles[i].volume.toDouble()
+            out.add(obv)
+        }
+        return out
+    }
+
+    private fun obvResult(closes: List<Double>, obv: List<Double>): TechniqueResult {
+        val name = "On-balance volume"
+        val n = closes.size
+        val window = min(OBV_WINDOW, n)
+        if (window < 3) {
+            return TechniqueResult(
+                "obv", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs more history for the $OBV_WINDOW-bar OBV read; $n available."
+            )
+        }
+        val slope = lsSlope(obv.takeLast(window))
+        val ref = closes[n - window]
+        val priceChgPct = if (ref > 0.0) (closes.last() - ref) / ref * 100.0 else 0.0
+        val obvDelta = obv.last() - obv[n - window]
+        val priceTxt = when {
+            priceChgPct > 0.05 -> "up ${fmt1(priceChgPct)}%"
+            priceChgPct < -0.05 -> "down ${fmt1(-priceChgPct)}%"
+            else -> "flat"
+        }
+
+        return when {
+            slope > 0.0 && priceChgPct <= 0.0 -> TechniqueResult(
+                "obv", name, TechniqueVerdict.BULLISH,
+                (70.0 + min(15.0, abs(priceChgPct) * 2.0)).roundToInt().coerceIn(70, 85),
+                "OBV +${Fmt.compact(abs(obvDelta))} over $window bars with price $priceTxt: accumulation divergence."
+            )
+            slope < 0.0 && priceChgPct > 0.0 -> TechniqueResult(
+                "obv", name, TechniqueVerdict.BEARISH,
+                (70.0 + min(15.0, priceChgPct * 2.0)).roundToInt().coerceIn(70, 85),
+                "OBV -${Fmt.compact(abs(obvDelta))} over $window bars with price $priceTxt: distribution divergence."
+            )
+            priceChgPct > 0.0 -> TechniqueResult(
+                "obv", name, TechniqueVerdict.BULLISH, 50,
+                "OBV and price both up over $window bars ($priceTxt): volume confirms the move."
+            )
+            priceChgPct < 0.0 && slope < 0.0 -> TechniqueResult(
+                "obv", name, TechniqueVerdict.BEARISH, 50,
+                "OBV and price both down over $window bars ($priceTxt): volume confirms the slide."
+            )
+            else -> TechniqueResult(
+                "obv", name, TechniqueVerdict.NEUTRAL, 30,
+                "OBV and price both near flat over $window bars; no volume signal."
+            )
+        }
+    }
+
+    // -- technique 11: ADX trend strength -----------------------------------
+
+    /** Wilder ADX(14) with +DI/-DI. DI series start at index [period], ADX at 2*[period]-1. */
+    private fun adxSeries(candles: List<Candle>, period: Int): AdxData {
+        val n = candles.size
+        val plusDi = arrayOfNulls<Double>(n)
+        val minusDi = arrayOfNulls<Double>(n)
+        val adx = arrayOfNulls<Double>(n)
+        if (n < period + 1) return AdxData(adx.toList(), plusDi.toList(), minusDi.toList())
+
+        val tr = DoubleArray(n)
+        val pdm = DoubleArray(n)
+        val mdm = DoubleArray(n)
+        for (i in 1 until n) {
+            val h = candles[i].high
+            val l = candles[i].low
+            val pc = candles[i - 1].close
+            tr[i] = max(h - l, max(abs(h - pc), abs(l - pc)))
+            val up = h - candles[i - 1].high
+            val down = candles[i - 1].low - l
+            pdm[i] = if (up > down && up > 0.0) up else 0.0
+            mdm[i] = if (down > up && down > 0.0) down else 0.0
+        }
+
+        var trS = 0.0
+        var pS = 0.0
+        var mS = 0.0
+        for (i in 1..period) {
+            trS += tr[i]
+            pS += pdm[i]
+            mS += mdm[i]
+        }
+        val dx = arrayOfNulls<Double>(n)
+        fun setAt(i: Int) {
+            if (trS > 0.0) {
+                val p = 100.0 * pS / trS
+                val m = 100.0 * mS / trS
+                plusDi[i] = p
+                minusDi[i] = m
+                val sum = p + m
+                dx[i] = if (sum > 0.0) 100.0 * abs(p - m) / sum else 0.0
+            } else {
+                plusDi[i] = 0.0
+                minusDi[i] = 0.0
+                dx[i] = 0.0
+            }
+        }
+        setAt(period)
+        for (i in period + 1 until n) {
+            trS = trS - trS / period + tr[i]
+            pS = pS - pS / period + pdm[i]
+            mS = mS - mS / period + mdm[i]
+            setAt(i)
+        }
+        if (n >= 2 * period) {
+            var sum = 0.0
+            for (i in period until 2 * period) sum += dx[i] ?: 0.0
+            var a = sum / period
+            adx[2 * period - 1] = a
+            for (i in 2 * period until n) {
+                a = (a * (period - 1) + (dx[i] ?: 0.0)) / period
+                adx[i] = a
+            }
+        }
+        return AdxData(adx.toList(), plusDi.toList(), minusDi.toList())
+    }
+
+    private fun adxResult(n: Int, data: AdxData): TechniqueResult {
+        val name = "ADX trend strength"
+        val a = data.adx.last()
+        val p = data.plusDi.last()
+        val m = data.minusDi.last()
+        if (a == null || p == null || m == null) {
+            return TechniqueResult(
+                "adx", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 28 daily candles for ADX(14); $n available."
+            )
+        }
+        return when {
+            a > 25.0 && p > m -> TechniqueResult(
+                "adx", name, TechniqueVerdict.BULLISH,
+                (70.0 + (a - 25.0) + (p - m) * 0.3).roundToInt().coerceIn(70, 95),
+                "ADX ${fmt0(a)} with +DI ${fmt0(p)} over -DI ${fmt0(m)}: strong uptrend."
+            )
+            a > 25.0 && m > p -> TechniqueResult(
+                "adx", name, TechniqueVerdict.BEARISH,
+                (70.0 + (a - 25.0) + (m - p) * 0.3).roundToInt().coerceIn(70, 95),
+                "ADX ${fmt0(a)} with -DI ${fmt0(m)} over +DI ${fmt0(p)}: strong downtrend."
+            )
+            a < 20.0 -> TechniqueResult(
+                "adx", name, TechniqueVerdict.NEUTRAL, 25,
+                "ADX ${fmt0(a)}: no trend; +DI ${fmt0(p)} vs -DI ${fmt0(m)}."
+            )
+            else -> TechniqueResult(
+                "adx", name, TechniqueVerdict.NEUTRAL, 35,
+                "ADX ${fmt0(a)} with +DI ${fmt0(p)} vs -DI ${fmt0(m)}; trend not confirmed."
+            )
+        }
+    }
+
     // -- outlook -------------------------------------------------------------
 
     private fun buildOutlook(
@@ -427,7 +908,7 @@ object Techniques {
         }
 
         val summary = listOf(
-            "$bullishCount of 5 techniques read bullish, $bearishCount bearish, $neutralCount neutral.",
+            "$bullishCount of 11 techniques read bullish, $bearishCount bearish, $neutralCount neutral.",
             "The leading side holds $confidence% of the strength-weighted votes.",
             "Expected range ${Fmt.money(low)} to ${Fmt.money(high)} from the ${Fmt.money(price)} close, using a 14-day ATR of ${Fmt.money(atr)}.",
             srSentence,
@@ -478,6 +959,74 @@ object Techniques {
             out[i] = ema
         }
         return out.toList()
+    }
+
+    /** Rolling highest high over [period] candles; null before index period-1. */
+    private fun highSeries(candles: List<Candle>, period: Int): List<Double?> {
+        val n = candles.size
+        val out = arrayOfNulls<Double>(n)
+        if (period <= 0 || n < period) return out.toList()
+        for (i in period - 1 until n) {
+            var hi = candles[i].high
+            for (j in i - period + 1 until i) if (candles[j].high > hi) hi = candles[j].high
+            out[i] = hi
+        }
+        return out.toList()
+    }
+
+    /** Rolling lowest low over [period] candles; null before index period-1. */
+    private fun lowSeries(candles: List<Candle>, period: Int): List<Double?> {
+        val n = candles.size
+        val out = arrayOfNulls<Double>(n)
+        if (period <= 0 || n < period) return out.toList()
+        for (i in period - 1 until n) {
+            var lo = candles[i].low
+            for (j in i - period + 1 until i) if (candles[j].low < lo) lo = candles[j].low
+            out[i] = lo
+        }
+        return out.toList()
+    }
+
+    /** Ichimoku midpoint line: (highest high + lowest low) / 2 over [period] candles. */
+    private fun midSeries(candles: List<Candle>, period: Int): List<Double?> {
+        val hh = highSeries(candles, period)
+        val ll = lowSeries(candles, period)
+        return List(candles.size) { i ->
+            val h = hh[i]
+            val l = ll[i]
+            if (h != null && l != null) (h + l) / 2.0 else null
+        }
+    }
+
+    /** SMA(3) over a nullable series; defined only where all 3 inputs are. */
+    private fun sma3Nullable(values: List<Double?>): List<Double?> {
+        val n = values.size
+        val out = arrayOfNulls<Double>(n)
+        for (i in 2 until n) {
+            val a = values[i - 2]
+            val b = values[i - 1]
+            val c = values[i]
+            if (a != null && b != null && c != null) out[i] = (a + b + c) / 3.0
+        }
+        return out.toList()
+    }
+
+    /** Least-squares slope of [values] against their 0-based index. */
+    private fun lsSlope(values: List<Double>): Double {
+        val n = values.size
+        if (n < 2) return 0.0
+        val meanX = (n - 1) / 2.0
+        var meanY = 0.0
+        for (v in values) meanY += v
+        meanY /= n
+        var num = 0.0
+        var den = 0.0
+        for (i in 0 until n) {
+            val dx = i - meanX
+            num += dx * (values[i] - meanY)
+            den += dx * dx
+        }
+        return if (den > 0.0) num / den else 0.0
     }
 
     /** Rolling Wilder RSI; first value at index [period]. */
@@ -656,4 +1205,6 @@ object Techniques {
     private fun bars(n: Int): String = if (n == 1) "bar" else "bars"
 
     private fun touches(n: Int): String = if (n == 1) "touch" else "touches"
+
+    private fun zones(n: Int): String = if (n == 1) "zone" else "zones"
 }
