@@ -1,0 +1,123 @@
+package com.aurum.invest.ui.screens
+
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.aurum.invest.AurumApp
+import com.aurum.invest.core.Dates
+import com.aurum.invest.data.model.Quote
+import com.aurum.invest.data.model.WeeklyPick
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+/** One weekly pick enriched with the live quote for the since-pick delta. */
+data class PickRow(
+    val pick: WeeklyPick,
+    val quote: Quote?,
+    val sincePickPct: Double?
+)
+
+data class PicksState(
+    val rows: List<PickRow> = emptyList(),
+    val budgetRows: List<PickRow> = emptyList(),
+    val weekLabel: String = "",
+    val loading: Boolean = true,
+    val refreshing: Boolean = false
+)
+
+class PicksViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val container = (app as AurumApp).container
+    private val picks = container.picks
+    private val market = container.market
+
+    private val _state = MutableStateFlow(
+        PicksState(weekLabel = Dates.weekStartLabel(Dates.currentWeekStartIso()))
+    )
+    val state: StateFlow<PicksState> = _state.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            picks.observeCurrentWeek().collectLatest { list ->
+                if (list.isEmpty()) {
+                    _state.update { it.copy(rows = emptyList()) }
+                    return@collectLatest
+                }
+                // Show the picks immediately, then enrich with live quotes.
+                _state.update { st ->
+                    val known = st.rows.associateBy { it.pick.symbol }
+                    st.copy(
+                        rows = list.map { p -> known[p.symbol]?.copy(pick = p) ?: PickRow(p, null, null) },
+                        loading = false
+                    )
+                }
+                val quotes = market.getQuotes(list.map { it.symbol })
+                _state.update { st ->
+                    st.copy(
+                        rows = list.map { p ->
+                            val q = quotes[p.symbol]
+                            val since = if (q != null && p.priceAtPick > 0.0) {
+                                (q.price - p.priceAtPick) / p.priceAtPick * 100.0
+                            } else null
+                            PickRow(pick = p, quote = q, sincePickPct = since)
+                        },
+                        loading = false
+                    )
+                }
+            }
+        }
+        viewModelScope.launch {
+            picks.observeBudgetWeek().collectLatest { list ->
+                if (list.isEmpty()) {
+                    _state.update { it.copy(budgetRows = emptyList()) }
+                    return@collectLatest
+                }
+                _state.update { st ->
+                    val known = st.budgetRows.associateBy { it.pick.symbol }
+                    st.copy(
+                        budgetRows = list.map { p ->
+                            known[p.symbol]?.copy(pick = p) ?: PickRow(p, null, null)
+                        }
+                    )
+                }
+                val quotes = market.getQuotes(list.map { it.symbol })
+                _state.update { st ->
+                    st.copy(
+                        budgetRows = list.map { p ->
+                            val q = quotes[p.symbol]
+                            val since = if (q != null && p.priceAtPick > 0.0) {
+                                (q.price - p.priceAtPick) / p.priceAtPick * 100.0
+                            } else null
+                            PickRow(pick = p, quote = q, sincePickPct = since)
+                        }
+                    )
+                }
+            }
+        }
+        viewModelScope.launch {
+            picks.ensureCurrentWeek()
+            _state.update { it.copy(loading = false) }
+        }
+        viewModelScope.launch {
+            picks.ensureBudgetWeek()
+        }
+    }
+
+    /** Recompute this week's picks (both lists) from fresh market data. */
+    fun refresh() {
+        if (_state.value.refreshing) return
+        viewModelScope.launch {
+            _state.update { it.copy(refreshing = true) }
+            try {
+                picks.recompute()
+                picks.recomputeBudget()
+            } finally {
+                _state.update { it.copy(refreshing = false) }
+            }
+        }
+    }
+}

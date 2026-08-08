@@ -1,0 +1,39 @@
+package com.aurum.invest.data.repo
+
+import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+
+private val Context.dataStore by preferencesDataStore(name = "aurum_settings")
+
+/**
+ * App settings. [bankPackages] is a comma-separated list of package-name
+ * fragments; a notification is captured when its package contains any of them.
+ */
+class SettingsRepository(private val context: Context) {
+
+    private val keyBankPackages = stringPreferencesKey("bank_packages")
+    private val keyAutoImport = booleanPreferencesKey("auto_import")
+
+    companion object {
+        const val DEFAULT_BANK_PACKAGES = "etihad,aletihad"
+    }
+
+    val bankPackages: Flow<String> = context.dataStore.data
+        .map { it[keyBankPackages] ?: DEFAULT_BANK_PACKAGES }
+
+    val autoImport: Flow<Boolean> = context.dataStore.data
+        .map { it[keyAutoImport] ?: false }
+
+    suspend fun setBankPackages(value: String) {
+        context.dataStore.edit { it[keyBankPackages] = value }
+    }
+
+    suspend fun setAutoImport(value: Boolean) {
+        context.dataStore.edit { it[keyAutoImport] = value }
+    }
+}
