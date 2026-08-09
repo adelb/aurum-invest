@@ -2,6 +2,7 @@ package com.aurum.invest.data.repo
 
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -35,5 +36,21 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setAutoImport(value: Boolean) {
         context.dataStore.edit { it[keyAutoImport] = value }
+    }
+
+    // ---- Wealth section inputs (0.0 = not configured yet) -------------------
+
+    private val keyWealthBase = doublePreferencesKey("wealth_base")
+    private val keyWealthTarget = doublePreferencesKey("wealth_target")
+
+    val wealthBase: Flow<Double> = context.dataStore.data.map { it[keyWealthBase] ?: 0.0 }
+
+    val wealthTarget: Flow<Double> = context.dataStore.data.map { it[keyWealthTarget] ?: 0.0 }
+
+    suspend fun setWealthInputs(base: Double, target: Double) {
+        context.dataStore.edit {
+            it[keyWealthBase] = base
+            it[keyWealthTarget] = target
+        }
     }
 }

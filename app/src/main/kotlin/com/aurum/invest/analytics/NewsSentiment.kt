@@ -59,7 +59,21 @@ object NewsSentiment {
         "growth",
         "boost",
         "milestone",
-        "profit"
+        "profit",
+        // insider / institutional flow
+        "insider buying",
+        "insider buys",
+        "buys stake",
+        "raises stake",
+        "boosts stake",
+        "builds stake",
+        "new position",
+        "adds position",
+        "initiates coverage",
+        "price target raised",
+        "target raised",
+        "berkshire buys",
+        "hedge funds pile"
     )
 
     /** Very bearish phrases — each match subtracts 2. */
@@ -115,7 +129,18 @@ object NewsSentiment {
         "short seller",
         "antitrust",
         "breach",
-        "outage"
+        "outage",
+        // insider / institutional flow
+        "insider selling",
+        "insider sells",
+        "cuts stake",
+        "sells stake",
+        "trims stake",
+        "exits position",
+        "liquidates",
+        "price target cut",
+        "target cut",
+        "dumps shares"
     )
 
     /** Score a headline: sum of matched term weights, clamped to -2..+2. */

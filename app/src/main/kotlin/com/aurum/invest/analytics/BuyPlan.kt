@@ -157,7 +157,7 @@ object BuyPlanEngine {
             TechniqueVerdict.BULLISH -> {
                 posture = "Deploy on strength in three steps."
                 postureDetail = listOf(
-                    "The techniques lean bullish (${analysis.outlook.bullishCount} of 11), so the plan " +
+                    "The techniques lean bullish (${analysis.outlook.bullishCount} of ${analysis.results.size}), so the plan " +
                         "follows O'Neil's scaling: half the budget starts the position, and the rest is " +
                         "added only if the stock proves the thesis by moving up.",
                     "Livermore's rule is enforced throughout: every add happens at a higher price than " +
@@ -178,7 +178,7 @@ object BuyPlanEngine {
             else -> {
                 posture = "Probe only — the tape says wait."
                 postureDetail = listOf(
-                    "The techniques lean bearish (${analysis.outlook.bearishCount} of 11). Every " +
+                    "The techniques lean bearish (${analysis.outlook.bearishCount} of ${analysis.results.size}). Every " +
                         "investor in this playbook says the same thing here: do not fight the tape " +
                         "with full size.",
                     "Only a small probe goes in at deep support, and the remaining budget waits in " +

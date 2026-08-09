@@ -232,9 +232,9 @@ private fun DailyPickCard(pick: DailyPick, onOpen: () -> Unit, onAnalyze: () -> 
                         color = AurumColors.gold
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    if (pick.techDirection == "BULLISH") {
+                    if (pick.techDirection == "BULLISH" && pick.techTotal > 0) {
                         PillTag(
-                            text = "${pick.techBullish}/11 bullish",
+                            text = "${pick.techBullish}/${pick.techTotal} bullish",
                             color = AurumColors.gain
                         )
                     }

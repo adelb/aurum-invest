@@ -45,6 +45,10 @@ object TechniqueExplain {
             "stoch" -> stoch(analysis, result)
             "obv" -> obv(analysis, result)
             "adx" -> adx(analysis, result)
+            "donchian" -> donchian(analysis, result, price)
+            "psar" -> psar(analysis, result, price)
+            "mfi" -> mfi(analysis, result)
+            "gc" -> gc(analysis, result, price)
             else -> null
         }
     }
@@ -556,6 +560,176 @@ object TechniqueExplain {
                 TechniqueVerdict.NEUTRAL -> listOf(
                     "No trend to follow — fade the range edges and skip breakout entries until ADX pushes over 25.",
                     "A rising ADX from under 20 is the earliest hint the next real trend is starting."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- donchian
+
+    private fun donchian(a: TechniqueAnalysis, r: TechniqueResult, price: Double): TechniqueDetail {
+        val upper = a.donchianData.upper.lastOrNull()
+        val lower = a.donchianData.lower.lastOrNull()
+        val middle = a.donchianData.middle.lastOrNull()
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "The Donchian channel marks the highest high and lowest low of the " +
+                "last 20 days. Richard Dennis's Turtle traders — one of the most profitable " +
+                "trading experiments in history — bought every close above the channel top " +
+                "and exited below the bottom, betting that fresh 20-day extremes start trends.",
+            drawn = listOf(
+                "Gold band — the 20-day high-to-low channel.",
+                "Dashed middle line — the channel midpoint.",
+                "Price — the daily closes (line or candles)."
+            ),
+            reading = listOf(r.summary),
+            levels = buildList {
+                upper?.let { add("Channel top (buy trigger)" to Fmt.money(it)) }
+                middle?.let { add("Midpoint" to Fmt.money(it)) }
+                lower?.let { add("Channel floor (exit trigger)" to Fmt.money(it)) }
+                add("Last close" to Fmt.money(price))
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "A close through the channel top is the Turtle entry — trend followers are in from here.",
+                    "The system's exit is mechanical: a close back through the 10- or 20-day low, no debating."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "A close through the channel floor is the Turtle exit/short signal — fresh 20-day lows breed lower lows.",
+                    "No bottom-guessing: the system waits for price to re-break the channel top before turning long."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "Inside the channel there is no signal — set alerts at both edges and let the breakout decide.",
+                    "The narrower the channel, the more explosive the eventual break tends to be."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- psar
+
+    private fun psar(a: TechniqueAnalysis, r: TechniqueResult, price: Double): TechniqueDetail {
+        val lastIdx = a.psarData.sar.indexOfLast { it != null }
+        val sarV = if (lastIdx >= 0) a.psarData.sar[lastIdx] else null
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "Welles Wilder's Parabolic SAR (stop-and-reverse) trails a dot behind " +
+                "the trend that accelerates as the move extends. Price crossing its SAR dot " +
+                "flips the trend call instantly — which is why traders use the dot as a " +
+                "ready-made trailing stop that tightens automatically.",
+            drawn = listOf(
+                "Green dots — SAR below price: uptrend, dots act as the trailing stop.",
+                "Red dots — SAR above price: downtrend.",
+                "Price — the daily closes (line or candles)."
+            ),
+            reading = listOf(r.summary),
+            levels = buildList {
+                sarV?.let { add("SAR (trailing stop)" to Fmt.money(it)) }
+                add("Last close" to Fmt.money(price))
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "Ride the trend with the dot as your stop — exit only when price closes through the SAR.",
+                    "A fresh flip (first 1-3 dots) is the entry with the most room; late in a run the dot hugs price and shakes you out."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "Dots overhead mean every bounce has a mechanical seller at the SAR — wait for the flip before buying.",
+                    "The SAR price itself is the reversal trigger to set an alert on."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "SAR whipsaws in sideways markets — confirm with ADX before trusting a flip.",
+                    "Use the dot as a stop reference, not an entry, until a trend establishes."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- mfi
+
+    private fun mfi(a: TechniqueAnalysis, r: TechniqueResult): TechniqueDetail {
+        val now = a.mfiData.mfi.lastOrNull { it != null }
+        val prev5 = a.mfiData.mfi.let { s -> if (s.size >= 6) s[s.size - 6] else null }
+        val reading = mutableListOf(r.summary)
+        if (now != null && prev5 != null) {
+            val dir = if (now >= prev5) "rising" else "falling"
+            reading += "Money flow is $dir: MFI moved from ${fmt0(prev5)} to ${fmt0(now)} in five sessions."
+        }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "The Money Flow Index is RSI weighted by dollar volume: it tracks " +
+                "whether real money is flowing in or out, not just whether price ticked up. " +
+                "Because volume leads price, MFI extremes and divergences often fire a step " +
+                "ahead of the plain RSI.",
+            drawn = listOf(
+                "Gold line — the 14-day Money Flow Index.",
+                "Shaded band — the 20-80 neutral zone.",
+                "Dashed lines — 20 (money-flow oversold) and 80 (overbought)."
+            ),
+            reading = reading,
+            levels = buildList {
+                now?.let { add("MFI now" to fmt0(it)) }
+                prev5?.let { add("MFI 5 bars ago" to fmt0(it)) }
+                add("Oversold" to "20")
+                add("Overbought" to "80")
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "Sub-20 MFI says the dollar-volume selling is spent — the reversal entry is MFI turning back up through 20.",
+                    "Strongest when plain RSI is still mid-range: volume saw the bottom first."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "Over-80 MFI flags stretched dollar-volume buying — take profits into it rather than adding.",
+                    "MFI rolling down through 80 while price makes a new high is a classic distribution warning."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "Mid-band money flow adds nothing yet — watch for a divergence against price.",
+                    "MFI making higher lows while price makes lower lows is quiet accumulation."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- gc
+
+    private fun gc(a: TechniqueAnalysis, r: TechniqueResult, price: Double): TechniqueDetail {
+        val s50 = a.gcData.sma50.lastOrNull()
+        val s200 = a.gcData.sma200.lastOrNull()
+        val reading = mutableListOf(r.summary)
+        if (s50 != null && s200 != null) {
+            val d = pctFrom(price, s200)
+            reading += "Price sits ${fmtPct(abs(d))} ${aboveBelow(d)} the 200-day average — " +
+                "Paul Tudor Jones's line between offense and defense."
+        }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "The 50/200-day moving-average relationship defines the market's " +
+                "long-term regime. The 50 crossing above the 200 — the golden cross — has " +
+                "opened most major bull runs; the death cross has preceded most deep " +
+                "drawdowns. Institutions watch it because everyone else does, which is " +
+                "exactly what keeps it working.",
+            drawn = listOf(
+                "Gold line — 50-day simple moving average (the institutional quarter).",
+                "Blue line — 200-day simple moving average (the regime line).",
+                "Price — the daily closes (line or candles)."
+            ),
+            reading = reading,
+            levels = buildList {
+                s50?.let { add("50-day average" to Fmt.money(it)) }
+                s200?.let { add("200-day average" to Fmt.money(it)) }
+                add("Last close" to Fmt.money(price))
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "Golden-cross regime: dips toward the 50-day are the standard institutional add zone.",
+                    "The regime holds until price and the 50-day both lose the 200-day — before that, sell-offs are usually noise."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "Death-cross regime: rallies into the 200-day from below tend to fail — that is where trapped longs sell.",
+                    "Tudor Jones's rule applies: below the 200-day, keep positions small and defensive."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "The averages disagree with price — the regime is being decided right now.",
+                    "A weekly close on the far side of the 200-day usually settles it."
                 )
             }
         )

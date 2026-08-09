@@ -53,15 +53,19 @@ import com.aurum.invest.core.Fmt
 import com.aurum.invest.ui.components.AdxDiagram
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.BollingerDiagram
+import com.aurum.invest.ui.components.DonchianDiagram
 import com.aurum.invest.ui.components.EmptyState
 import com.aurum.invest.ui.components.FibonacciDiagram
 import com.aurum.invest.ui.components.FvgDiagram
+import com.aurum.invest.ui.components.GoldenCrossDiagram
 import com.aurum.invest.ui.components.IchimokuDiagram
 import com.aurum.invest.ui.components.MaTrendDiagram
 import com.aurum.invest.ui.components.MacdDiagram
+import com.aurum.invest.ui.components.MfiDiagram
 import com.aurum.invest.ui.components.ObvDiagram
 import com.aurum.invest.ui.components.PillTag
 import com.aurum.invest.ui.components.PriceStyle
+import com.aurum.invest.ui.components.PsarDiagram
 import com.aurum.invest.ui.components.RsiDiagram
 import com.aurum.invest.ui.components.SegmentedToggle
 import com.aurum.invest.ui.components.StatTile
@@ -104,7 +108,7 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
                     color = AurumColors.text
                 )
                 Text(
-                    text = if (tab == AnalysisTab.TECHNIQUES) "11-technique analysis"
+                    text = if (tab == AnalysisTab.TECHNIQUES) "15-technique analysis"
                     else "$3,000 five-day plan",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
@@ -144,7 +148,7 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
                 ) {
                     item {
                         SegmentedToggle(
-                            options = listOf("11 techniques", "$3,000 plan"),
+                            options = listOf("15 techniques", "$3,000 plan"),
                             selected = if (tab == AnalysisTab.TECHNIQUES) 0 else 1,
                             onSelect = { tab = if (it == 0) AnalysisTab.TECHNIQUES else AnalysisTab.PLAN }
                         )
@@ -368,7 +372,11 @@ private fun TechniqueCard(
             "ichimoku" -> IchimokuDiagram(analysis.ichimokuData, ts, viewport, m, ohlc, style, onTapChart)
             "stoch" -> StochasticDiagram(analysis.stochData, ts, viewport, m, onTapChart)
             "obv" -> ObvDiagram(analysis.obvData, analysis.maData.closes, ts, viewport, m, onTapChart)
-            else -> AdxDiagram(analysis.adxData, ts, viewport, m, onTapChart)
+            "adx" -> AdxDiagram(analysis.adxData, ts, viewport, m, onTapChart)
+            "donchian" -> DonchianDiagram(analysis.donchianData, ts, viewport, m, ohlc, style, onTapChart)
+            "psar" -> PsarDiagram(analysis.psarData, ts, viewport, m, ohlc, style, onTapChart)
+            "mfi" -> MfiDiagram(analysis.mfiData, ts, viewport, m, onTapChart)
+            else -> GoldenCrossDiagram(analysis.gcData, ts, viewport, m, ohlc, style, onTapChart)
         }
         Spacer(Modifier.height(12.dp))
         Text(

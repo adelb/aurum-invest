@@ -10,6 +10,7 @@ import com.aurum.invest.data.repo.PicksRepository
 import com.aurum.invest.data.repo.PortfolioRepository
 import com.aurum.invest.data.repo.SettingsRepository
 import com.aurum.invest.data.repo.WatchRepository
+import com.aurum.invest.data.repo.WealthRepository
 import com.aurum.invest.work.Schedules
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,4 +41,5 @@ class AppContainer(app: Application) {
     val news = NewsRepository(db.cacheDao())
     val picks = PicksRepository(db.picksDao(), market, db.cacheDao(), news)
     val bankFeed = BankFeedRepository(db.bankEventDao(), portfolio)
+    val wealth = WealthRepository(db.cacheDao(), market, news, settings)
 }

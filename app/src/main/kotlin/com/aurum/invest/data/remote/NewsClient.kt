@@ -31,26 +31,39 @@ class NewsClient {
         .build()
 
     /** Fetch + parse the feed for [symbol]. Empty list on any failure. */
-    suspend fun fetchNews(symbol: String): List<RssNewsItem> = withContext(Dispatchers.IO) {
-        try {
-            val url = "https://news.google.com/rss/search" +
-                "?q=" + symbol + "+stock+when:5d&hl=en-US&gl=US&ceid=US:en"
-            val request = Request.Builder()
-                .url(url)
-                .header(
-                    "User-Agent",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                )
-                .build()
-            http.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@withContext emptyList()
-                val body = response.body ?: return@withContext emptyList()
-                parseRss(body.byteStream())
+    suspend fun fetchNews(symbol: String): List<RssNewsItem> =
+        fetchFeed(symbol + "+stock+when:5d")
+
+    /**
+     * Fetch + parse the feed for an arbitrary search [query] (spaces allowed;
+     * they are encoded). Window defaults to the last 7 days.
+     */
+    suspend fun fetchQuery(query: String, windowDays: Int = 7): List<RssNewsItem> =
+        fetchFeed(
+            query.trim().replace(Regex("\\s+"), "+") + "+when:${windowDays}d"
+        )
+
+    private suspend fun fetchFeed(encodedQuery: String): List<RssNewsItem> =
+        withContext(Dispatchers.IO) {
+            try {
+                val url = "https://news.google.com/rss/search" +
+                    "?q=" + encodedQuery + "&hl=en-US&gl=US&ceid=US:en"
+                val request = Request.Builder()
+                    .url(url)
+                    .header(
+                        "User-Agent",
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    )
+                    .build()
+                http.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@withContext emptyList()
+                    val body = response.body ?: return@withContext emptyList()
+                    parseRss(body.byteStream())
+                }
+            } catch (_: Exception) {
+                emptyList()
             }
-        } catch (_: Exception) {
-            emptyList()
         }
-    }
 
     /** Parse an RSS 2.0 stream; returns every well-formed `<item>` seen before any error. */
     private fun parseRss(stream: InputStream): List<RssNewsItem> {

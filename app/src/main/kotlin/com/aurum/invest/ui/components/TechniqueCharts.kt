@@ -50,12 +50,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aurum.invest.analytics.AdxData
 import com.aurum.invest.analytics.BollingerData
+import com.aurum.invest.analytics.DonchianData
 import com.aurum.invest.analytics.FibonacciData
 import com.aurum.invest.analytics.FvgData
+import com.aurum.invest.analytics.GoldenCrossData
 import com.aurum.invest.analytics.IchimokuData
 import com.aurum.invest.analytics.MaTrendData
 import com.aurum.invest.analytics.MacdData
+import com.aurum.invest.analytics.MfiData
 import com.aurum.invest.analytics.ObvData
+import com.aurum.invest.analytics.PsarData
 import com.aurum.invest.analytics.RsiData
 import com.aurum.invest.analytics.StochasticData
 import com.aurum.invest.analytics.SupportResistanceData
@@ -1216,6 +1220,247 @@ fun AdxDiagram(
                 "ADX" to AurumColors.gold,
                 "+DI" to AurumColors.gain,
                 "-DI" to AurumColors.loss
+            ),
+            modifier = Modifier.padding(top = 8.dp)
+        )
+    }
+}
+
+/** Price inside the 20-day Donchian channel: flat band, dashed middle, price on top. */
+@Composable
+fun DonchianDiagram(
+    data: DonchianData,
+    timestamps: List<Long>,
+    viewport: DiagramViewport,
+    modifier: Modifier = Modifier,
+    ohlc: List<Candle>? = null,
+    style: PriceStyle = PriceStyle.LINE,
+    onTap: (() -> Unit)? = null
+) {
+    val textMeasurer = rememberTextMeasurer()
+    Column(modifier = modifier) {
+        Canvas(
+            modifier = Modifier.fillMaxWidth().height(170.dp).diagramGestures(viewport, onTap)
+        ) {
+            val closes = data.closes.win(viewport)
+            if (closes.size < 2) return@Canvas
+            val candlesW = ohlc?.win(viewport)
+            val upper = data.upper.win(viewport)
+            val lower = data.lower.win(viewport)
+            val middle = data.middle.win(viewport)
+            val vals = ArrayList<Double>(closes.size * 3)
+            vals.addAll(closes)
+            upper.forEach { if (it != null) vals.add(it) }
+            lower.forEach { if (it != null) vals.add(it) }
+            vals.includeOhlcRange(candlesW, style)
+            val minV = vals.min()
+            val maxV = vals.max()
+            val pane = Pane(minV, maxV, size.width, size.height - AXIS_H, 8f, closes.size)
+            drawPriceGrid(textMeasurer, pane, minV, maxV)
+
+            val upperPts = seriesPoints(upper, pane)
+            val lowerPts = seriesPoints(lower, pane)
+            if (upperPts.size >= 2 && lowerPts.size >= 2) {
+                val band = Path()
+                band.moveTo(upperPts.first().x, upperPts.first().y)
+                appendSmooth(band, upperPts)
+                val lowerRev = lowerPts.asReversed()
+                band.lineTo(lowerRev.first().x, lowerRev.first().y)
+                appendSmooth(band, lowerRev)
+                band.close()
+                drawPath(band, color = AurumColors.goldSoft)
+                val edge = AurumColors.gold.copy(alpha = 0.55f)
+                strokeSeries(upperPts, edge, 1.5f)
+                strokeSeries(lowerPts, edge, 1.5f)
+            }
+            dashedSeries(seriesPoints(middle, pane), AurumColors.textDim.copy(alpha = 0.7f))
+            drawPriceSeries(closes, candlesW, style, pane)
+            drawTimeAxis(textMeasurer, timestamps.win(viewport))
+            scrubAt(viewport, closes.size, size.width)?.let { sc ->
+                val lines = priceScrubLines(sc.idx, closes, candlesW, style).toMutableList()
+                upper.getOrNull(sc.idx)?.let { lines += "20d high ${Fmt.money(it)}" to AurumColors.gold }
+                lower.getOrNull(sc.idx)?.let { lines += "20d low ${Fmt.money(it)}" to AurumColors.gold }
+                drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+            }
+        }
+        LegendRow(
+            entries = listOf(
+                "Price" to priceLineColor,
+                "20-day channel" to AurumColors.gold.copy(alpha = 0.7f),
+                "Middle" to AurumColors.textDim
+            ),
+            modifier = Modifier.padding(top = 8.dp)
+        )
+    }
+}
+
+/** Parabolic SAR dots (green below price in uptrends, red above in downtrends). */
+@Composable
+fun PsarDiagram(
+    data: PsarData,
+    timestamps: List<Long>,
+    viewport: DiagramViewport,
+    modifier: Modifier = Modifier,
+    ohlc: List<Candle>? = null,
+    style: PriceStyle = PriceStyle.LINE,
+    onTap: (() -> Unit)? = null
+) {
+    val textMeasurer = rememberTextMeasurer()
+    Column(modifier = modifier) {
+        Canvas(
+            modifier = Modifier.fillMaxWidth().height(170.dp).diagramGestures(viewport, onTap)
+        ) {
+            val closes = data.closes.win(viewport)
+            if (closes.size < 2) return@Canvas
+            val candlesW = ohlc?.win(viewport)
+            val sar = data.sar.win(viewport)
+            val bull = data.bullish.win(viewport)
+            val vals = ArrayList<Double>(closes.size * 2)
+            vals.addAll(closes)
+            sar.forEach { if (it != null) vals.add(it) }
+            vals.includeOhlcRange(candlesW, style)
+            val minV = vals.min()
+            val maxV = vals.max()
+            val pane = Pane(minV, maxV, size.width, size.height - AXIS_H, 8f, closes.size)
+            drawPriceGrid(textMeasurer, pane, minV, maxV)
+            drawPriceSeries(closes, candlesW, style, pane)
+            sar.forEachIndexed { i, v ->
+                if (v == null) return@forEachIndexed
+                val color = if (bull.getOrNull(i) == true) AurumColors.gain else AurumColors.loss
+                drawCircle(
+                    color = color.copy(alpha = 0.85f),
+                    radius = 3f,
+                    center = Offset(pane.x(i), pane.y(v))
+                )
+            }
+            drawTimeAxis(textMeasurer, timestamps.win(viewport))
+            scrubAt(viewport, closes.size, size.width)?.let { sc ->
+                val lines = priceScrubLines(sc.idx, closes, candlesW, style).toMutableList()
+                sar.getOrNull(sc.idx)?.let {
+                    val up = bull.getOrNull(sc.idx) == true
+                    lines += "SAR ${Fmt.money(it)}" to if (up) AurumColors.gain else AurumColors.loss
+                }
+                drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+            }
+        }
+        LegendRow(
+            entries = listOf(
+                "Price" to priceLineColor,
+                "SAR below = uptrend" to AurumColors.gain,
+                "SAR above = downtrend" to AurumColors.loss
+            ),
+            modifier = Modifier.padding(top = 8.dp)
+        )
+    }
+}
+
+/** Fixed 0..100 pane with the 20/80 money-flow zones, gold MFI line. */
+@Composable
+fun MfiDiagram(
+    data: MfiData,
+    timestamps: List<Long>,
+    viewport: DiagramViewport,
+    modifier: Modifier = Modifier,
+    onTap: (() -> Unit)? = null
+) {
+    val textMeasurer = rememberTextMeasurer()
+    Canvas(
+        modifier = modifier.fillMaxWidth().height(186.dp).diagramGestures(viewport, onTap)
+    ) {
+        val mfi = data.mfi.win(viewport)
+        if (mfi.size < 2) return@Canvas
+        val pane = Pane(0.0, 100.0, size.width, size.height - AXIS_H, 10f, mfi.size)
+        val y80 = pane.y(80.0)
+        val y20 = pane.y(20.0)
+
+        drawRect(
+            color = AurumColors.surfaceHigh,
+            topLeft = Offset(0f, y80),
+            size = Size(size.width, y20 - y80)
+        )
+        val lineColor = AurumColors.textDim.copy(alpha = 0.55f)
+        dashedLevel(y80, lineColor)
+        dashedLevel(y20, lineColor)
+
+        val dim = chartLabelStyle(AurumColors.textDim)
+        val m80 = textMeasurer.measure(AnnotatedString("80"), dim)
+        drawText(textMeasurer, "80", topLeft = Offset(4f, y80 - m80.size.height - 2f), style = dim)
+        drawText(textMeasurer, "20", topLeft = Offset(4f, y20 + 2f), style = dim)
+
+        strokeSeries(seriesPoints(mfi, pane), AurumColors.gold, 2.5f)
+
+        val lastIdx = mfi.indexOfLast { it != null }
+        if (lastIdx >= 0) {
+            val v = mfi[lastIdx]
+            if (v != null) {
+                val txt = "MFI ${v.roundToInt()}"
+                val goldStyle = chartLabelStyle(AurumColors.gold)
+                val m = textMeasurer.measure(AnnotatedString(txt), goldStyle)
+                val ty = (pane.y(v) - m.size.height - 4f)
+                    .coerceIn(2f, size.height - AXIS_H - m.size.height - 2f)
+                drawText(
+                    textMeasurer, txt,
+                    topLeft = Offset(size.width - m.size.width - 4f, ty),
+                    style = goldStyle
+                )
+            }
+        }
+        drawTimeAxis(textMeasurer, timestamps.win(viewport))
+        scrubAt(viewport, mfi.size, size.width)?.let { sc ->
+            val lines = buildList {
+                mfi.getOrNull(sc.idx)?.let { add("MFI ${it.roundToInt()}" to AurumColors.gold) }
+            }
+            drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+        }
+    }
+}
+
+/** Price with the 50-day (gold) and 200-day (blue) averages — the cross regime. */
+@Composable
+fun GoldenCrossDiagram(
+    data: GoldenCrossData,
+    timestamps: List<Long>,
+    viewport: DiagramViewport,
+    modifier: Modifier = Modifier,
+    ohlc: List<Candle>? = null,
+    style: PriceStyle = PriceStyle.LINE,
+    onTap: (() -> Unit)? = null
+) {
+    val textMeasurer = rememberTextMeasurer()
+    Column(modifier = modifier) {
+        Canvas(
+            modifier = Modifier.fillMaxWidth().height(170.dp).diagramGestures(viewport, onTap)
+        ) {
+            val closes = data.closes.win(viewport)
+            if (closes.size < 2) return@Canvas
+            val candlesW = ohlc?.win(viewport)
+            val sma50 = data.sma50.win(viewport)
+            val sma200 = data.sma200.win(viewport)
+            val vals = ArrayList<Double>(closes.size * 3)
+            vals.addAll(closes)
+            sma50.forEach { if (it != null) vals.add(it) }
+            sma200.forEach { if (it != null) vals.add(it) }
+            vals.includeOhlcRange(candlesW, style)
+            val minV = vals.min()
+            val maxV = vals.max()
+            val pane = Pane(minV, maxV, size.width, size.height - AXIS_H, 8f, closes.size)
+            drawPriceGrid(textMeasurer, pane, minV, maxV)
+            drawPriceSeries(closes, candlesW, style, pane)
+            strokeSeries(seriesPoints(sma50, pane), AurumColors.gold, 2.5f)
+            strokeSeries(seriesPoints(sma200, pane), AurumColors.info, 2.5f)
+            drawTimeAxis(textMeasurer, timestamps.win(viewport))
+            scrubAt(viewport, closes.size, size.width)?.let { sc ->
+                val lines = priceScrubLines(sc.idx, closes, candlesW, style).toMutableList()
+                sma50.getOrNull(sc.idx)?.let { lines += "SMA 50 ${Fmt.money(it)}" to AurumColors.gold }
+                sma200.getOrNull(sc.idx)?.let { lines += "SMA 200 ${Fmt.money(it)}" to AurumColors.info }
+                drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+            }
+        }
+        LegendRow(
+            entries = listOf(
+                "Price" to priceLineColor,
+                "SMA 50" to AurumColors.gold,
+                "SMA 200" to AurumColors.info
             ),
             modifier = Modifier.padding(top = 8.dp)
         )

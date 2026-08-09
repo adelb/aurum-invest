@@ -10,7 +10,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
- * Eleven-technique chart analysis over daily candles. Pure Kotlin — no Android
+ * Fifteen-technique chart analysis over daily candles. Pure Kotlin — no Android
  * dependencies, never throws. All rolling series are index-aligned with the
  * (last <= 120) candles the analysis ran on: entry i belongs to candle i, and
  * is null until enough history exists at that index. [TechniqueAnalysis.timestamps]
@@ -55,7 +55,10 @@ data class FibonacciData(
     val closes: List<Double>,
     val swingLow: Double,
     val swingHigh: Double,
-    val levels: List<Pair<String, Double>>
+    val levels: List<Pair<String, Double>>,
+    /** True when the window's dominant swing is low -> high (levels retrace a rally);
+     *  false when high -> low (levels measure the bounce of a decline). */
+    val upswing: Boolean = true
 )
 
 /** Senkou arrays are displaced +26 and aligned to candle index; null where undefined. */
@@ -72,6 +75,31 @@ data class StochasticData(val k: List<Double?>, val d: List<Double?>)
 data class ObvData(val obv: List<Double>)
 
 data class AdxData(val adx: List<Double?>, val plusDi: List<Double?>, val minusDi: List<Double?>)
+
+/** 20-day Donchian channel (the Turtle traders' breakout system). */
+data class DonchianData(
+    val closes: List<Double>,
+    val upper: List<Double?>,
+    val lower: List<Double?>,
+    val middle: List<Double?>
+)
+
+/** Wilder's Parabolic SAR. [bullish] is true where the SAR sits below price. */
+data class PsarData(
+    val closes: List<Double>,
+    val sar: List<Double?>,
+    val bullish: List<Boolean?>
+)
+
+/** Money Flow Index (volume-weighted RSI), 0..100. */
+data class MfiData(val mfi: List<Double?>)
+
+/** 50-day vs 200-day moving averages — the golden/death cross regime. */
+data class GoldenCrossData(
+    val closes: List<Double>,
+    val sma50: List<Double?>,
+    val sma200: List<Double?>
+)
 
 data class TechniqueResult(
     val key: String,
@@ -110,7 +138,11 @@ data class TechniqueAnalysis(
     val ichimokuData: IchimokuData,
     val stochData: StochasticData,
     val obvData: ObvData,
-    val adxData: AdxData
+    val adxData: AdxData,
+    val donchianData: DonchianData,
+    val psarData: PsarData,
+    val mfiData: MfiData,
+    val gcData: GoldenCrossData
 )
 
 object Techniques {
@@ -159,6 +191,18 @@ object Techniques {
         val stochData = stochasticData(cs)
         val obvData = ObvData(obvSeries(cs))
         val adxData = adxSeries(cs, 14)
+        val donData = donchianData(cs, closes)
+        val psarData = psarData(cs, closes)
+        val mfiData = MfiData(mfiSeries(cs, 14))
+        // Golden cross needs history beyond the display window: compute the
+        // 50/200 averages over the FULL candle list, then trim to the window.
+        val fullCloses = candles.map { it.close }
+        val offset = fullCloses.size - n
+        val gcData = GoldenCrossData(
+            closes = closes,
+            sma50 = smaSeries(fullCloses, 50).drop(offset),
+            sma200 = smaSeries(fullCloses, 200).drop(offset)
+        )
 
         val results = listOf(
             maResult(n, price, sma20, sma50),
@@ -171,7 +215,11 @@ object Techniques {
             ichimokuResult(n, price, ichiData),
             stochResult(n, stochData),
             obvResult(closes, obvData.obv),
-            adxResult(n, adxData)
+            adxResult(n, adxData),
+            donchianResult(price, donData),
+            psarResult(price, psarData),
+            mfiResult(n, mfiData),
+            gcResult(candles.size, price, gcData)
         )
 
         val outlook = buildOutlook(cs, price, results, supports, resistances)
@@ -192,7 +240,11 @@ object Techniques {
             ichimokuData = ichiData,
             stochData = stochData,
             obvData = obvData,
-            adxData = adxData
+            adxData = adxData,
+            donchianData = donData,
+            psarData = psarData,
+            mfiData = mfiData,
+            gcData = gcData
         )
     }
 
@@ -502,13 +554,34 @@ object Techniques {
 
     // -- technique 7: Fibonacci retracement ---------------------------------
 
-    /** Levels from the window swing low -> high: level r sits at high - r * range. */
+    /**
+     * Direction-aware retracement. When the swing runs low -> high (the low
+     * came first), level r sits at high - r * range: pullbacks of a rally.
+     * When the high came first, level r sits at low + r * range: bounces of a
+     * decline. The old behavior always assumed a rally, which misread every
+     * downtrending window.
+     */
     private fun fibonacciData(candles: List<Candle>, closes: List<Double>): FibonacciData {
-        val swingLow = candles.minOf { it.low }
-        val swingHigh = candles.maxOf { it.high }
+        var swingLow = Double.MAX_VALUE
+        var swingHigh = -Double.MAX_VALUE
+        var lowIdx = 0
+        var highIdx = 0
+        candles.forEachIndexed { i, c ->
+            if (c.low < swingLow) {
+                swingLow = c.low
+                lowIdx = i
+            }
+            if (c.high > swingHigh) {
+                swingHigh = c.high
+                highIdx = i
+            }
+        }
+        val upswing = highIdx >= lowIdx
         val range = swingHigh - swingLow
-        val levels = FIB_RATIOS.map { (label, r) -> label to (swingHigh - r * range) }
-        return FibonacciData(closes, swingLow, swingHigh, levels)
+        val levels = FIB_RATIOS.map { (label, r) ->
+            label to if (upswing) swingHigh - r * range else swingLow + r * range
+        }
+        return FibonacciData(closes, swingLow, swingHigh, levels, upswing)
     }
 
     private fun fibResult(price: Double, fib: FibonacciData): TechniqueResult {
@@ -520,6 +593,7 @@ object Techniques {
                 "Window is flat at ${Fmt.money(price)}; no swing to retrace."
             )
         }
+        if (!fib.upswing) return fibDownswingResult(price, fib)
         val level = fib.levels.toMap()
         val l236 = level.getValue("0.236")
         val l382 = level.getValue("0.382")
@@ -560,6 +634,44 @@ object Techniques {
                         "no level tagged within ${fmt1(FIB_NEAR_PCT)}%."
                 )
             }
+        }
+    }
+
+    /**
+     * The window's dominant move is a decline (high came before low): the
+     * levels measure how much of the drop has been retraced by the bounce.
+     * Rallies into the 0.382-0.618 zone of a decline are routinely sold;
+     * reclaiming 0.618+ argues the downtrend is breaking.
+     */
+    private fun fibDownswingResult(price: Double, fib: FibonacciData): TechniqueResult {
+        val name = "Fibonacci retracement"
+        val level = fib.levels.toMap()
+        val l236 = level.getValue("0.236")
+        val l382 = level.getValue("0.382")
+        val l618 = level.getValue("0.618")
+        val l786 = level.getValue("0.786")
+        val swing = "${Fmt.money(fib.swingHigh)}–${Fmt.money(fib.swingLow)} decline"
+        return when {
+            price >= l786 -> TechniqueResult(
+                "fib", name, TechniqueVerdict.BULLISH, 75,
+                "Price ${Fmt.money(price)} reclaimed the 0.786 level ${Fmt.money(l786)} of the $swing; the drop is nearly unwound."
+            )
+            price > l618 -> TechniqueResult(
+                "fib", name, TechniqueVerdict.BULLISH, 60,
+                "Price ${Fmt.money(price)} is above the 0.618 bounce level ${Fmt.money(l618)} of the $swing — the downtrend is breaking."
+            )
+            price < l236 -> TechniqueResult(
+                "fib", name, TechniqueVerdict.BEARISH, 72,
+                "Price ${Fmt.money(price)} has retraced under 23.6% (${Fmt.money(l236)}) of the $swing — barely a bounce."
+            )
+            price in l382..l618 -> TechniqueResult(
+                "fib", name, TechniqueVerdict.BEARISH, 55,
+                "Price ${Fmt.money(price)} sits in the 0.382–0.618 bounce zone (${Fmt.money(l382)}–${Fmt.money(l618)}) of the $swing, where rallies in a downtrend usually get sold."
+            )
+            else -> TechniqueResult(
+                "fib", name, TechniqueVerdict.NEUTRAL, 30,
+                "Price ${Fmt.money(price)} is between bounce levels of the $swing; no zone tagged."
+            )
         }
     }
 
@@ -845,6 +957,276 @@ object Techniques {
         }
     }
 
+    // -- technique 12: Donchian channel (the Turtle system) ------------------
+
+    private fun donchianData(candles: List<Candle>, closes: List<Double>): DonchianData {
+        val upper = highSeries(candles, 20)
+        val lower = lowSeries(candles, 20)
+        val middle = List(candles.size) { i ->
+            val u = upper[i]
+            val l = lower[i]
+            if (u != null && l != null) (u + l) / 2.0 else null
+        }
+        return DonchianData(closes, upper, lower, middle)
+    }
+
+    private fun donchianResult(price: Double, d: DonchianData): TechniqueResult {
+        val name = "Donchian channel"
+        val n = d.closes.size
+        // Breakouts are tested against the PRIOR bar's channel so today's own
+        // extreme cannot cap the signal.
+        val prevUpper = if (n >= 2) d.upper[n - 2] else null
+        val prevLower = if (n >= 2) d.lower[n - 2] else null
+        val upper = d.upper.lastOrNull()
+        val lower = d.lower.lastOrNull()
+        if (prevUpper == null || prevLower == null || upper == null || lower == null) {
+            return TechniqueResult(
+                "donchian", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 21 daily candles for the 20-day channel; $n available."
+            )
+        }
+        return when {
+            price > prevUpper -> {
+                val margin = if (prevUpper > 0.0) (price - prevUpper) / prevUpper * 100.0 else 0.0
+                TechniqueResult(
+                    "donchian", name, TechniqueVerdict.BULLISH,
+                    (65.0 + margin * 8.0).roundToInt().coerceIn(65, 95),
+                    "Close ${Fmt.money(price)} broke the 20-day channel top ${Fmt.money(prevUpper)} " +
+                        "by ${fmt1(margin)}% — the Turtle traders' buy signal."
+                )
+            }
+            price < prevLower -> {
+                val margin = if (prevLower > 0.0) (prevLower - price) / prevLower * 100.0 else 0.0
+                TechniqueResult(
+                    "donchian", name, TechniqueVerdict.BEARISH,
+                    (65.0 + margin * 8.0).roundToInt().coerceIn(65, 95),
+                    "Close ${Fmt.money(price)} broke the 20-day channel floor ${Fmt.money(prevLower)} " +
+                        "by ${fmt1(margin)}% — the Turtle exit/short signal."
+                )
+            }
+            else -> {
+                val width = upper - lower
+                val pos = if (width > 1e-9) (price - lower) / width * 100.0 else 50.0
+                TechniqueResult(
+                    "donchian", name, TechniqueVerdict.NEUTRAL, 30,
+                    "Close ${Fmt.money(price)} sits at ${fmt0(pos)}% of the " +
+                        "${Fmt.money(lower)}–${Fmt.money(upper)} channel; no breakout."
+                )
+            }
+        }
+    }
+
+    // -- technique 13: Parabolic SAR -----------------------------------------
+
+    /** Wilder's Parabolic SAR, af 0.02 step to 0.2 max, seeded from the first bars. */
+    private fun psarData(candles: List<Candle>, closes: List<Double>): PsarData {
+        val n = candles.size
+        val sar = arrayOfNulls<Double>(n)
+        val bull = arrayOfNulls<Boolean>(n)
+        if (n < 5) return PsarData(closes, sar.toList(), bull.toList())
+
+        var uptrend = candles[1].close >= candles[0].close
+        var sarV = if (uptrend) candles[0].low else candles[0].high
+        var ep = if (uptrend) candles[0].high else candles[0].low
+        var af = 0.02
+        for (i in 1 until n) {
+            sarV += af * (ep - sarV)
+            if (uptrend) {
+                sarV = min(sarV, candles[i - 1].low)
+                if (i >= 2) sarV = min(sarV, candles[i - 2].low)
+                if (candles[i].low < sarV) {
+                    uptrend = false
+                    sarV = ep
+                    ep = candles[i].low
+                    af = 0.02
+                } else if (candles[i].high > ep) {
+                    ep = candles[i].high
+                    af = min(0.2, af + 0.02)
+                }
+            } else {
+                sarV = max(sarV, candles[i - 1].high)
+                if (i >= 2) sarV = max(sarV, candles[i - 2].high)
+                if (candles[i].high > sarV) {
+                    uptrend = true
+                    sarV = ep
+                    ep = candles[i].high
+                    af = 0.02
+                } else if (candles[i].low < ep) {
+                    ep = candles[i].low
+                    af = min(0.2, af + 0.02)
+                }
+            }
+            sar[i] = sarV
+            bull[i] = uptrend
+        }
+        return PsarData(closes, sar.toList(), bull.toList())
+    }
+
+    private fun psarResult(price: Double, d: PsarData): TechniqueResult {
+        val name = "Parabolic SAR"
+        val lastIdx = d.sar.indexOfLast { it != null }
+        if (lastIdx < 1) {
+            return TechniqueResult(
+                "psar", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 5 daily candles to seed the SAR; ${d.closes.size} available."
+            )
+        }
+        val sarV = d.sar[lastIdx] ?: return TechniqueResult(
+            "psar", name, TechniqueVerdict.NEUTRAL, 20, "SAR undefined for this window."
+        )
+        val up = d.bullish[lastIdx] == true
+        var run = 0
+        var i = lastIdx
+        while (i >= 1 && d.bullish[i] == d.bullish[lastIdx]) {
+            run++
+            i--
+        }
+        val fresh = run <= 3
+        val distPct = if (price > 0.0) abs(price - sarV) / price * 100.0 else 0.0
+        val freshNote =
+            if (fresh) " Flipped $run ${bars(run)} ago — a fresh signal."
+            else " The trend has run $run ${bars(run)}."
+        return if (up) {
+            TechniqueResult(
+                "psar", name, TechniqueVerdict.BULLISH,
+                (58.0 + (if (fresh) 15.0 else 5.0) + min(10.0, distPct * 2.0)).roundToInt().coerceIn(58, 92),
+                "SAR ${Fmt.money(sarV)} trails ${fmt1(distPct)}% below price — dots under the bar keep the uptrend intact.$freshNote"
+            )
+        } else {
+            TechniqueResult(
+                "psar", name, TechniqueVerdict.BEARISH,
+                (58.0 + (if (fresh) 15.0 else 5.0) + min(10.0, distPct * 2.0)).roundToInt().coerceIn(58, 92),
+                "SAR ${Fmt.money(sarV)} sits ${fmt1(distPct)}% above price — dots over the bar keep the downtrend intact.$freshNote"
+            )
+        }
+    }
+
+    // -- technique 14: Money Flow Index --------------------------------------
+
+    /** Rolling MFI over [period] bars: volume-weighted RSI on the typical price. */
+    private fun mfiSeries(candles: List<Candle>, period: Int): List<Double?> {
+        val n = candles.size
+        val out = arrayOfNulls<Double>(n)
+        if (n < period + 1) return out.toList()
+        val tp = DoubleArray(n) { (candles[it].high + candles[it].low + candles[it].close) / 3.0 }
+        val flow = DoubleArray(n)
+        for (i in 1 until n) {
+            val mf = tp[i] * candles[i].volume.toDouble()
+            flow[i] = when {
+                tp[i] > tp[i - 1] -> mf
+                tp[i] < tp[i - 1] -> -mf
+                else -> 0.0
+            }
+        }
+        for (i in period until n) {
+            var pos = 0.0
+            var neg = 0.0
+            for (j in i - period + 1..i) {
+                if (flow[j] > 0.0) pos += flow[j] else neg -= flow[j]
+            }
+            out[i] = when {
+                pos == 0.0 && neg == 0.0 -> 50.0
+                neg == 0.0 -> 100.0
+                else -> 100.0 - 100.0 / (1.0 + pos / neg)
+            }
+        }
+        return out.toList()
+    }
+
+    private fun mfiResult(n: Int, d: MfiData): TechniqueResult {
+        val name = "Money Flow Index"
+        val m = d.mfi.lastOrNull()
+            ?: return TechniqueResult(
+                "mfi", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 15 daily candles for MFI(14); $n available."
+            )
+        val prev5 = if (d.mfi.size >= 6) d.mfi[d.mfi.size - 6] else null
+        val trendNote = prev5?.let { " Five bars ago it was ${fmt0(it)}." } ?: ""
+        return when {
+            m < 20.0 -> TechniqueResult(
+                "mfi", name, TechniqueVerdict.BULLISH,
+                (55.0 + (20.0 - m) * 2.0).roundToInt().coerceIn(55, 90),
+                "MFI(14) at ${fmt0(m)} — dollar-volume selling is exhausted (under the 20 line).$trendNote"
+            )
+            m > 80.0 -> TechniqueResult(
+                "mfi", name, TechniqueVerdict.BEARISH,
+                (55.0 + (m - 80.0) * 2.0).roundToInt().coerceIn(55, 90),
+                "MFI(14) at ${fmt0(m)} — dollar-volume buying is stretched (over the 80 line).$trendNote"
+            )
+            else -> TechniqueResult(
+                "mfi", name, TechniqueVerdict.NEUTRAL, 30,
+                "MFI(14) at ${fmt0(m)}, inside the 20–80 band.$trendNote"
+            )
+        }
+    }
+
+    // -- technique 15: golden cross 50/200 -----------------------------------
+
+    private fun gcResult(totalCandles: Int, price: Double, d: GoldenCrossData): TechniqueResult {
+        val name = "Golden cross 50/200"
+        val s50 = d.sma50.lastOrNull()
+        val s200 = d.sma200.lastOrNull()
+        if (s50 == null || s200 == null) {
+            return TechniqueResult(
+                "gc", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 200 daily candles for the 200-day average; $totalCandles available."
+            )
+        }
+        // Most recent 50/200 cross within the last 15 window bars, if any.
+        var crossAgo: Int? = null
+        var i = d.sma50.size - 1
+        var steps = 0
+        while (i >= 1 && steps < 15) {
+            val a = d.sma50[i]
+            val b = d.sma200[i]
+            val pa = d.sma50[i - 1]
+            val pb = d.sma200[i - 1]
+            if (a != null && b != null && pa != null && pb != null) {
+                val now = a - b
+                val prev = pa - pb
+                if (now != 0.0 && prev != 0.0 && (now > 0.0) != (prev > 0.0)) {
+                    crossAgo = d.sma50.size - 1 - i
+                    break
+                }
+            }
+            i--
+            steps++
+        }
+        val gapPct = if (s200 != 0.0) (s50 - s200) / s200 * 100.0 else 0.0
+        return when {
+            s50 > s200 && price > s200 -> {
+                val crossNote = crossAgo?.let {
+                    " Golden cross ${if (it == 0) "this bar" else "$it ${bars(it)} ago"}."
+                } ?: ""
+                TechniqueResult(
+                    "gc", name, TechniqueVerdict.BULLISH,
+                    (60.0 + min(15.0, gapPct * 3.0) + (if (crossAgo != null) 15.0 else 0.0))
+                        .roundToInt().coerceIn(60, 92),
+                    "50-day ${Fmt.money(s50)} rides ${fmt1(abs(gapPct))}% above the 200-day ${Fmt.money(s200)} " +
+                        "with price above both — the long-term uptrend regime.$crossNote"
+                )
+            }
+            s50 < s200 -> {
+                val crossNote = crossAgo?.let {
+                    " Death cross ${if (it == 0) "this bar" else "$it ${bars(it)} ago"}."
+                } ?: ""
+                val below = price < s200
+                TechniqueResult(
+                    "gc", name, TechniqueVerdict.BEARISH,
+                    (55.0 + min(15.0, abs(gapPct) * 3.0) + (if (below) 10.0 else 0.0))
+                        .roundToInt().coerceIn(55, 90),
+                    "50-day ${Fmt.money(s50)} sits ${fmt1(abs(gapPct))}% below the 200-day ${Fmt.money(s200)} — " +
+                        "the death-cross regime${if (below) ", with price under both averages" else ""}.$crossNote"
+                )
+            }
+            else -> TechniqueResult(
+                "gc", name, TechniqueVerdict.NEUTRAL, 35,
+                "50-day ${Fmt.money(s50)} is over the 200-day ${Fmt.money(s200)} but price ${Fmt.money(price)} " +
+                    "has slipped below the 200-day — regime in question."
+            )
+        }
+    }
+
     // -- outlook -------------------------------------------------------------
 
     private fun buildOutlook(
@@ -911,7 +1293,7 @@ object Techniques {
         }
 
         val summary = listOf(
-            "$bullishCount of 11 techniques read bullish, $bearishCount bearish, $neutralCount neutral.",
+            "$bullishCount of ${results.size} techniques read bullish, $bearishCount bearish, $neutralCount neutral.",
             "The leading side holds $confidence% of the strength-weighted votes.",
             "Expected range ${Fmt.money(low)} to ${Fmt.money(high)} from the ${Fmt.money(price)} close, using a 14-day ATR of ${Fmt.money(atr)}.",
             srSentence,

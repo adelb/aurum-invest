@@ -27,6 +27,11 @@ class WeeklyPicksWorker(
         } catch (_: Exception) {
             // budget picks are best-effort; the main list decides retry
         }
+        try {
+            app.container.wealth.recomputeIfConfigured()
+        } catch (_: Exception) {
+            // the wealth plan also refreshes on section open; best-effort here
+        }
         return if (main.isEmpty()) Result.retry() else Result.success()
     }
 }

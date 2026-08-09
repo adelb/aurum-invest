@@ -126,8 +126,9 @@ data class DailyPick(
     val preMarketPct: Double?,
     val postMarketPct: Double?,
     val marketState: String,
-    val techDirection: String,    // BULLISH / BEARISH / NEUTRAL from the 11 techniques
-    val techBullish: Int,         // bullish technique count of 11
+    val techDirection: String,    // BULLISH / BEARISH / NEUTRAL from the technique board
+    val techBullish: Int,         // bullish technique count
+    val techTotal: Int,           // how many techniques voted (15 as of v1.4)
     val techConfidence: Int,
     val volumeRatio: Double,      // latest session volume vs 20-day average
     val newsScore: Int,           // summed headline sentiment, clamped

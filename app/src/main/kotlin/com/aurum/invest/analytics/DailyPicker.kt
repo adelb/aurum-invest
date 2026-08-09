@@ -62,6 +62,7 @@ class DailyPicker(
                     put("marketState", p.marketState)
                     put("techDirection", p.techDirection)
                     put("techBullish", p.techBullish)
+                    put("techTotal", p.techTotal)
                     put("techConfidence", p.techConfidence)
                     put("volumeRatio", p.volumeRatio)
                     put("newsScore", p.newsScore)
@@ -96,6 +97,7 @@ class DailyPicker(
                         marketState = o.optString("marketState", ""),
                         techDirection = o.optString("techDirection", "NEUTRAL"),
                         techBullish = o.optInt("techBullish", 0),
+                        techTotal = o.optInt("techTotal", 11),
                         techConfidence = o.optInt("techConfidence", 0),
                         volumeRatio = o.optDouble("volumeRatio", 1.0),
                         newsScore = o.optInt("newsScore", 0),
@@ -201,9 +203,13 @@ class DailyPicker(
         val atr = Indicators.atr(candles, 14) ?: return null
         val atrPct = atr / last * 100.0
 
+        // The last bar may be today's in-progress session — its partial volume
+        // would distort the surge read, so the last COMPLETED bar is used.
         val volumes = candles.map { it.volume.toDouble() }
-        val volLast = volumes.last()
-        val vol20 = volumes.takeLast(20).average()
+        val lastIsToday = com.aurum.invest.core.Dates.sameDay(candles.last().ts, System.currentTimeMillis())
+        val volIdx = if (lastIsToday && volumes.size >= 2) volumes.size - 2 else volumes.size - 1
+        val volLast = volumes[volIdx]
+        val vol20 = volumes.subList(max(0, volIdx - 19), volIdx + 1).average()
         val volumeRatio = if (vol20 > 0.0) volLast / vol20 else 1.0
 
         val high20 = Indicators.recentHigh(closes, 20) ?: last
@@ -239,6 +245,7 @@ class DailyPicker(
         val marketState: String,
         val techDirection: String,
         val techBullish: Int,
+        val techTotal: Int,
         val techConfidence: Int,
         val newsScore: Int,
         val headline: String,
@@ -265,6 +272,7 @@ class DailyPicker(
             marketState = marketState,
             techDirection = techDirection,
             techBullish = techBullish,
+            techTotal = techTotal,
             techConfidence = techConfidence,
             volumeRatio = round(s.volumeRatio * 10.0) / 10.0,
             newsScore = newsScore,
@@ -276,8 +284,9 @@ class DailyPicker(
 
     private suspend fun deepRead(s: Screened): Deep? {
         return try {
+            // A full year so all 15 techniques (incl. the 200-day cross) can vote.
             val candles = try {
-                market.getDailyCandles(s.symbol, 120)
+                market.getDailyCandles(s.symbol, 365)
             } catch (_: Exception) {
                 emptyList()
             }
@@ -312,6 +321,7 @@ class DailyPicker(
             val direction = analysis?.outlook?.direction ?: TechniqueVerdict.NEUTRAL
             val confidence = analysis?.outlook?.confidence ?: 0
             val bullishCount = analysis?.outlook?.bullishCount ?: 0
+            val techTotal = analysis?.results?.size ?: 0
 
             val techBonus = when (direction) {
                 TechniqueVerdict.BULLISH -> confidence * 0.25
@@ -337,7 +347,8 @@ class DailyPicker(
             hiPct = round(hiPct)
             if (hiPct <= loPct) hiPct = loPct + 1.0
 
-            val reason = buildReason(s, direction, bullishCount, confidence, pre, post, newsScore)
+            val reason =
+                buildReason(s, direction, bullishCount, techTotal, confidence, pre, post, newsScore)
 
             Deep(
                 s = s,
@@ -350,6 +361,7 @@ class DailyPicker(
                 marketState = quote?.marketState ?: ext?.marketState ?: "",
                 techDirection = direction.name,
                 techBullish = bullishCount,
+                techTotal = techTotal,
                 techConfidence = confidence,
                 newsScore = newsScore,
                 headline = top?.title ?: "",
@@ -368,6 +380,7 @@ class DailyPicker(
         s: Screened,
         direction: TechniqueVerdict,
         bullishCount: Int,
+        techTotal: Int,
         confidence: Int,
         pre: Double?,
         post: Double?,
@@ -384,7 +397,7 @@ class DailyPicker(
             parts += String.format(Locale.US, "%.1fx volume", s.volumeRatio)
         }
         parts += when (direction) {
-            TechniqueVerdict.BULLISH -> "$bullishCount of 11 techniques bullish ($confidence%)"
+            TechniqueVerdict.BULLISH -> "$bullishCount of $techTotal techniques bullish ($confidence%)"
             TechniqueVerdict.NEUTRAL -> "techniques mixed"
             TechniqueVerdict.BEARISH -> "techniques lean bearish"
         }

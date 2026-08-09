@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Savings
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -49,6 +50,7 @@ import com.aurum.invest.ui.screens.PositionDetailScreen
 import com.aurum.invest.ui.screens.ReportsScreen
 import com.aurum.invest.ui.screens.SettingsScreen
 import com.aurum.invest.ui.screens.WatchlistScreen
+import com.aurum.invest.ui.screens.WealthScreen
 import com.aurum.invest.ui.theme.AurumColors
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -56,7 +58,8 @@ import kotlinx.coroutines.flow.stateIn
 
 object Routes {
     const val DASHBOARD = "dashboard"; const val WATCHLIST = "watchlist"
-    const val PICKS = "picks"; const val FEED = "feed"; const val SETTINGS = "settings"
+    const val PICKS = "picks"; const val WEALTH = "wealth"
+    const val FEED = "feed"; const val SETTINGS = "settings"
     const val ADD = "add?symbol={symbol}&side={side}"; const val DETAIL = "detail/{symbol}"
     const val ANALYSIS = "analysis/{symbol}"; const val REPORTS = "reports"
     fun detail(symbol: String) = "detail/$symbol"
@@ -89,6 +92,7 @@ fun AurumRoot() {
             TopDest(Routes.DASHBOARD, "Portfolio", Icons.Rounded.AccountBalanceWallet),
             TopDest(Routes.WATCHLIST, "Watchlist", Icons.Rounded.Visibility),
             TopDest(Routes.PICKS, "Picks", Icons.AutoMirrored.Rounded.TrendingUp),
+            TopDest(Routes.WEALTH, "Wealth", Icons.Rounded.Savings),
             TopDest(Routes.FEED, "Feed", Icons.Rounded.Notifications)
         )
     }
@@ -171,6 +175,12 @@ fun AurumRoot() {
                 PicksScreen(
                     onOpenDetail = { nav.navigate(Routes.detail(it)) },
                     onOpenAnalysis = { nav.navigate(Routes.analysis(it)) }
+                )
+            }
+            composable(Routes.WEALTH) {
+                WealthScreen(
+                    onOpenAnalysis = { nav.navigate(Routes.analysis(it)) },
+                    onOpenDetail = { nav.navigate(Routes.detail(it)) }
                 )
             }
             composable(Routes.FEED) {

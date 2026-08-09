@@ -83,6 +83,64 @@ class NewsRepository(private val cacheDao: CacheDao) {
     }
 
     /**
+     * News for an arbitrary search [query] (sector themes, insider-buying
+     * sweeps, institutional flow). Cached under `"topic:[cacheKey]"`. Items
+     * carry sentiment but no price impact; [tag] fills NewsItem.symbol so the
+     * UI can label the row. Never throws; empty list on total failure.
+     */
+    suspend fun getTopicNews(
+        query: String,
+        cacheKey: String,
+        tag: String = "",
+        maxAgeMs: Long = 3_600_000L,
+        maxItems: Int = 12
+    ): List<NewsItem> = withContext(Dispatchers.IO) {
+        val key = "topic:$cacheKey"
+        try {
+            val now = System.currentTimeMillis()
+            val cached = try {
+                cacheDao.get(key)
+            } catch (_: Exception) {
+                null
+            }
+            if (cached != null && now - cached.updatedAt <= maxAgeMs) {
+                return@withContext fromJson(cached.json)
+            }
+            val raw = client.fetchQuery(query)
+            if (raw.isEmpty()) {
+                return@withContext cached?.let { fromJson(it.json) } ?: emptyList()
+            }
+            val items = raw
+                .sortedByDescending { it.publishedAt }
+                .take(maxItems)
+                .map { r ->
+                    NewsItem(
+                        id = stableId(r.link),
+                        symbol = tag,
+                        title = r.title,
+                        source = r.source,
+                        url = r.link,
+                        publishedAt = r.publishedAt,
+                        sentiment = NewsSentiment.score(r.title),
+                        priceImpactPct = null
+                    )
+                }
+            try {
+                cacheDao.put(CacheEntity(key = key, json = toJson(items), updatedAt = now))
+            } catch (_: Exception) {
+                // Cache write failure is non-fatal.
+            }
+            items
+        } catch (_: Exception) {
+            try {
+                cacheDao.get(key)?.let { fromJson(it.json) } ?: emptyList()
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+    }
+
+    /**
      * Intraday move of the trading day the item was published on:
      * ((close - open) / open) * 100 for the candle whose date matches
      * (via [Dates.sameDay]); null when no candle matches (weekend/holiday).
