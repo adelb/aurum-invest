@@ -1,9 +1,13 @@
 package com.aurum.invest.data.repo
 
+import com.aurum.invest.analytics.DailyPicker
 import com.aurum.invest.analytics.WeeklyPicker
 import com.aurum.invest.core.Dates
+import com.aurum.invest.data.db.CacheDao
+import com.aurum.invest.data.db.CacheEntity
 import com.aurum.invest.data.db.PicksDao
 import com.aurum.invest.data.db.WeeklyPickEntity
+import com.aurum.invest.data.model.DailyPick
 import com.aurum.invest.data.model.WeeklyPick
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -18,12 +22,54 @@ import kotlinx.coroutines.flow.map
  */
 class PicksRepository(
     private val picksDao: PicksDao,
-    private val market: MarketRepository
+    private val market: MarketRepository,
+    private val cacheDao: CacheDao,
+    private val news: NewsRepository
 ) {
 
     companion object {
         /** Budget (under-$25) picks share the weekly_picks table under a suffixed week key. */
         const val BUDGET_SUFFIX = ":U25"
+
+        /** Daily picks live in the JSON cache, one entry per local date. */
+        private const val DAILY_KEY_PREFIX = "dailypicks:"
+    }
+
+    // ---- daily picks (cache-backed, one set per calendar day) ---------------------
+
+    private fun dailyKey(): String = DAILY_KEY_PREFIX + Dates.todayIso()
+
+    /** Today's stored daily picks (no computation). Empty on any failure. */
+    suspend fun getDaily(): List<DailyPick> = try {
+        cacheDao.get(dailyKey())?.let { DailyPicker.fromJson(it.json) } ?: emptyList()
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    /** Today's daily picks, computing + storing them when none exist yet. */
+    suspend fun ensureDaily(): List<DailyPick> {
+        val existing = getDaily()
+        if (existing.isNotEmpty()) return existing
+        return recomputeDaily()
+    }
+
+    /** Recomputes today's daily picks from fresh market data and replaces the stored set. */
+    suspend fun recomputeDaily(): List<DailyPick> {
+        return try {
+            val picks = DailyPicker(market, news).computePicks(Dates.todayIso())
+            if (picks.isNotEmpty()) {
+                cacheDao.put(
+                    CacheEntity(
+                        key = dailyKey(),
+                        json = DailyPicker.toJson(picks),
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+            }
+            picks
+        } catch (_: Exception) {
+            getDaily()
+        }
     }
 
     /** Live picks for the current week, ranked 1..10. */

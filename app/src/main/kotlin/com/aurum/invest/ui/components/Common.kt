@@ -32,6 +32,43 @@ import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.AdviceAction
 import com.aurum.invest.ui.theme.AurumColors
 
+/** Flat segmented toggle — gold fill marks the selected option. */
+@Composable
+fun SegmentedToggle(
+    options: List<String>,
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(AurumColors.surface)
+            .padding(4.dp)
+    ) {
+        options.forEachIndexed { i, label ->
+            val sel = i == selected
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(if (sel) AurumColors.gold else Color.Transparent)
+                    .clickable { onSelect(i) }
+                    .padding(vertical = if (compact) 6.dp else 9.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (sel) AurumColors.bg else AurumColors.textDim
+                )
+            }
+        }
+    }
+}
+
 /** The standard Aurum surface: flat fill, quiet radius, no chrome. */
 @Composable
 fun AurumCard(

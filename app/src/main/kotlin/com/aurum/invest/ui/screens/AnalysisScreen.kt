@@ -63,6 +63,7 @@ import com.aurum.invest.ui.components.ObvDiagram
 import com.aurum.invest.ui.components.PillTag
 import com.aurum.invest.ui.components.PriceStyle
 import com.aurum.invest.ui.components.RsiDiagram
+import com.aurum.invest.ui.components.SegmentedToggle
 import com.aurum.invest.ui.components.StatTile
 import com.aurum.invest.ui.components.StochasticDiagram
 import com.aurum.invest.ui.components.SupportResistanceDiagram
@@ -227,43 +228,6 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
                 containerColor = AurumColors.surface
             ) {
                 TechniqueDetailSheet(detail)
-            }
-        }
-    }
-}
-
-/** Flat segmented toggle — gold fill marks the selected option. */
-@Composable
-private fun SegmentedToggle(
-    options: List<String>,
-    selected: Int,
-    onSelect: (Int) -> Unit,
-    modifier: Modifier = Modifier,
-    compact: Boolean = false
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(AurumColors.surface)
-            .padding(4.dp)
-    ) {
-        options.forEachIndexed { i, label ->
-            val sel = i == selected
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(if (sel) AurumColors.gold else Color.Transparent)
-                    .clickable { onSelect(i) }
-                    .padding(vertical = if (compact) 6.dp else 9.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (sel) AurumColors.bg else AurumColors.textDim
-                )
             }
         }
     }

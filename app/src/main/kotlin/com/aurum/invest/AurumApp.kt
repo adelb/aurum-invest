@@ -38,6 +38,6 @@ class AppContainer(app: Application) {
     val portfolio = PortfolioRepository(db.transactionDao())
     val watch = WatchRepository(db.watchDao())
     val news = NewsRepository(db.cacheDao())
-    val picks = PicksRepository(db.picksDao(), market)
+    val picks = PicksRepository(db.picksDao(), market, db.cacheDao(), news)
     val bankFeed = BankFeedRepository(db.bankEventDao(), portfolio)
 }

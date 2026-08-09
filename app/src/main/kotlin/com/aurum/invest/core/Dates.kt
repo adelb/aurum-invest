@@ -35,6 +35,16 @@ object Dates {
         return next.atZone(zone).toInstant().toEpochMilli() - System.currentTimeMillis()
     }
 
+    /** ISO date (yyyy-MM-dd) of today, local time. */
+    fun todayIso(): String = LocalDate.now().toString()
+
+    /** "Sunday, Aug 9" style label for today. */
+    fun todayLabel(): String =
+        LocalDate.now().format(DateTimeFormatter.ofPattern("EEEE, MMM d", Locale.US))
+
+    /** True on Saturdays — the one day the daily picks rest. */
+    fun isSaturday(): Boolean = LocalDate.now().dayOfWeek == DayOfWeek.SATURDAY
+
     /** True when two epoch-millis timestamps fall on the same local calendar day. */
     fun sameDay(ts1: Long, ts2: Long): Boolean {
         val zone = ZoneId.systemDefault()

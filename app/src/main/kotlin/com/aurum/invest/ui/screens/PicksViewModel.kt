@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
 import com.aurum.invest.core.Dates
+import com.aurum.invest.data.model.DailyPick
 import com.aurum.invest.data.model.Quote
 import com.aurum.invest.data.model.WeeklyPick
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,7 +27,13 @@ data class PicksState(
     val budgetRows: List<PickRow> = emptyList(),
     val weekLabel: String = "",
     val loading: Boolean = true,
-    val refreshing: Boolean = false
+    val refreshing: Boolean = false,
+    // Daily picks — same-day 3-10%+ candidates, off on Saturdays.
+    val dailyRows: List<DailyPick> = emptyList(),
+    val dailyLabel: String = "",
+    val dailyLoading: Boolean = true,
+    val dailyRefreshing: Boolean = false,
+    val saturday: Boolean = false
 )
 
 class PicksViewModel(app: Application) : AndroidViewModel(app) {
@@ -36,7 +43,12 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
     private val market = container.market
 
     private val _state = MutableStateFlow(
-        PicksState(weekLabel = Dates.weekStartLabel(Dates.currentWeekStartIso()))
+        PicksState(
+            weekLabel = Dates.weekStartLabel(Dates.currentWeekStartIso()),
+            dailyLabel = Dates.todayLabel(),
+            saturday = Dates.isSaturday(),
+            dailyLoading = !Dates.isSaturday()
+        )
     )
     val state: StateFlow<PicksState> = _state.asStateFlow()
 
@@ -104,6 +116,26 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch {
             picks.ensureBudgetWeek()
+        }
+        viewModelScope.launch {
+            if (!Dates.isSaturday()) {
+                val daily = picks.ensureDaily()
+                _state.update { it.copy(dailyRows = daily, dailyLoading = false) }
+            }
+        }
+    }
+
+    /** Recompute today's daily picks from fresh quotes, extended hours, and news. */
+    fun refreshDaily() {
+        if (_state.value.dailyRefreshing || _state.value.saturday) return
+        viewModelScope.launch {
+            _state.update { it.copy(dailyRefreshing = true) }
+            try {
+                val daily = picks.recomputeDaily()
+                _state.update { it.copy(dailyRows = daily, dailyLoading = false) }
+            } finally {
+                _state.update { it.copy(dailyRefreshing = false) }
+            }
         }
     }
 

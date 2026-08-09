@@ -3,6 +3,7 @@ package com.aurum.invest.data.repo
 import com.aurum.invest.data.db.CacheDao
 import com.aurum.invest.data.db.CacheEntity
 import com.aurum.invest.data.model.Candle
+import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.Quote
 import com.aurum.invest.data.remote.YahooClient
 import kotlinx.coroutines.async
@@ -88,6 +89,22 @@ class MarketRepository(
     suspend fun getGoldCandles(rangeDays: Int = 120): List<Candle> =
         getDailyCandles(GOLD_SYMBOL, rangeDays)
 
+    /** Latest session's pre/post-market read; cached briefly like intraday data. */
+    suspend fun getExtendedHours(symbol: String, maxAgeMs: Long = 300_000L): ExtendedHours? {
+        val key = "exthours:$symbol"
+        val now = System.currentTimeMillis()
+        val cached = readCache(key)
+        if (cached != null && now - cached.updatedAt <= maxAgeMs) {
+            extendedFromJson(cached.json)?.let { return it }
+        }
+        val fresh = yahoo.fetchExtendedHours(symbol)
+        if (fresh != null) {
+            writeCache(key, extendedToJson(fresh).toString())
+            return fresh
+        }
+        return cached?.let { extendedFromJson(it.json) }
+    }
+
     suspend fun search(query: String): List<Pair<String, String>> =
         try {
             yahoo.searchSymbols(query)
@@ -135,6 +152,30 @@ class MarketRepository(
                 marketState = o.optString("marketState", ""),
                 shortName = o.optString("shortName", ""),
                 fetchedAt = o.optLong("fetchedAt", 0L)
+            )
+        } catch (_: Exception) {
+            null
+        }
+
+    private fun extendedToJson(e: ExtendedHours): JSONObject = JSONObject().apply {
+        put("symbol", e.symbol)
+        put("prevClose", e.prevClose)
+        put("regularPrice", e.regularPrice)
+        if (e.preMarketPct != null) put("preMarketPct", e.preMarketPct)
+        if (e.postMarketPct != null) put("postMarketPct", e.postMarketPct)
+        put("marketState", e.marketState)
+    }
+
+    private fun extendedFromJson(s: String): ExtendedHours? =
+        try {
+            val o = JSONObject(s)
+            ExtendedHours(
+                symbol = o.getString("symbol"),
+                prevClose = o.getDouble("prevClose"),
+                regularPrice = o.getDouble("regularPrice"),
+                preMarketPct = if (o.has("preMarketPct")) o.getDouble("preMarketPct") else null,
+                postMarketPct = if (o.has("postMarketPct")) o.getDouble("postMarketPct") else null,
+                marketState = o.optString("marketState", "")
             )
         } catch (_: Exception) {
             null

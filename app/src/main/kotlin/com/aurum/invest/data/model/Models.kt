@@ -98,6 +98,44 @@ data class WeeklyPick(
     val priceAtPick: Double
 )
 
+/** Pre/post-market read for a symbol's latest session, from extended-hours candles. */
+data class ExtendedHours(
+    val symbol: String,
+    val prevClose: Double,
+    val regularPrice: Double,
+    /** Last pre-market print vs the previous close, percent; null when no pre-market trades. */
+    val preMarketPct: Double?,
+    /** Last post-market print vs the regular close, percent; null when no post-market trades. */
+    val postMarketPct: Double?,
+    val marketState: String
+)
+
+/** One same-day pick: a stock the engine reads as capable of a 3-10%+ up-move today. */
+data class DailyPick(
+    val date: String,             // ISO local date the pick was computed for
+    val rank: Int,
+    val symbol: String,
+    val name: String,
+    val score: Double,            // 0..100
+    val expectedLowPct: Double,   // potential day move, low bound (>= 3)
+    val expectedHighPct: Double,  // potential day move, high bound
+    val reason: String,
+    val price: Double,            // price at pick time
+    val prevClose: Double,
+    val dayChangePct: Double,     // regular-session move at pick time
+    val preMarketPct: Double?,
+    val postMarketPct: Double?,
+    val marketState: String,
+    val techDirection: String,    // BULLISH / BEARISH / NEUTRAL from the 11 techniques
+    val techBullish: Int,         // bullish technique count of 11
+    val techConfidence: Int,
+    val volumeRatio: Double,      // latest session volume vs 20-day average
+    val newsScore: Int,           // summed headline sentiment, clamped
+    val headline: String,         // newest related headline ("" when none)
+    val headlineSource: String,
+    val headlineSentiment: Int
+)
+
 /** A trade extracted from a bank notification. */
 data class ParsedTrade(
     val side: TradeSide,

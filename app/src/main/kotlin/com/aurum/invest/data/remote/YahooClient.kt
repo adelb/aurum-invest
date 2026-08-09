@@ -1,6 +1,7 @@
 package com.aurum.invest.data.remote
 
 import com.aurum.invest.data.model.Candle
+import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.Quote
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -68,6 +69,64 @@ class YahooClient {
             parseCandles(root)
         } catch (_: Exception) {
             emptyList()
+        }
+    }
+
+    /**
+     * v8 chart API, range=1d interval=5m with includePrePost — the latest
+     * session's pre-market and post-market moves, split around the regular
+     * trading window from meta.currentTradingPeriod.
+     */
+    suspend fun fetchExtendedHours(symbol: String): ExtendedHours? = withContext(Dispatchers.IO) {
+        try {
+            val url = "https://query1.finance.yahoo.com/v8/finance/chart".toHttpUrl()
+                .newBuilder()
+                .addPathSegment(symbol)
+                .addQueryParameter("range", "1d")
+                .addQueryParameter("interval", "5m")
+                .addQueryParameter("includePrePost", "true")
+                .build()
+                .toString()
+            val root = getJson(url) ?: return@withContext null
+            val result = chartResult(root) ?: return@withContext null
+            val meta = result.optJSONObject("meta") ?: return@withContext null
+            val regularPrice = metaDouble(meta, "regularMarketPrice") ?: return@withContext null
+            val prevClose = metaDouble(meta, "chartPreviousClose")
+                ?: metaDouble(meta, "previousClose")
+                ?: regularPrice
+            val marketState = meta.optString("marketState", "")
+
+            val periods = meta.optJSONObject("currentTradingPeriod")
+            val regular = periods?.optJSONObject("regular")
+            val regStart = (regular?.optLong("start", 0L) ?: 0L) * 1000L
+            val regEnd = (regular?.optLong("end", 0L) ?: 0L) * 1000L
+
+            val candles = parseCandles(root)
+            var preMarketPct: Double? = null
+            var postMarketPct: Double? = null
+            if (regStart > 0L && prevClose > 0.0) {
+                candles.lastOrNull { it.ts < regStart }?.let { pre ->
+                    preMarketPct = (pre.close - prevClose) / prevClose * 100.0
+                }
+            }
+            if (regEnd > 0L) {
+                val lastPost = candles.lastOrNull { it.ts >= regEnd }
+                val regClose = candles.lastOrNull { it.ts in regStart until regEnd }?.close
+                    ?: regularPrice
+                if (lastPost != null && regClose > 0.0) {
+                    postMarketPct = (lastPost.close - regClose) / regClose * 100.0
+                }
+            }
+            ExtendedHours(
+                symbol = symbol,
+                prevClose = prevClose,
+                regularPrice = regularPrice,
+                preMarketPct = preMarketPct,
+                postMarketPct = postMarketPct,
+                marketState = marketState
+            )
+        } catch (_: Exception) {
+            null
         }
     }
 
