@@ -20,6 +20,12 @@ interface TransactionDao {
 
     @Query("SELECT * FROM transactions ORDER BY ts ASC, id ASC")
     suspend fun getAllOrdered(): List<TransactionEntity>
+
+    @Query("DELETE FROM transactions WHERE symbol = :symbol")
+    suspend fun deleteBySymbol(symbol: String): Int
+
+    @Query("SELECT COUNT(*) FROM transactions WHERE symbol = :symbol")
+    suspend fun countForSymbol(symbol: String): Int
 }
 
 @Dao

@@ -67,6 +67,16 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
         refreshTick.update { it + 1 }
     }
 
+    /**
+     * Deletes every ledger row for [symbol] — used to clear a test position.
+     * Only that symbol is touched; the positions flow re-emits automatically.
+     */
+    fun removeHolding(symbol: String) {
+        viewModelScope.launch {
+            runCatching { container.portfolio.removeSymbol(symbol) }
+        }
+    }
+
     private suspend fun load(allPositions: List<Position>) {
         _state.update { it.copy(loading = true) }
         val fresh = forceFresh.getAndSet(false)

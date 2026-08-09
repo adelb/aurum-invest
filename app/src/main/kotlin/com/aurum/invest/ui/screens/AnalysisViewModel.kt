@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
+import com.aurum.invest.analytics.BuyPlan
+import com.aurum.invest.analytics.BuyPlanEngine
 import com.aurum.invest.analytics.TechniqueAnalysis
 import com.aurum.invest.analytics.Techniques
 import kotlinx.coroutines.Job
@@ -17,7 +19,8 @@ data class AnalysisState(
     val symbol: String = "",
     val loading: Boolean = true,
     val analysis: TechniqueAnalysis? = null,
-    val price: Double? = null
+    val price: Double? = null,
+    val plan: BuyPlan? = null
 )
 
 class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
@@ -46,8 +49,9 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
         job?.cancel()
         job = viewModelScope.launch {
             _state.update { it.copy(loading = true) }
+            // A full year of dailies so the plan's 200-day average exists.
             val candles = try {
-                market.getDailyCandles(sym, 180)
+                market.getDailyCandles(sym, 365)
             } catch (_: Exception) {
                 emptyList()
             }
@@ -57,11 +61,19 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
                 null
             }
             val analysis = Techniques.analyze(sym, candles)
+            val price = quote?.price ?: candles.lastOrNull()?.close
+            val plan =
+                if (analysis != null && price != null && price > 0.0) {
+                    runCatching {
+                        BuyPlanEngine.build(sym, candles, analysis, price)
+                    }.getOrNull()
+                } else null
             _state.update {
                 it.copy(
                     loading = false,
                     analysis = analysis,
-                    price = quote?.price ?: candles.lastOrNull()?.close
+                    price = price,
+                    plan = plan
                 )
             }
         }

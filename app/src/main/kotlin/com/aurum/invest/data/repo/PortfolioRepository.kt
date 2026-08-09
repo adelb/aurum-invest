@@ -51,6 +51,18 @@ class PortfolioRepository(private val txDao: TransactionDao) {
 
     suspend fun deleteTransaction(tx: TransactionEntity) = txDao.delete(tx)
 
+    /**
+     * Deletes every transaction recorded for [symbol] — removes that position
+     * (e.g. a test entry) from the ledger while leaving all other symbols
+     * untouched. Returns how many rows were deleted.
+     */
+    suspend fun removeSymbol(symbol: String): Int =
+        txDao.deleteBySymbol(symbol.trim().uppercase())
+
+    /** How many ledger rows exist for [symbol]. */
+    suspend fun transactionCount(symbol: String): Int =
+        txDao.countForSymbol(symbol.trim().uppercase())
+
     companion object {
 
         fun computePositions(ordered: List<TransactionEntity>): List<Position> {

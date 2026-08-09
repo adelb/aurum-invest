@@ -96,6 +96,8 @@ data class FiveDayOutlook(
 data class TechniqueAnalysis(
     val symbol: String,
     val timestamps: List<Long>,
+    /** The exact candle window every series is aligned to, one per index. */
+    val candles: List<Candle>,
     val results: List<TechniqueResult>,
     val outlook: FiveDayOutlook,
     val maData: MaTrendData,
@@ -177,6 +179,7 @@ object Techniques {
         return TechniqueAnalysis(
             symbol = symbol,
             timestamps = timestamps,
+            candles = cs,
             results = results,
             outlook = outlook,
             maData = maData,

@@ -7,6 +7,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,11 +23,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -57,9 +60,15 @@ import com.aurum.invest.analytics.RsiData
 import com.aurum.invest.analytics.StochasticData
 import com.aurum.invest.analytics.SupportResistanceData
 import com.aurum.invest.core.Fmt
+import com.aurum.invest.data.model.Candle
 import com.aurum.invest.ui.theme.AurumColors
 import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.log10
 import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /*
@@ -68,18 +77,33 @@ import kotlin.math.roundToInt
  * no gradients anywhere. Series that start with nulls (not enough history yet)
  * simply begin at their first non-null point.
  *
- * Every diagram is windowed through a DiagramViewport: pinch to zoom, drag
- * horizontally to move through time, double-tap to step 1x -> 2x -> 4x -> 1x.
- * A three-label date axis along the bottom always reflects the visible window.
+ * Interaction model:
+ *  - pinch zooms, one-finger horizontal drag pans, double-tap steps the zoom
+ *  - long-press then drag scrubs a crosshair with date + values; tap clears it
+ *  - a plain tap (with no crosshair up) reports through [onTap] — the analysis
+ *    screen opens the full technique write-up from it
+ *
+ * Price-based diagrams can render the price series as a line or as Japanese
+ * candlesticks via [PriceStyle]; every pane draws a price grid and an adaptive
+ * date axis so values and dates are always readable.
  */
 
-// ---------- viewport (zoom + pan) ----------
+/** How the price series is rendered on price-scale diagrams. */
+enum class PriceStyle { LINE, CANDLES }
+
+// ---------- viewport (zoom + pan + crosshair) ----------
 
 /** Visible window over a series of [total] points. Fractions of the whole series. */
 class DiagramViewport(val total: Int) {
     var startFrac by mutableFloatStateOf(0f)
     var spanFrac by mutableFloatStateOf(1f)
     var widthPx: Float = 0f
+
+    /** Crosshair position as a fraction of the canvas width; null = hidden. */
+    var scrubFrac by mutableStateOf<Float?>(null)
+
+    /** True while a long-press scrub drag is in flight (suppresses panning). */
+    var scrubbing: Boolean = false
 
     private val minSpan: Float =
         if (total <= MIN_POINTS) 1f else MIN_POINTS.toFloat() / total
@@ -115,6 +139,7 @@ class DiagramViewport(val total: Int) {
     fun reset() {
         startFrac = 0f
         spanFrac = 1f
+        scrubFrac = null
     }
 
     companion object {
@@ -128,16 +153,40 @@ fun rememberDiagramViewport(total: Int): DiagramViewport =
 
 /**
  * Gesture handling for a diagram: two-finger pinch zooms, one-finger horizontal
- * drag pans (vertical drags still scroll the page), double-tap steps the zoom.
+ * drag pans (vertical drags still scroll the page), double-tap steps the zoom,
+ * long-press + drag scrubs the crosshair, and a plain tap either clears the
+ * crosshair or fires [onTap].
  */
-fun Modifier.diagramGestures(viewport: DiagramViewport): Modifier = this
+fun Modifier.diagramGestures(viewport: DiagramViewport, onTap: (() -> Unit)? = null): Modifier = this
     .onSizeChanged { viewport.widthPx = it.width.toFloat() }
-    .pointerInput(viewport) {
+    .pointerInput(viewport, onTap) {
         detectTapGestures(
+            onTap = {
+                if (viewport.scrubFrac != null) viewport.scrubFrac = null
+                else onTap?.invoke()
+            },
             onDoubleTap = { pos ->
                 val frac = if (size.width > 0) (pos.x / size.width).coerceIn(0f, 1f) else 0.5f
                 viewport.doubleTapCycle(frac)
             }
+        )
+    }
+    .pointerInput(viewport) {
+        detectDragGesturesAfterLongPress(
+            onDragStart = { pos ->
+                viewport.scrubbing = true
+                if (size.width > 0) {
+                    viewport.scrubFrac = (pos.x / size.width).coerceIn(0f, 1f)
+                }
+            },
+            onDrag = { change, _ ->
+                if (size.width > 0) {
+                    viewport.scrubFrac = (change.position.x / size.width).coerceIn(0f, 1f)
+                }
+                change.consume()
+            },
+            onDragEnd = { viewport.scrubbing = false },
+            onDragCancel = { viewport.scrubbing = false }
         )
     }
     .pointerInput(viewport) {
@@ -155,7 +204,7 @@ fun Modifier.diagramGestures(viewport: DiagramViewport): Modifier = this
                     }
                     if (pan.x != 0f) viewport.panByPx(pan.x)
                     event.changes.forEach { it.consume() }
-                } else if (pressed.size == 1) {
+                } else if (pressed.size == 1 && !viewport.scrubbing) {
                     val ch = pressed[0]
                     val dx = ch.position.x - ch.previousPosition.x
                     val dy = ch.position.y - ch.previousPosition.y
@@ -255,28 +304,233 @@ private fun chartLabelStyle(color: Color) = TextStyle(
 
 private val priceLineColor = AurumColors.text.copy(alpha = 0.85f)
 
-/** Three date labels (first / middle / last visible) along the bottom strip. */
+// ---------- axes ----------
+
+/**
+ * Adaptive date axis: a hairline above the strip and 3-5 evenly spaced labels
+ * (count scales with the canvas width) reflecting the visible window.
+ */
 private fun DrawScope.drawTimeAxis(textMeasurer: TextMeasurer, ts: List<Long>) {
     if (ts.size < 2) return
+    val axisTop = size.height - AXIS_H
+    drawLine(
+        color = AurumColors.hairline,
+        start = Offset(0f, axisTop),
+        end = Offset(size.width, axisTop),
+        strokeWidth = 1f
+    )
     val style = chartLabelStyle(AurumColors.textDim)
-    val y = size.height - AXIS_H + 8f
-    val first = Fmt.dateShort(ts.first())
-    val mid = Fmt.dateShort(ts[ts.size / 2])
-    val last = Fmt.dateShort(ts.last())
-    drawText(textMeasurer, first, topLeft = Offset(0f, y), style = style)
-    val mMid = textMeasurer.measure(AnnotatedString(mid), style)
-    drawText(
-        textMeasurer, mid,
-        topLeft = Offset(size.width / 2f - mMid.size.width / 2f, y),
-        style = style
-    )
-    val mLast = textMeasurer.measure(AnnotatedString(last), style)
-    drawText(
-        textMeasurer, last,
-        topLeft = Offset(size.width - mLast.size.width, y),
-        style = style
-    )
+    val y = axisTop + 8f
+    val labels = min(5, max(3, (size.width / 240f).toInt() + 1))
+    for (li in 0 until labels) {
+        val idx = ((ts.size - 1).toFloat() * li / (labels - 1)).roundToInt().coerceIn(0, ts.size - 1)
+        val text = Fmt.dateShort(ts[idx])
+        val m = textMeasurer.measure(AnnotatedString(text), style)
+        val cx = size.width * li / (labels - 1)
+        val tx = when (li) {
+            0 -> 0f
+            labels - 1 -> size.width - m.size.width
+            else -> cx - m.size.width / 2f
+        }
+        drawText(textMeasurer, text, topLeft = Offset(tx, y), style = style)
+        // tick mark
+        drawLine(
+            color = AurumColors.hairline,
+            start = Offset(cx.coerceIn(1f, size.width - 1f), axisTop),
+            end = Offset(cx.coerceIn(1f, size.width - 1f), axisTop + 4f),
+            strokeWidth = 1f
+        )
+    }
 }
+
+/** "Nice" tick values covering [min]..[max]. */
+private fun niceTicks(min: Double, max: Double, target: Int = 4): List<Double> {
+    val span = max - min
+    if (span <= 1e-12 || target < 1) return emptyList()
+    val rawStep = span / target
+    val mag = 10.0.pow(floor(log10(rawStep)))
+    val norm = rawStep / mag
+    val step = when {
+        norm < 1.5 -> 1.0
+        norm < 3.0 -> 2.0
+        norm < 7.0 -> 5.0
+        else -> 10.0
+    } * mag
+    val first = ceil(min / step) * step
+    val out = ArrayList<Double>()
+    var v = first
+    while (v <= max + step * 1e-6) {
+        out.add(v)
+        v += step
+    }
+    return out
+}
+
+/** Faint horizontal gridlines with left-edge price labels. */
+private fun DrawScope.drawPriceGrid(
+    textMeasurer: TextMeasurer,
+    pane: Pane,
+    minV: Double,
+    maxV: Double
+) {
+    val style = chartLabelStyle(AurumColors.textDim.copy(alpha = 0.85f))
+    niceTicks(minV, maxV).forEach { level ->
+        val y = pane.y(level)
+        if (y < 2f || y > size.height - AXIS_H - 2f) return@forEach
+        drawLine(
+            color = AurumColors.hairline.copy(alpha = 0.55f),
+            start = Offset(0f, y),
+            end = Offset(size.width, y),
+            strokeWidth = 1f
+        )
+        val m = textMeasurer.measure(AnnotatedString(Fmt.money(level)), style)
+        drawText(
+            textMeasurer, Fmt.money(level),
+            topLeft = Offset(4f, (y - m.size.height - 2f).coerceAtLeast(0f)),
+            style = style
+        )
+    }
+}
+
+// ---------- candles ----------
+
+/** Japanese candlesticks: gain/loss bodies between open and close, thin wicks. */
+private fun DrawScope.drawCandleSeries(candles: List<Candle>, pane: Pane) {
+    val n = candles.size
+    if (n < 1) return
+    val stepX = if (n > 1) size.width / (n - 1) else size.width
+    val bodyW = (stepX * 0.62f).coerceIn(2f, 16f)
+    candles.forEachIndexed { i, c ->
+        val x = pane.x(i)
+        val up = c.close >= c.open
+        val color = if (up) AurumColors.gain else AurumColors.loss
+        drawLine(
+            color = color.copy(alpha = 0.9f),
+            start = Offset(x, pane.y(c.high)),
+            end = Offset(x, pane.y(c.low)),
+            strokeWidth = 1.5f
+        )
+        val yTop = pane.y(max(c.open, c.close))
+        val yBot = pane.y(min(c.open, c.close))
+        drawRect(
+            color = color,
+            topLeft = Offset((x - bodyW / 2f).coerceIn(0f, size.width - bodyW), yTop),
+            size = Size(bodyW, (yBot - yTop).coerceAtLeast(1.5f))
+        )
+    }
+}
+
+/**
+ * Renders the price series in the requested style. When [style] is CANDLES and
+ * [ohlc] is present the candles are drawn; otherwise the smooth close line.
+ */
+private fun DrawScope.drawPriceSeries(
+    closes: List<Double>,
+    ohlc: List<Candle>?,
+    style: PriceStyle,
+    pane: Pane
+) {
+    if (style == PriceStyle.CANDLES && ohlc != null && ohlc.size == closes.size) {
+        drawCandleSeries(ohlc, pane)
+    } else {
+        strokeSeries(pricePoints(closes, pane), priceLineColor, 3f)
+    }
+}
+
+/** Adds the OHLC extremes to the pane range when candles will be drawn. */
+private fun MutableList<Double>.includeOhlcRange(ohlc: List<Candle>?, style: PriceStyle) {
+    if (style == PriceStyle.CANDLES && ohlc != null) {
+        ohlc.forEach { add(it.high); add(it.low) }
+    }
+}
+
+// ---------- crosshair ----------
+
+private class Scrub(val idx: Int, val x: Float)
+
+/** Index + x position of the crosshair inside the visible window, if shown. */
+private fun scrubAt(viewport: DiagramViewport, count: Int, width: Float): Scrub? {
+    val f = viewport.scrubFrac ?: return null
+    if (count < 2 || width <= 0f) return null
+    val i = (f * (count - 1)).roundToInt().coerceIn(0, count - 1)
+    val stepX = width / (count - 1)
+    return Scrub(i, i * stepX)
+}
+
+/** Vertical hairline + a flat value plate; the plate flips sides near the edge. */
+private fun DrawScope.drawCrosshair(
+    textMeasurer: TextMeasurer,
+    x: Float,
+    title: String,
+    lines: List<Pair<String, Color>>
+) {
+    drawLine(
+        color = AurumColors.textDim.copy(alpha = 0.8f),
+        start = Offset(x, 0f),
+        end = Offset(x, size.height - AXIS_H),
+        strokeWidth = 1.5f,
+        pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
+    )
+    val titleStyle = chartLabelStyle(AurumColors.text)
+    val measured = buildList {
+        add(textMeasurer.measure(AnnotatedString(title), titleStyle) to titleStyle.color)
+        lines.forEach { (text, color) ->
+            add(textMeasurer.measure(AnnotatedString(text), chartLabelStyle(color)) to color)
+        }
+    }
+    val padX = 10f
+    val padY = 8f
+    val lineGap = 3f
+    val boxW = (measured.maxOf { it.first.size.width }) + padX * 2
+    val boxH = measured.sumOf { it.first.size.height } + lineGap * (measured.size - 1) + padY * 2
+    val bx = if (x + 12f + boxW <= size.width) x + 12f else (x - 12f - boxW).coerceAtLeast(0f)
+    val by = 4f
+    drawRoundRect(
+        color = AurumColors.surfaceHigh.copy(alpha = 0.96f),
+        topLeft = Offset(bx, by),
+        size = Size(boxW, boxH),
+        cornerRadius = CornerRadius(10f, 10f)
+    )
+    drawRoundRect(
+        color = AurumColors.hairline,
+        topLeft = Offset(bx, by),
+        size = Size(boxW, boxH),
+        cornerRadius = CornerRadius(10f, 10f),
+        style = Stroke(width = 1f)
+    )
+    var ty = by + padY
+    measured.forEachIndexed { i, (layout, color) ->
+        drawText(
+            textMeasurer,
+            if (i == 0) title else lines[i - 1].first,
+            topLeft = Offset(bx + padX, ty),
+            style = chartLabelStyle(color)
+        )
+        ty += layout.size.height + lineGap
+    }
+}
+
+/** Crosshair value lines for a price pane: OHLC when candles, close otherwise. */
+private fun priceScrubLines(
+    idx: Int,
+    closes: List<Double>,
+    ohlc: List<Candle>?,
+    style: PriceStyle
+): List<Pair<String, Color>> {
+    val c = ohlc?.getOrNull(idx)
+    return if (style == PriceStyle.CANDLES && c != null) {
+        val color = if (c.close >= c.open) AurumColors.gain else AurumColors.loss
+        listOf(
+            "O ${Fmt.money(c.open)}   H ${Fmt.money(c.high)}" to priceLineColor,
+            "L ${Fmt.money(c.low)}   C ${Fmt.money(c.close)}" to color
+        )
+    } else {
+        listOf("Close ${Fmt.money(closes[idx])}" to priceLineColor)
+    }
+}
+
+private fun scrubTitle(ts: List<Long>, idx: Int): String =
+    ts.getOrNull(idx)?.let { Fmt.dateShort(it) } ?: ""
 
 // ---------- legend ----------
 
@@ -308,32 +562,46 @@ private fun LegendRow(entries: List<Pair<String, Color>>, modifier: Modifier = M
 
 // ---------- diagrams ----------
 
-/** Price line with SMA 20 (gold) and SMA 50 (blue) overlays plus a legend row. */
+/** Price (line or candles) with SMA 20 (gold) and SMA 50 (blue) overlays plus a legend row. */
 @Composable
 fun MaTrendDiagram(
     data: MaTrendData,
     timestamps: List<Long>,
     viewport: DiagramViewport,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    ohlc: List<Candle>? = null,
+    style: PriceStyle = PriceStyle.LINE,
+    onTap: (() -> Unit)? = null
 ) {
     val textMeasurer = rememberTextMeasurer()
     Column(modifier = modifier) {
         Canvas(
-            modifier = Modifier.fillMaxWidth().height(158.dp).diagramGestures(viewport)
+            modifier = Modifier.fillMaxWidth().height(170.dp).diagramGestures(viewport, onTap)
         ) {
             val closes = data.closes.win(viewport)
             if (closes.size < 2) return@Canvas
+            val candlesW = ohlc?.win(viewport)
             val sma20 = data.sma20.win(viewport)
             val sma50 = data.sma50.win(viewport)
             val vals = ArrayList<Double>(closes.size * 3)
             vals.addAll(closes)
             sma20.forEach { if (it != null) vals.add(it) }
             sma50.forEach { if (it != null) vals.add(it) }
-            val pane = Pane(vals.min(), vals.max(), size.width, size.height - AXIS_H, 8f, closes.size)
-            strokeSeries(pricePoints(closes, pane), priceLineColor, 3f)
+            vals.includeOhlcRange(candlesW, style)
+            val minV = vals.min()
+            val maxV = vals.max()
+            val pane = Pane(minV, maxV, size.width, size.height - AXIS_H, 8f, closes.size)
+            drawPriceGrid(textMeasurer, pane, minV, maxV)
+            drawPriceSeries(closes, candlesW, style, pane)
             strokeSeries(seriesPoints(sma20, pane), AurumColors.gold, 2.5f)
             strokeSeries(seriesPoints(sma50, pane), AurumColors.info, 2.5f)
             drawTimeAxis(textMeasurer, timestamps.win(viewport))
+            scrubAt(viewport, closes.size, size.width)?.let { sc ->
+                val lines = priceScrubLines(sc.idx, closes, candlesW, style).toMutableList()
+                sma20.getOrNull(sc.idx)?.let { lines += "SMA 20 ${Fmt.money(it)}" to AurumColors.gold }
+                sma50.getOrNull(sc.idx)?.let { lines += "SMA 50 ${Fmt.money(it)}" to AurumColors.info }
+                drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+            }
         }
         LegendRow(
             entries = listOf(
@@ -352,11 +620,12 @@ fun RsiDiagram(
     data: RsiData,
     timestamps: List<Long>,
     viewport: DiagramViewport,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onTap: (() -> Unit)? = null
 ) {
     val textMeasurer = rememberTextMeasurer()
     Canvas(
-        modifier = modifier.fillMaxWidth().height(186.dp).diagramGestures(viewport)
+        modifier = modifier.fillMaxWidth().height(186.dp).diagramGestures(viewport, onTap)
     ) {
         val rsi = data.rsi.win(viewport)
         if (rsi.size < 2) return@Canvas
@@ -397,6 +666,12 @@ fun RsiDiagram(
             }
         }
         drawTimeAxis(textMeasurer, timestamps.win(viewport))
+        scrubAt(viewport, rsi.size, size.width)?.let { sc ->
+            val lines = buildList {
+                rsi.getOrNull(sc.idx)?.let { add("RSI ${it.roundToInt()}" to AurumColors.gold) }
+            }
+            drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+        }
     }
 }
 
@@ -406,12 +681,13 @@ fun MacdDiagram(
     data: MacdData,
     timestamps: List<Long>,
     viewport: DiagramViewport,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onTap: (() -> Unit)? = null
 ) {
     val textMeasurer = rememberTextMeasurer()
     Column(modifier = modifier) {
         Canvas(
-            modifier = Modifier.fillMaxWidth().height(158.dp).diagramGestures(viewport)
+            modifier = Modifier.fillMaxWidth().height(158.dp).diagramGestures(viewport, onTap)
         ) {
             val macd = data.macd.win(viewport)
             val signal = data.signal.win(viewport)
@@ -449,6 +725,16 @@ fun MacdDiagram(
             strokeSeries(seriesPoints(macd, pane), AurumColors.gold, 2.5f)
             strokeSeries(seriesPoints(signal, pane), AurumColors.info, 2.5f)
             drawTimeAxis(textMeasurer, timestamps.win(viewport))
+            scrubAt(viewport, n, size.width)?.let { sc ->
+                val lines = buildList {
+                    macd.getOrNull(sc.idx)?.let { add("MACD ${sig(it)}" to AurumColors.gold) }
+                    signal.getOrNull(sc.idx)?.let { add("Signal ${sig(it)}" to AurumColors.info) }
+                    histogram.getOrNull(sc.idx)?.let {
+                        add("Hist ${sig(it)}" to if (it >= 0) AurumColors.gain else AurumColors.loss)
+                    }
+                }
+                drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+            }
         }
         LegendRow(
             entries = listOf(
@@ -461,20 +747,24 @@ fun MacdDiagram(
     }
 }
 
-/** Flat blue band between the outer bands, dashed middle line, price line on top. */
+/** Flat blue band between the outer bands, dashed middle line, price on top. */
 @Composable
 fun BollingerDiagram(
     data: BollingerData,
     timestamps: List<Long>,
     viewport: DiagramViewport,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    ohlc: List<Candle>? = null,
+    style: PriceStyle = PriceStyle.LINE,
+    onTap: (() -> Unit)? = null
 ) {
     val textMeasurer = rememberTextMeasurer()
     Canvas(
-        modifier = modifier.fillMaxWidth().height(186.dp).diagramGestures(viewport)
+        modifier = modifier.fillMaxWidth().height(186.dp).diagramGestures(viewport, onTap)
     ) {
         val closes = data.closes.win(viewport)
         if (closes.size < 2) return@Canvas
+        val candlesW = ohlc?.win(viewport)
         val upper = data.upper.win(viewport)
         val lower = data.lower.win(viewport)
         val middle = data.middle.win(viewport)
@@ -483,7 +773,11 @@ fun BollingerDiagram(
         upper.forEach { if (it != null) vals.add(it) }
         lower.forEach { if (it != null) vals.add(it) }
         middle.forEach { if (it != null) vals.add(it) }
-        val pane = Pane(vals.min(), vals.max(), size.width, size.height - AXIS_H, 8f, closes.size)
+        vals.includeOhlcRange(candlesW, style)
+        val minV = vals.min()
+        val maxV = vals.max()
+        val pane = Pane(minV, maxV, size.width, size.height - AXIS_H, 8f, closes.size)
+        drawPriceGrid(textMeasurer, pane, minV, maxV)
 
         val upperPts = seriesPoints(upper, pane)
         val lowerPts = seriesPoints(lower, pane)
@@ -502,29 +796,40 @@ fun BollingerDiagram(
             strokeSeries(lowerPts, edge, 1.5f)
         }
         dashedSeries(seriesPoints(middle, pane), AurumColors.textDim.copy(alpha = 0.7f))
-        strokeSeries(pricePoints(closes, pane), priceLineColor, 3f)
+        drawPriceSeries(closes, candlesW, style, pane)
         drawTimeAxis(textMeasurer, timestamps.win(viewport))
+        scrubAt(viewport, closes.size, size.width)?.let { sc ->
+            val lines = priceScrubLines(sc.idx, closes, candlesW, style).toMutableList()
+            upper.getOrNull(sc.idx)?.let { lines += "Upper ${Fmt.money(it)}" to AurumColors.info }
+            lower.getOrNull(sc.idx)?.let { lines += "Lower ${Fmt.money(it)}" to AurumColors.info }
+            drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+        }
     }
 }
 
-/** Price line with dashed support (gain) and resistance (loss) levels, prices at the right edge. */
+/** Price with dashed support (gain) and resistance (loss) levels, prices at the right edge. */
 @Composable
 fun SupportResistanceDiagram(
     data: SupportResistanceData,
     timestamps: List<Long>,
     viewport: DiagramViewport,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    ohlc: List<Candle>? = null,
+    style: PriceStyle = PriceStyle.LINE,
+    onTap: (() -> Unit)? = null
 ) {
     val textMeasurer = rememberTextMeasurer()
     Canvas(
-        modifier = modifier.fillMaxWidth().height(186.dp).diagramGestures(viewport)
+        modifier = modifier.fillMaxWidth().height(186.dp).diagramGestures(viewport, onTap)
     ) {
         val closes = data.closes.win(viewport)
         if (closes.size < 2) return@Canvas
+        val candlesW = ohlc?.win(viewport)
         val vals = ArrayList<Double>(closes.size + 6)
         vals.addAll(closes)
         vals.addAll(data.supports)
         vals.addAll(data.resistances)
+        vals.includeOhlcRange(candlesW, style)
         val pane = Pane(vals.min(), vals.max(), size.width, size.height - AXIS_H, 12f, closes.size)
 
         val levels =
@@ -532,14 +837,14 @@ fun SupportResistanceDiagram(
                 data.resistances.map { it to AurumColors.loss }
 
         val measured = levels.map { (level, color) ->
-            val style = chartLabelStyle(color)
-            val m = textMeasurer.measure(AnnotatedString(Fmt.money(level)), style)
+            val labelStyle = chartLabelStyle(color)
+            val m = textMeasurer.measure(AnnotatedString(Fmt.money(level)), labelStyle)
             val y = pane.y(level)
             dashedLevel(y, color.copy(alpha = 0.8f), endX = size.width - m.size.width - 8f)
             Triple(level, color, m)
         }
 
-        strokeSeries(pricePoints(closes, pane), priceLineColor, 3f)
+        drawPriceSeries(closes, candlesW, style, pane)
 
         measured.forEach { (level, color, m) ->
             val y = (pane.y(level) - m.size.height / 2f)
@@ -551,24 +856,34 @@ fun SupportResistanceDiagram(
             )
         }
         drawTimeAxis(textMeasurer, timestamps.win(viewport))
+        scrubAt(viewport, closes.size, size.width)?.let { sc ->
+            drawCrosshair(
+                textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx),
+                priceScrubLines(sc.idx, closes, candlesW, style)
+            )
+        }
     }
 }
 
-/** Price line with unfilled fair-value-gap zones as flat tinted bands (filled ones faded). */
+/** Price with unfilled fair-value-gap zones as flat tinted bands (filled ones faded). */
 @Composable
 fun FvgDiagram(
     data: FvgData,
     timestamps: List<Long>,
     viewport: DiagramViewport,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    ohlc: List<Candle>? = null,
+    style: PriceStyle = PriceStyle.LINE,
+    onTap: (() -> Unit)? = null
 ) {
     val textMeasurer = rememberTextMeasurer()
     Column(modifier = modifier) {
         Canvas(
-            modifier = Modifier.fillMaxWidth().height(158.dp).diagramGestures(viewport)
+            modifier = Modifier.fillMaxWidth().height(170.dp).diagramGestures(viewport, onTap)
         ) {
             val closes = data.closes.win(viewport)
             if (closes.size < 2) return@Canvas
+            val candlesW = ohlc?.win(viewport)
             val startIdx = viewport.start
             val endIdx = startIdx + closes.size
             val visibleZones = data.zones.filter { it.startIndex < endIdx }
@@ -576,7 +891,11 @@ fun FvgDiagram(
             val vals = ArrayList<Double>(closes.size + visibleZones.size * 2)
             vals.addAll(closes)
             visibleZones.forEach { vals.add(it.low); vals.add(it.high) }
-            val pane = Pane(vals.min(), vals.max(), size.width, size.height - AXIS_H, 8f, closes.size)
+            vals.includeOhlcRange(candlesW, style)
+            val minV = vals.min()
+            val maxV = vals.max()
+            val pane = Pane(minV, maxV, size.width, size.height - AXIS_H, 8f, closes.size)
+            drawPriceGrid(textMeasurer, pane, minV, maxV)
 
             visibleZones.forEach { zone ->
                 val x0 = pane.x((zone.startIndex - startIdx).coerceAtLeast(0))
@@ -591,8 +910,14 @@ fun FvgDiagram(
                 )
             }
 
-            strokeSeries(pricePoints(closes, pane), priceLineColor, 3f)
+            drawPriceSeries(closes, candlesW, style, pane)
             drawTimeAxis(textMeasurer, timestamps.win(viewport))
+            scrubAt(viewport, closes.size, size.width)?.let { sc ->
+                drawCrosshair(
+                    textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx),
+                    priceScrubLines(sc.idx, closes, candlesW, style)
+                )
+            }
         }
         LegendRow(
             entries = listOf(
@@ -605,31 +930,36 @@ fun FvgDiagram(
     }
 }
 
-/** Price line with dashed Fibonacci retracement levels labeled at the right edge. */
+/** Price with dashed Fibonacci retracement levels labeled at the right edge. */
 @Composable
 fun FibonacciDiagram(
     data: FibonacciData,
     timestamps: List<Long>,
     viewport: DiagramViewport,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    ohlc: List<Candle>? = null,
+    style: PriceStyle = PriceStyle.LINE,
+    onTap: (() -> Unit)? = null
 ) {
     val textMeasurer = rememberTextMeasurer()
     Canvas(
-        modifier = modifier.fillMaxWidth().height(196.dp).diagramGestures(viewport)
+        modifier = modifier.fillMaxWidth().height(196.dp).diagramGestures(viewport, onTap)
     ) {
         val closes = data.closes.win(viewport)
         if (closes.size < 2) return@Canvas
+        val candlesW = ohlc?.win(viewport)
         val vals = ArrayList<Double>(closes.size + data.levels.size)
         vals.addAll(closes)
         data.levels.forEach { vals.add(it.second) }
+        vals.includeOhlcRange(candlesW, style)
         val pane = Pane(vals.min(), vals.max(), size.width, size.height - AXIS_H, 12f, closes.size)
 
         data.levels.forEach { (name, level) ->
             val isEdge = name == "0.0" || name == "1.0"
             val color = if (isEdge) AurumColors.textDim else AurumColors.gold
-            val style = chartLabelStyle(color)
+            val labelStyle = chartLabelStyle(color)
             val label = "$name  ${Fmt.money(level)}"
-            val m = textMeasurer.measure(AnnotatedString(label), style)
+            val m = textMeasurer.measure(AnnotatedString(label), labelStyle)
             val y = pane.y(level)
             dashedLevel(y, color.copy(alpha = if (isEdge) 0.5f else 0.75f), endX = size.width - m.size.width - 8f)
             drawText(
@@ -638,12 +968,18 @@ fun FibonacciDiagram(
                     size.width - m.size.width - 2f,
                     (y - m.size.height / 2f).coerceIn(0f, size.height - AXIS_H - m.size.height)
                 ),
-                style = style
+                style = labelStyle
             )
         }
 
-        strokeSeries(pricePoints(closes, pane), priceLineColor, 3f)
+        drawPriceSeries(closes, candlesW, style, pane)
         drawTimeAxis(textMeasurer, timestamps.win(viewport))
+        scrubAt(viewport, closes.size, size.width)?.let { sc ->
+            drawCrosshair(
+                textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx),
+                priceScrubLines(sc.idx, closes, candlesW, style)
+            )
+        }
     }
 }
 
@@ -653,15 +989,19 @@ fun IchimokuDiagram(
     data: IchimokuData,
     timestamps: List<Long>,
     viewport: DiagramViewport,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    ohlc: List<Candle>? = null,
+    style: PriceStyle = PriceStyle.LINE,
+    onTap: (() -> Unit)? = null
 ) {
     val textMeasurer = rememberTextMeasurer()
     Column(modifier = modifier) {
         Canvas(
-            modifier = Modifier.fillMaxWidth().height(158.dp).diagramGestures(viewport)
+            modifier = Modifier.fillMaxWidth().height(170.dp).diagramGestures(viewport, onTap)
         ) {
             val closes = data.closes.win(viewport)
             if (closes.size < 2) return@Canvas
+            val candlesW = ohlc?.win(viewport)
             val tenkan = data.tenkan.win(viewport)
             val kijun = data.kijun.win(viewport)
             val senkouA = data.senkouA.win(viewport)
@@ -672,7 +1012,11 @@ fun IchimokuDiagram(
             listOf(tenkan, kijun, senkouA, senkouB).forEach { s ->
                 s.forEach { if (it != null) vals.add(it) }
             }
-            val pane = Pane(vals.min(), vals.max(), size.width, size.height - AXIS_H, 8f, closes.size)
+            vals.includeOhlcRange(candlesW, style)
+            val minV = vals.min()
+            val maxV = vals.max()
+            val pane = Pane(minV, maxV, size.width, size.height - AXIS_H, 8f, closes.size)
+            drawPriceGrid(textMeasurer, pane, minV, maxV)
 
             // cloud where both spans exist
             val aPts = ArrayList<Offset>()
@@ -698,8 +1042,14 @@ fun IchimokuDiagram(
 
             strokeSeries(seriesPoints(tenkan, pane), AurumColors.gold, 2f)
             strokeSeries(seriesPoints(kijun, pane), AurumColors.info, 2f)
-            strokeSeries(pricePoints(closes, pane), priceLineColor, 3f)
+            drawPriceSeries(closes, candlesW, style, pane)
             drawTimeAxis(textMeasurer, timestamps.win(viewport))
+            scrubAt(viewport, closes.size, size.width)?.let { sc ->
+                val lines = priceScrubLines(sc.idx, closes, candlesW, style).toMutableList()
+                tenkan.getOrNull(sc.idx)?.let { lines += "Tenkan ${Fmt.money(it)}" to AurumColors.gold }
+                kijun.getOrNull(sc.idx)?.let { lines += "Kijun ${Fmt.money(it)}" to AurumColors.info }
+                drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+            }
         }
         LegendRow(
             entries = listOf(
@@ -719,12 +1069,13 @@ fun StochasticDiagram(
     data: StochasticData,
     timestamps: List<Long>,
     viewport: DiagramViewport,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onTap: (() -> Unit)? = null
 ) {
     val textMeasurer = rememberTextMeasurer()
     Column(modifier = modifier) {
         Canvas(
-            modifier = Modifier.fillMaxWidth().height(158.dp).diagramGestures(viewport)
+            modifier = Modifier.fillMaxWidth().height(158.dp).diagramGestures(viewport, onTap)
         ) {
             val k = data.k.win(viewport)
             val d = data.d.win(viewport)
@@ -750,6 +1101,13 @@ fun StochasticDiagram(
             strokeSeries(seriesPoints(k, pane), AurumColors.gold, 2.5f)
             strokeSeries(seriesPoints(d, pane), AurumColors.info, 2f)
             drawTimeAxis(textMeasurer, timestamps.win(viewport))
+            scrubAt(viewport, k.size, size.width)?.let { sc ->
+                val lines = buildList {
+                    k.getOrNull(sc.idx)?.let { add("%K ${it.roundToInt()}" to AurumColors.gold) }
+                    d.getOrNull(sc.idx)?.let { add("%D ${it.roundToInt()}" to AurumColors.info) }
+                }
+                drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+            }
         }
         LegendRow(
             entries = listOf(
@@ -768,12 +1126,13 @@ fun ObvDiagram(
     closes: List<Double>,
     timestamps: List<Long>,
     viewport: DiagramViewport,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onTap: (() -> Unit)? = null
 ) {
     val textMeasurer = rememberTextMeasurer()
     Column(modifier = modifier) {
         Canvas(
-            modifier = Modifier.fillMaxWidth().height(158.dp).diagramGestures(viewport)
+            modifier = Modifier.fillMaxWidth().height(158.dp).diagramGestures(viewport, onTap)
         ) {
             val obv = data.obv.win(viewport)
             val px = closes.win(viewport)
@@ -791,6 +1150,13 @@ fun ObvDiagram(
             strokeSeries(pricePoints(norm(px), pane), priceLineColor.copy(alpha = 0.55f), 2f)
             strokeSeries(pricePoints(norm(obv), pane), AurumColors.gold, 2.5f)
             drawTimeAxis(textMeasurer, timestamps.win(viewport))
+            scrubAt(viewport, obv.size, size.width)?.let { sc ->
+                val lines = buildList {
+                    obv.getOrNull(sc.idx)?.let { add("OBV ${Fmt.compact(it)}" to AurumColors.gold) }
+                    px.getOrNull(sc.idx)?.let { add("Close ${Fmt.money(it)}" to priceLineColor) }
+                }
+                drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+            }
         }
         LegendRow(
             entries = listOf(
@@ -808,12 +1174,13 @@ fun AdxDiagram(
     data: AdxData,
     timestamps: List<Long>,
     viewport: DiagramViewport,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onTap: (() -> Unit)? = null
 ) {
     val textMeasurer = rememberTextMeasurer()
     Column(modifier = modifier) {
         Canvas(
-            modifier = Modifier.fillMaxWidth().height(158.dp).diagramGestures(viewport)
+            modifier = Modifier.fillMaxWidth().height(158.dp).diagramGestures(viewport, onTap)
         ) {
             val adx = data.adx.win(viewport)
             val plus = data.plusDi.win(viewport)
@@ -835,6 +1202,14 @@ fun AdxDiagram(
             strokeSeries(seriesPoints(minus, pane), AurumColors.loss, 2f)
             strokeSeries(seriesPoints(adx, pane), AurumColors.gold, 2.5f)
             drawTimeAxis(textMeasurer, timestamps.win(viewport))
+            scrubAt(viewport, adx.size, size.width)?.let { sc ->
+                val lines = buildList {
+                    adx.getOrNull(sc.idx)?.let { add("ADX ${it.roundToInt()}" to AurumColors.gold) }
+                    plus.getOrNull(sc.idx)?.let { add("+DI ${it.roundToInt()}" to AurumColors.gain) }
+                    minus.getOrNull(sc.idx)?.let { add("-DI ${it.roundToInt()}" to AurumColors.loss) }
+                }
+                drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+            }
         }
         LegendRow(
             entries = listOf(
@@ -846,3 +1221,10 @@ fun AdxDiagram(
         )
     }
 }
+
+// ---------- private formatting ----------
+
+/** Adaptive precision for small MACD magnitudes. */
+private fun sig(v: Double): String =
+    if (abs(v) < 0.05) String.format(java.util.Locale.US, "%.3f", v)
+    else String.format(java.util.Locale.US, "%.2f", v)

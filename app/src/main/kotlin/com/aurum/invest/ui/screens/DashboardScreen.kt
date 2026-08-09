@@ -20,17 +20,23 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -59,6 +65,37 @@ fun DashboardScreen(
 ) {
     val vm: DashboardViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
+    var confirmRemove by remember { mutableStateOf<String?>(null) }
+
+    confirmRemove?.let { sym ->
+        AlertDialog(
+            onDismissRequest = { confirmRemove = null },
+            containerColor = AurumColors.surface,
+            titleContentColor = AurumColors.text,
+            textContentColor = AurumColors.textDim,
+            title = { Text("Remove $sym?") },
+            text = {
+                Text(
+                    "This deletes every $sym trade record from Aurum's ledger — handy for " +
+                        "clearing a test position. Your other holdings are untouched, and " +
+                        "nothing happens at your real broker."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.removeHolding(sym)
+                    confirmRemove = null
+                }) {
+                    Text("Remove", color = AurumColors.loss)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRemove = null }) {
+                    Text("Cancel", color = AurumColors.textDim)
+                }
+            }
+        )
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(AurumColors.bg)) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -122,7 +159,11 @@ fun DashboardScreen(
                     }
                 } else {
                     items(state.holdings, key = { it.view.position.symbol }) { row ->
-                        HoldingCard(row = row, onClick = { onOpenDetail(row.view.position.symbol) })
+                        HoldingCard(
+                            row = row,
+                            onClick = { onOpenDetail(row.view.position.symbol) },
+                            onRemove = { confirmRemove = row.view.position.symbol }
+                        )
                         Spacer(Modifier.height(14.dp))
                     }
                 }
@@ -242,7 +283,7 @@ private fun SummaryTiles(summary: PortfolioSummary?) {
 }
 
 @Composable
-private fun HoldingCard(row: HoldingRow, onClick: () -> Unit) {
+private fun HoldingCard(row: HoldingRow, onClick: () -> Unit, onRemove: () -> Unit) {
     val view = row.view
     val position = view.position
     val quote = view.quote
@@ -299,6 +340,15 @@ private fun HoldingCard(row: HoldingRow, onClick: () -> Unit) {
             DeltaPct(value = view.unrealizedPlPct, style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.weight(1f))
             row.advice?.let { ActionBadge(action = it.action) }
+            Spacer(Modifier.width(6.dp))
+            IconButton(onClick = onRemove, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    Icons.Rounded.Close,
+                    contentDescription = "Remove ${position.symbol} from portfolio",
+                    tint = AurumColors.textDim,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
     }
 }
