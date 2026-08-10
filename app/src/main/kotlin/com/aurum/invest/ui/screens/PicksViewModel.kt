@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.model.DailyPick
+import com.aurum.invest.data.model.EntryPick
 import com.aurum.invest.data.model.Quote
 import com.aurum.invest.data.model.WeeklyPick
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,7 +34,11 @@ data class PicksState(
     val dailyLabel: String = "",
     val dailyLoading: Boolean = true,
     val dailyRefreshing: Boolean = false,
-    val saturday: Boolean = false
+    val saturday: Boolean = false,
+    // Best entries — market-wide scan for stocks at a good entry price now.
+    val entryRows: List<EntryPick> = emptyList(),
+    val entryLoading: Boolean = true,
+    val entryRefreshing: Boolean = false
 )
 
 class PicksViewModel(app: Application) : AndroidViewModel(app) {
@@ -121,6 +126,24 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
             if (!Dates.isSaturday()) {
                 val daily = picks.ensureDaily()
                 _state.update { it.copy(dailyRows = daily, dailyLoading = false) }
+            }
+        }
+        viewModelScope.launch {
+            val entries = picks.ensureEntries()
+            _state.update { it.copy(entryRows = entries, entryLoading = false) }
+        }
+    }
+
+    /** Re-run the market-wide best-entry scan from fresh screener + candle data. */
+    fun refreshEntries() {
+        if (_state.value.entryRefreshing) return
+        viewModelScope.launch {
+            _state.update { it.copy(entryRefreshing = true) }
+            try {
+                val entries = picks.recomputeEntries()
+                _state.update { it.copy(entryRows = entries, entryLoading = false) }
+            } finally {
+                _state.update { it.copy(entryRefreshing = false) }
             }
         }
     }

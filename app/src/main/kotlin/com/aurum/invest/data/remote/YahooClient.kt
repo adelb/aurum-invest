@@ -3,6 +3,7 @@ package com.aurum.invest.data.remote
 import com.aurum.invest.data.model.Candle
 import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.Quote
+import com.aurum.invest.data.model.ScreenerQuote
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -160,6 +161,71 @@ class YahooClient {
             null
         }
     }
+
+    /**
+     * v1 predefined screener API — one of Yahoo's market-wide saved screens
+     * (most_actives, day_gainers, undervalued_large_caps, ...). US equities
+     * priced in USD only; entries missing a price are skipped.
+     */
+    suspend fun fetchScreener(scrId: String, count: Int = 100): List<ScreenerQuote> =
+        withContext(Dispatchers.IO) {
+            try {
+                val url = "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved"
+                    .toHttpUrl()
+                    .newBuilder()
+                    .addQueryParameter("scrIds", scrId)
+                    .addQueryParameter("count", count.toString())
+                    .build()
+                    .toString()
+                val root = getJson(url) ?: return@withContext emptyList()
+                val quotes = root.optJSONObject("finance")
+                    ?.optJSONArray("result")
+                    ?.optJSONObject(0)
+                    ?.optJSONArray("quotes")
+                    ?: return@withContext emptyList()
+                val out = ArrayList<ScreenerQuote>(quotes.length())
+                for (i in 0 until quotes.length()) {
+                    val q = quotes.optJSONObject(i) ?: continue
+                    if (!q.optString("quoteType").equals("EQUITY", ignoreCase = true)) continue
+                    if (!q.optString("currency", "USD").equals("USD", ignoreCase = true)) continue
+                    if (!q.optString("market", "us_market")
+                            .equals("us_market", ignoreCase = true)
+                    ) continue
+                    val symbol = q.optString("symbol", "")
+                    if (symbol.isEmpty()) continue
+                    val price = q.optDouble("regularMarketPrice", Double.NaN)
+                    if (price.isNaN() || price <= 0.0) continue
+                    // "1.7 - Buy" -> 1.7; absent or malformed -> null.
+                    val rating = q.optString("averageAnalystRating", "")
+                        .substringBefore(" ").trim().toDoubleOrNull()
+                    out.add(
+                        ScreenerQuote(
+                            symbol = symbol,
+                            name = q.optString(
+                                "displayName",
+                                q.optString("shortName", q.optString("longName", ""))
+                            ),
+                            price = price,
+                            dayChangePct = q.optDouble("regularMarketChangePercent", 0.0)
+                                .takeIf { !it.isNaN() } ?: 0.0,
+                            avgVolume3M = q.optLong("averageDailyVolume3Month", 0L),
+                            marketCap = q.optDouble("marketCap", 0.0)
+                                .takeIf { !it.isNaN() } ?: 0.0,
+                            fiftyDayAvg = q.optDouble("fiftyDayAverage", 0.0)
+                                .takeIf { !it.isNaN() } ?: 0.0,
+                            twoHundredDayAvg = q.optDouble("twoHundredDayAverage", 0.0)
+                                .takeIf { !it.isNaN() } ?: 0.0,
+                            fiftyTwoWeekHigh = q.optDouble("fiftyTwoWeekHigh", 0.0)
+                                .takeIf { !it.isNaN() } ?: 0.0,
+                            analystRating = rating
+                        )
+                    )
+                }
+                out
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
 
     /** v1 search API — (symbol, shortname) pairs, US equities only, max 8. */
     suspend fun searchSymbols(query: String): List<Pair<String, String>> =

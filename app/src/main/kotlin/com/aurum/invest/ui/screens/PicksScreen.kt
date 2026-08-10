@@ -38,6 +38,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.DailyPick
+import com.aurum.invest.data.model.EntryPick
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.EmptyState
@@ -46,11 +47,12 @@ import com.aurum.invest.ui.components.ScoreBar
 import com.aurum.invest.ui.components.SectionHeader
 import com.aurum.invest.ui.components.SegmentedToggle
 import com.aurum.invest.ui.components.SentimentDot
+import com.aurum.invest.ui.components.StatTile
 import com.aurum.invest.ui.theme.AurumColors
 import java.util.Locale
 import kotlin.math.roundToInt
 
-private enum class PicksTab { DAILY, WEEKLY }
+private enum class PicksTab { DAILY, ENTRIES, WEEKLY }
 
 @Composable
 fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit) {
@@ -71,17 +73,29 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = if (tab == PicksTab.DAILY) "Daily Picks" else "Weekly Picks",
+                    text = when (tab) {
+                        PicksTab.DAILY -> "Daily Picks"
+                        PicksTab.ENTRIES -> "Best Entries"
+                        PicksTab.WEEKLY -> "Weekly Picks"
+                    },
                     style = MaterialTheme.typography.headlineMedium,
                     color = AurumColors.text
                 )
                 Text(
-                    text = if (tab == PicksTab.DAILY) state.dailyLabel else state.weekLabel,
+                    text = when (tab) {
+                        PicksTab.DAILY -> state.dailyLabel
+                        PicksTab.ENTRIES -> "Market-wide entry-price scan"
+                        PicksTab.WEEKLY -> state.weekLabel
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = AurumColors.textDim
                 )
             }
-            val busy = if (tab == PicksTab.DAILY) state.dailyRefreshing else state.refreshing
+            val busy = when (tab) {
+                PicksTab.DAILY -> state.dailyRefreshing
+                PicksTab.ENTRIES -> state.entryRefreshing
+                PicksTab.WEEKLY -> state.refreshing
+            }
             if (busy) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(22.dp),
@@ -90,7 +104,13 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 )
             } else {
                 IconButton(
-                    onClick = { if (tab == PicksTab.DAILY) vm.refreshDaily() else vm.refresh() }
+                    onClick = {
+                        when (tab) {
+                            PicksTab.DAILY -> vm.refreshDaily()
+                            PicksTab.ENTRIES -> vm.refreshEntries()
+                            PicksTab.WEEKLY -> vm.refresh()
+                        }
+                    }
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Refresh,
@@ -102,9 +122,19 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
         }
 
         SegmentedToggle(
-            options = listOf("Today", "Weekly"),
-            selected = if (tab == PicksTab.DAILY) 0 else 1,
-            onSelect = { tab = if (it == 0) PicksTab.DAILY else PicksTab.WEEKLY },
+            options = listOf("Today", "Entries", "Weekly"),
+            selected = when (tab) {
+                PicksTab.DAILY -> 0
+                PicksTab.ENTRIES -> 1
+                PicksTab.WEEKLY -> 2
+            },
+            onSelect = {
+                tab = when (it) {
+                    0 -> PicksTab.DAILY
+                    1 -> PicksTab.ENTRIES
+                    else -> PicksTab.WEEKLY
+                }
+            },
             modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp)
         )
 
@@ -113,10 +143,10 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            if (tab == PicksTab.DAILY) {
-                dailyItems(state, onOpenDetail, onOpenAnalysis)
-            } else {
-                weeklyItems(state, onOpenDetail, onOpenAnalysis)
+            when (tab) {
+                PicksTab.DAILY -> dailyItems(state, onOpenDetail, onOpenAnalysis)
+                PicksTab.ENTRIES -> entryItems(state, onOpenDetail, onOpenAnalysis)
+                PicksTab.WEEKLY -> weeklyItems(state, onOpenDetail, onOpenAnalysis)
             }
         }
     }
@@ -181,6 +211,205 @@ private fun androidx.compose.foundation.lazy.LazyListScope.dailyItems(
                 Text(
                     text = "Recomputed each day except Saturday. Potential ranges come from " +
                         "volatility (ATR) plus live catalysts — decision support, not financial advice.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- entries tab
+
+private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
+    state: PicksState,
+    onOpenDetail: (String) -> Unit,
+    onOpenAnalysis: (String) -> Unit
+) {
+    when {
+        state.entryRows.isEmpty() && (state.entryLoading || state.entryRefreshing) -> item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 56.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = AurumColors.gold)
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "Sweeping the whole market for entry setups…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
+        }
+        state.entryRows.isEmpty() -> item {
+            EmptyState(
+                title = "No entry setups found",
+                message = "The market-wide scan found no stock at a compelling entry right now. " +
+                    "Tap refresh to sweep again."
+            )
+        }
+        else -> {
+            item {
+                Text(
+                    text = "The 10 best entry prices on the market right now: hundreds of names " +
+                        "from Yahoo's market-wide screens, kept only when the long trend is " +
+                        "intact, the price has pulled back toward support, and the 15-technique " +
+                        "board does not read the dip as a falling knife.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+            }
+            items(state.entryRows, key = { "e-${it.symbol}" }) { pick ->
+                EntryPickCard(
+                    pick = pick,
+                    onOpen = { onOpenDetail(pick.symbol) },
+                    onAnalyze = { onOpenAnalysis(pick.symbol) }
+                )
+            }
+            item {
+                Text(
+                    text = "Rescanned on demand from live screener and price data. Entry, target, " +
+                        "and stop derive from support/resistance and volatility (ATR) — decision " +
+                        "support, not financial advice.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EntryPickCard(pick: EntryPick, onOpen: () -> Unit, onAnalyze: () -> Unit) {
+    AurumCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(),
+        onClick = onOpen
+    ) {
+        Row(verticalAlignment = Alignment.Top) {
+            Text(
+                text = pick.rank.toString().padStart(2, '0'),
+                style = MaterialTheme.typography.headlineMedium,
+                color = AurumColors.gold
+            )
+            Spacer(modifier = Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        text = pick.symbol,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AurumColors.text
+                    )
+                    if (pick.name.isNotBlank()) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = pick.name,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AurumColors.textDim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PillTag(
+                        text = String.format(Locale.US, "RR %.1f", pick.rewardRisk),
+                        color = AurumColors.gold
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    if (pick.techDirection == "BULLISH" && pick.techTotal > 0) {
+                        PillTag(
+                            text = "${pick.techBullish}/${pick.techTotal} bullish",
+                            color = AurumColors.gain
+                        )
+                    }
+                    val rating = pick.analystRating
+                    if (rating != null && rating <= 2.5) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        PillTag(text = "Buy-rated", color = AurumColors.info)
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ScoreBar(score = pick.score, modifier = Modifier.weight(1f))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = pick.score.roundToInt().toString(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = AurumColors.gold
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    StatTile(
+                        label = if (pick.entryLimit >= pick.price) "Enter at" else "Limit at",
+                        value = Fmt.money(if (pick.entryLimit >= pick.price) pick.price else pick.entryLimit),
+                        modifier = Modifier.weight(1f)
+                    )
+                    StatTile(
+                        label = "Target",
+                        value = Fmt.money(pick.target),
+                        modifier = Modifier.weight(1f),
+                        valueColor = AurumColors.gain
+                    )
+                    StatTile(
+                        label = "Stop",
+                        value = Fmt.money(pick.stop),
+                        modifier = Modifier.weight(1f),
+                        valueColor = AurumColors.loss
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = String.format(
+                        Locale.US,
+                        "+%.1f%% to target · %.1f%% risk to the stop",
+                        pick.upsidePct, pick.riskPct
+                    ),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = AurumColors.gain
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = pick.reason,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.clickable { onAnalyze() }
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.QueryStats,
+                        contentDescription = null,
+                        tint = AurumColors.gold,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Full analysis & $3,000 plan",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = AurumColors.gold
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = Fmt.money(pick.price),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text
+                )
+                DeltaPct(value = pick.dayChangePct, style = MaterialTheme.typography.labelMedium)
+                Text(
+                    text = "last session",
                     style = MaterialTheme.typography.labelSmall,
                     color = AurumColors.textDim
                 )

@@ -137,6 +137,46 @@ data class DailyPick(
     val headlineSentiment: Int
 )
 
+/** One row from a Yahoo predefined screener — the market-wide candidate pool. */
+data class ScreenerQuote(
+    val symbol: String,
+    val name: String,
+    val price: Double,
+    val dayChangePct: Double,        // last regular-session move
+    val avgVolume3M: Long,
+    val marketCap: Double,
+    val fiftyDayAvg: Double,
+    val twoHundredDayAvg: Double,
+    val fiftyTwoWeekHigh: Double,
+    val analystRating: Double?       // 1.0 (Strong Buy) .. 5.0 (Sell); null when unrated
+)
+
+/** A stock the market-wide scan reads as sitting at a good entry price right now. */
+data class EntryPick(
+    val date: String,                // ISO local date the scan ran
+    val rank: Int,
+    val symbol: String,
+    val name: String,
+    val score: Double,               // 0..100
+    val price: Double,
+    val dayChangePct: Double,
+    val entryLimit: Double,          // patient limit near support (== price when already there)
+    val target: Double,              // nearest resistance / 20-day high
+    val stop: Double,                // ATR-padded under support
+    val upsidePct: Double,
+    val riskPct: Double,
+    val rewardRisk: Double,
+    val rsi: Double,
+    val dipPct: Double,              // off the 20-day high
+    val vs50DayPct: Double,          // price vs the 50-day average
+    val techDirection: String,
+    val techBullish: Int,
+    val techTotal: Int,
+    val techConfidence: Int,
+    val analystRating: Double?,      // 1..5 average analyst rating, null when unrated
+    val reason: String
+)
+
 /** A trade extracted from a bank notification. */
 data class ParsedTrade(
     val side: TradeSide,

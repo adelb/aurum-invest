@@ -1,6 +1,7 @@
 package com.aurum.invest.data.repo
 
 import com.aurum.invest.analytics.DailyPicker
+import com.aurum.invest.analytics.EntryPicker
 import com.aurum.invest.analytics.WeeklyPicker
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.db.CacheDao
@@ -8,6 +9,7 @@ import com.aurum.invest.data.db.CacheEntity
 import com.aurum.invest.data.db.PicksDao
 import com.aurum.invest.data.db.WeeklyPickEntity
 import com.aurum.invest.data.model.DailyPick
+import com.aurum.invest.data.model.EntryPick
 import com.aurum.invest.data.model.WeeklyPick
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -33,6 +35,46 @@ class PicksRepository(
 
         /** Daily picks live in the JSON cache, one entry per local date. */
         private const val DAILY_KEY_PREFIX = "dailypicks:"
+
+        /** Market-wide best-entry picks, one cached set per local date. */
+        private const val ENTRY_KEY_PREFIX = "entrypicks:"
+    }
+
+    // ---- best-entry picks (cache-backed, one set per calendar day) ----------------
+
+    private fun entryKey(): String = ENTRY_KEY_PREFIX + Dates.todayIso()
+
+    /** Today's stored entry picks (no computation). Empty on any failure. */
+    suspend fun getEntries(): List<EntryPick> = try {
+        cacheDao.get(entryKey())?.let { EntryPicker.fromJson(it.json) } ?: emptyList()
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    /** Today's entry picks, computing + storing them when none exist yet. */
+    suspend fun ensureEntries(): List<EntryPick> {
+        val existing = getEntries()
+        if (existing.isNotEmpty()) return existing
+        return recomputeEntries()
+    }
+
+    /** Re-runs the market-wide entry scan and replaces today's stored set. */
+    suspend fun recomputeEntries(): List<EntryPick> {
+        return try {
+            val picks = EntryPicker(market).computePicks(Dates.todayIso())
+            if (picks.isNotEmpty()) {
+                cacheDao.put(
+                    CacheEntity(
+                        key = entryKey(),
+                        json = EntryPicker.toJson(picks),
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+            }
+            picks
+        } catch (_: Exception) {
+            getEntries()
+        }
     }
 
     // ---- daily picks (cache-backed, one set per calendar day) ---------------------

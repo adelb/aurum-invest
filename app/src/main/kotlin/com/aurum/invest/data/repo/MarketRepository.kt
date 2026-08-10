@@ -5,6 +5,7 @@ import com.aurum.invest.data.db.CacheEntity
 import com.aurum.invest.data.model.Candle
 import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.Quote
+import com.aurum.invest.data.model.ScreenerQuote
 import com.aurum.invest.data.remote.YahooClient
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -105,6 +106,23 @@ class MarketRepository(
         return cached?.let { extendedFromJson(it.json) }
     }
 
+    /** One of Yahoo's market-wide predefined screens; cached briefly. */
+    suspend fun getScreener(scrId: String, maxAgeMs: Long = 1_200_000L): List<ScreenerQuote> {
+        val key = "screener:$scrId"
+        val now = System.currentTimeMillis()
+        val cached = readCache(key)
+        if (cached != null && now - cached.updatedAt <= maxAgeMs) {
+            val parsed = screenerFromJson(cached.json)
+            if (parsed.isNotEmpty()) return parsed
+        }
+        val fresh = yahoo.fetchScreener(scrId)
+        if (fresh.isNotEmpty()) {
+            writeCache(key, screenerToJson(fresh).toString())
+            return fresh
+        }
+        return cached?.let { screenerFromJson(it.json) } ?: emptyList()
+    }
+
     suspend fun search(query: String): List<Pair<String, String>> =
         try {
             yahoo.searchSymbols(query)
@@ -179,6 +197,53 @@ class MarketRepository(
             )
         } catch (_: Exception) {
             null
+        }
+
+    private fun screenerToJson(quotes: List<ScreenerQuote>): JSONArray {
+        val arr = JSONArray()
+        for (q in quotes) {
+            arr.put(
+                JSONObject().apply {
+                    put("symbol", q.symbol)
+                    put("name", q.name)
+                    put("price", q.price)
+                    put("dayChangePct", q.dayChangePct)
+                    put("avgVolume3M", q.avgVolume3M)
+                    put("marketCap", q.marketCap)
+                    put("fiftyDayAvg", q.fiftyDayAvg)
+                    put("twoHundredDayAvg", q.twoHundredDayAvg)
+                    put("fiftyTwoWeekHigh", q.fiftyTwoWeekHigh)
+                    if (q.analystRating != null) put("analystRating", q.analystRating)
+                }
+            )
+        }
+        return arr
+    }
+
+    private fun screenerFromJson(s: String): List<ScreenerQuote> =
+        try {
+            val arr = JSONArray(s)
+            val out = ArrayList<ScreenerQuote>(arr.length())
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                out.add(
+                    ScreenerQuote(
+                        symbol = o.getString("symbol"),
+                        name = o.optString("name", ""),
+                        price = o.getDouble("price"),
+                        dayChangePct = o.optDouble("dayChangePct", 0.0),
+                        avgVolume3M = o.optLong("avgVolume3M", 0L),
+                        marketCap = o.optDouble("marketCap", 0.0),
+                        fiftyDayAvg = o.optDouble("fiftyDayAvg", 0.0),
+                        twoHundredDayAvg = o.optDouble("twoHundredDayAvg", 0.0),
+                        fiftyTwoWeekHigh = o.optDouble("fiftyTwoWeekHigh", 0.0),
+                        analystRating = if (o.has("analystRating")) o.getDouble("analystRating") else null
+                    )
+                )
+            }
+            out
+        } catch (_: Exception) {
+            emptyList()
         }
 
     private fun candlesToJson(candles: List<Candle>): JSONArray {
