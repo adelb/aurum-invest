@@ -142,7 +142,9 @@ fun PositionDetailScreen(
             Column(modifier = Modifier.fillMaxWidth().weight(1f)) {
                 EmptyState(
                     title = "Couldn't load ${state.symbol.ifEmpty { symbol.uppercase() }}",
-                    message = "Check your connection and pull the refresh icon to try again."
+                    message = "Market data was unreachable. Check your connection and try again.",
+                    actionLabel = "Try again",
+                    onAction = vm::refresh
                 )
             }
         } else {
@@ -226,12 +228,12 @@ fun PositionDetailScreen(
                             Spacer(Modifier.padding(start = 12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "5-technique analysis",
+                                    text = "15-technique analysis",
                                     style = MaterialTheme.typography.titleSmall,
                                     color = AurumColors.text
                                 )
                                 Text(
-                                    text = "Moving averages, RSI, MACD, Bollinger, support & resistance · 5-day outlook",
+                                    text = "Moving averages, RSI, MACD, Ichimoku & 11 more · 5-day outlook · $3,000 plan",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = AurumColors.textDim
                                 )

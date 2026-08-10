@@ -259,7 +259,7 @@ fun AddTransactionScreen(prefillSymbol: String?, prefillSide: String?, onDone: (
             )
             Spacer(modifier = Modifier.weight(1f))
             Text(
-                text = "Total: " + Fmt.money(state.total),
+                text = Fmt.money(state.total),
                 style = MaterialTheme.typography.titleMedium,
                 color = if (state.total > 0.0) AurumColors.gold else AurumColors.textDim
             )

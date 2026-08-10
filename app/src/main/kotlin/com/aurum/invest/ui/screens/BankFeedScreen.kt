@@ -167,12 +167,10 @@ fun BankFeedScreen() {
 
             if (state.pending.isEmpty()) {
                 item(key = "pending-empty") {
-                    AurumCard(modifier = Modifier.fillMaxWidth()) {
-                        EmptyState(
-                            title = "No pending alerts",
-                            message = "New trade notifications from your bank will land here, parsed and ready to import."
-                        )
-                    }
+                    EmptyState(
+                        title = "No pending alerts",
+                        message = "New trade notifications from your bank will land here, parsed and ready to import."
+                    )
                 }
             } else {
                 items(

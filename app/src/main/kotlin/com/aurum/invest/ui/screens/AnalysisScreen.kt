@@ -33,6 +33,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -84,8 +85,8 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
     LaunchedEffect(symbol) { vm.start(symbol) }
     val state by vm.state.collectAsStateWithLifecycle()
 
-    var tab by remember { mutableStateOf(AnalysisTab.TECHNIQUES) }
-    var priceStyle by remember { mutableStateOf(PriceStyle.CANDLES) }
+    var tab by rememberSaveable { mutableStateOf(AnalysisTab.TECHNIQUES) }
+    var priceStyle by rememberSaveable { mutableStateOf(PriceStyle.CANDLES) }
     var sheetKey by remember { mutableStateOf<String?>(null) }
 
     Column(modifier = Modifier.fillMaxSize().background(AurumColors.bg)) {
@@ -203,7 +204,9 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
                             item {
                                 EmptyState(
                                     title = "Plan unavailable",
-                                    message = "A live price is needed to size the tranches. Pull to refresh once the market data loads."
+                                    message = "A live price is needed to size the tranches.",
+                                    actionLabel = "Reload data",
+                                    onAction = vm::refresh
                                 )
                             }
                         } else {

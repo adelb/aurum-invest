@@ -3,7 +3,6 @@ package com.aurum.invest.ui.screens
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,7 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.CircularProgressIndicator
@@ -33,7 +31,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -45,6 +42,7 @@ import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.DeltaMoney
 import com.aurum.invest.ui.components.EmptyState
 import com.aurum.invest.ui.components.PillTag
+import com.aurum.invest.ui.components.SegmentedToggle
 import com.aurum.invest.ui.components.StatTile
 import com.aurum.invest.ui.theme.AurumColors
 
@@ -76,9 +74,14 @@ fun ReportsScreen(onBack: () -> Unit) {
 
         Column(modifier = Modifier.padding(horizontal = 20.dp)) {
             Spacer(Modifier.height(8.dp))
-            PeriodToggle(
-                selected = period,
-                onSelect = { period = it }
+            SegmentedToggle(
+                options = listOf("Daily", "Weekly", "Monthly"),
+                selected = when (period) {
+                    "DAY" -> 0
+                    "WEEK" -> 1
+                    else -> 2
+                },
+                onSelect = { period = listOf("DAY", "WEEK", "MONTH")[it] }
             )
         }
 
@@ -111,36 +114,6 @@ fun ReportsScreen(onBack: () -> Unit) {
                 items(reports, key = { it.periodKey }) { report ->
                     ReportCard(report = report)
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PeriodToggle(selected: String, onSelect: (String) -> Unit) {
-    val shape = RoundedCornerShape(50)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(AurumColors.surface)
-    ) {
-        listOf("DAY" to "Daily", "WEEK" to "Weekly", "MONTH" to "Monthly").forEach { (key, label) ->
-            val isSelected = selected == key
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(shape)
-                    .background(if (isSelected) AurumColors.gold else AurumColors.surface)
-                    .clickable { onSelect(key) }
-                    .padding(vertical = 10.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (isSelected) AurumColors.bg else AurumColors.textDim
-                )
             }
         }
     }

@@ -25,10 +25,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,7 +61,7 @@ private enum class PicksTab { DAILY, ENTRIES, POWER, WEEKLY }
 fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit) {
     val vm: PicksViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
-    var tab by remember { mutableStateOf(PicksTab.DAILY) }
+    var tab by rememberSaveable { mutableStateOf(PicksTab.DAILY) }
 
     Column(
         modifier = Modifier
@@ -101,28 +102,32 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 PicksTab.POWER -> state.powerRefreshing
                 PicksTab.WEEKLY -> state.refreshing
             }
-            if (busy) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(22.dp),
-                    color = AurumColors.gold,
-                    strokeWidth = 2.dp
-                )
-            } else {
-                IconButton(
-                    onClick = {
-                        when (tab) {
-                            PicksTab.DAILY -> vm.refreshDaily()
-                            PicksTab.ENTRIES -> vm.refreshEntries()
-                            PicksTab.POWER -> vm.refreshPower()
-                            PicksTab.WEEKLY -> vm.refresh()
-                        }
-                    }
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Refresh,
-                        contentDescription = "Recompute picks",
-                        tint = AurumColors.gold
+            // Fixed 48dp slot so the header doesn't shift when the
+            // refresh button swaps to the busy spinner and back.
+            Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                if (busy) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        color = AurumColors.gold,
+                        strokeWidth = 2.dp
                     )
+                } else {
+                    IconButton(
+                        onClick = {
+                            when (tab) {
+                                PicksTab.DAILY -> vm.refreshDaily()
+                                PicksTab.ENTRIES -> vm.refreshEntries()
+                                PicksTab.POWER -> vm.refreshPower()
+                                PicksTab.WEEKLY -> vm.refresh()
+                            }
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Refresh,
+                            contentDescription = "Recompute picks",
+                            tint = AurumColors.gold
+                        )
+                    }
                 }
             }
         }
@@ -153,10 +158,10 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             when (tab) {
-                PicksTab.DAILY -> dailyItems(state, onOpenDetail, onOpenAnalysis)
-                PicksTab.ENTRIES -> entryItems(state, onOpenDetail, onOpenAnalysis)
-                PicksTab.POWER -> powerItems(state, onOpenDetail, onOpenAnalysis)
-                PicksTab.WEEKLY -> weeklyItems(state, onOpenDetail, onOpenAnalysis)
+                PicksTab.DAILY -> dailyItems(state, onOpenDetail, onOpenAnalysis, vm::refreshDaily)
+                PicksTab.ENTRIES -> entryItems(state, onOpenDetail, onOpenAnalysis, vm::refreshEntries)
+                PicksTab.POWER -> powerItems(state, onOpenDetail, onOpenAnalysis, vm::refreshPower)
+                PicksTab.WEEKLY -> weeklyItems(state, onOpenDetail, onOpenAnalysis, vm::refresh)
             }
         }
     }
@@ -167,7 +172,8 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
 private fun androidx.compose.foundation.lazy.LazyListScope.dailyItems(
     state: PicksState,
     onOpenDetail: (String) -> Unit,
-    onOpenAnalysis: (String) -> Unit
+    onOpenAnalysis: (String) -> Unit,
+    onRefresh: () -> Unit
 ) {
     when {
         state.saturday -> item {
@@ -198,7 +204,9 @@ private fun androidx.compose.foundation.lazy.LazyListScope.dailyItems(
         state.dailyRows.isEmpty() -> item {
             EmptyState(
                 title = "No daily picks yet",
-                message = "Tap refresh to scan the market for stocks set up for a 3-10%+ move today."
+                message = "Scan the market for stocks set up for a 3-10%+ move today.",
+                actionLabel = "Scan now",
+                onAction = onRefresh
             )
         }
         else -> {
@@ -234,7 +242,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.dailyItems(
 private fun androidx.compose.foundation.lazy.LazyListScope.powerItems(
     state: PicksState,
     onOpenDetail: (String) -> Unit,
-    onOpenAnalysis: (String) -> Unit
+    onOpenAnalysis: (String) -> Unit,
+    onRefresh: () -> Unit
 ) {
     item { PowerWindowBanner() }
     when {
@@ -260,7 +269,9 @@ private fun androidx.compose.foundation.lazy.LazyListScope.powerItems(
             EmptyState(
                 title = "No power-hour setups found",
                 message = "No stock shows the 4-day strength this play needs right now. " +
-                    "Tap refresh during the buy window for the freshest read."
+                    "Rescan during the buy window for the freshest read.",
+                actionLabel = "Scan now",
+                onAction = onRefresh
             )
         }
         else -> {
@@ -417,7 +428,7 @@ private fun PowerPickCard(pick: PowerPick, onOpen: () -> Unit, onAnalyze: () -> 
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable { onAnalyze() }
+                    modifier = Modifier.heightIn(min = 40.dp).clickable { onAnalyze() }
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.QueryStats,
@@ -456,7 +467,8 @@ private fun PowerPickCard(pick: PowerPick, onOpen: () -> Unit, onAnalyze: () -> 
 private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
     state: PicksState,
     onOpenDetail: (String) -> Unit,
-    onOpenAnalysis: (String) -> Unit
+    onOpenAnalysis: (String) -> Unit,
+    onRefresh: () -> Unit
 ) {
     when {
         state.entryRows.isEmpty() && (state.entryLoading || state.entryRefreshing) -> item {
@@ -480,8 +492,9 @@ private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
         state.entryRows.isEmpty() -> item {
             EmptyState(
                 title = "No entry setups found",
-                message = "The market-wide scan found no stock at a compelling entry right now. " +
-                    "Tap refresh to sweep again."
+                message = "The market-wide scan found no stock at a compelling entry right now.",
+                actionLabel = "Sweep again",
+                onAction = onRefresh
             )
         }
         else -> {
@@ -616,7 +629,7 @@ private fun EntryPickCard(pick: EntryPick, onOpen: () -> Unit, onAnalyze: () -> 
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable { onAnalyze() }
+                    modifier = Modifier.heightIn(min = 40.dp).clickable { onAnalyze() }
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.QueryStats,
@@ -736,7 +749,7 @@ private fun DailyPickCard(pick: DailyPick, onOpen: () -> Unit, onAnalyze: () -> 
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable { onAnalyze() }
+                    modifier = Modifier.heightIn(min = 40.dp).clickable { onAnalyze() }
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.QueryStats,
@@ -822,7 +835,8 @@ private fun ExtendedHoursRow(pick: DailyPick) {
 private fun androidx.compose.foundation.lazy.LazyListScope.weeklyItems(
     state: PicksState,
     onOpenDetail: (String) -> Unit,
-    onOpenAnalysis: (String) -> Unit
+    onOpenAnalysis: (String) -> Unit,
+    onRefresh: () -> Unit
 ) {
     if (state.rows.isEmpty()) {
         item {
@@ -846,7 +860,9 @@ private fun androidx.compose.foundation.lazy.LazyListScope.weeklyItems(
             } else {
                 EmptyState(
                     title = "No picks this week yet",
-                    message = "Tap refresh to scan the market and rank this week's ten strongest setups."
+                    message = "Scan the market to rank this week's ten strongest setups.",
+                    actionLabel = "Scan now",
+                    onAction = onRefresh
                 )
             }
         }
@@ -928,7 +944,7 @@ private fun PickCard(row: PickRow, onOpen: () -> Unit, onAnalyze: () -> Unit) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable { onAnalyze() }
+                    modifier = Modifier.heightIn(min = 40.dp).clickable { onAnalyze() }
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.QueryStats,

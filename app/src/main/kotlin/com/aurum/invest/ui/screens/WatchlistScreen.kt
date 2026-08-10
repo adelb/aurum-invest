@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
@@ -38,6 +40,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -57,6 +61,7 @@ import com.aurum.invest.ui.theme.AurumColors
 fun WatchlistScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit) {
     val vm: WatchlistViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
+    val keyboard = LocalSoftwareKeyboardController.current
 
     Column(
         modifier = Modifier
@@ -84,6 +89,14 @@ fun WatchlistScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
                         style = MaterialTheme.typography.bodyMedium
                     )
                 },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = {
+                    // The keyboard's action key adds the best match directly.
+                    state.suggestions.firstOrNull()?.let { (symbol, name) ->
+                        vm.addSymbol(symbol, name)
+                        keyboard?.hide()
+                    }
+                }),
                 leadingIcon = {
                     Icon(
                         imageVector = Icons.Rounded.Search,
@@ -294,7 +307,7 @@ private fun WatchRowCard(
                     null -> Unit
                 }
             }
-            IconButton(onClick = onAnalyze, modifier = Modifier.size(28.dp)) {
+            IconButton(onClick = onAnalyze, modifier = Modifier.size(36.dp)) {
                 Icon(
                     imageVector = Icons.Rounded.QueryStats,
                     contentDescription = "Analyze ${row.symbol}",
@@ -302,8 +315,8 @@ private fun WatchRowCard(
                     modifier = Modifier.size(18.dp)
                 )
             }
-            Spacer(modifier = Modifier.width(6.dp))
-            IconButton(onClick = onRemove, modifier = Modifier.size(28.dp)) {
+            Spacer(modifier = Modifier.width(2.dp))
+            IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
                 Icon(
                     imageVector = Icons.Rounded.Close,
                     contentDescription = "Remove ${row.symbol}",

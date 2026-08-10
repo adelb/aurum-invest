@@ -1,5 +1,6 @@
 package com.aurum.invest.ui.components
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,10 +16,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,11 +54,19 @@ fun SegmentedToggle(
     ) {
         options.forEachIndexed { i, label ->
             val sel = i == selected
+            val fill by animateColorAsState(
+                targetValue = if (sel) AurumColors.gold else Color.Transparent,
+                label = "segmentFill"
+            )
+            val textColor by animateColorAsState(
+                targetValue = if (sel) AurumColors.bg else AurumColors.textDim,
+                label = "segmentText"
+            )
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(9.dp))
-                    .background(if (sel) AurumColors.gold else Color.Transparent)
+                    .background(fill)
                     .clickable { onSelect(i) }
                     .padding(vertical = if (compact) 6.dp else 9.dp),
                 contentAlignment = Alignment.Center
@@ -62,7 +74,7 @@ fun SegmentedToggle(
                 Text(
                     text = label,
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (sel) AurumColors.bg else AurumColors.textDim
+                    color = textColor
                 )
             }
         }
@@ -229,7 +241,13 @@ fun SentimentDot(sentiment: Int, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun EmptyState(title: String, message: String, modifier: Modifier = Modifier) {
+fun EmptyState(
+    title: String,
+    message: String,
+    modifier: Modifier = Modifier,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null
+) {
     Column(
         modifier = modifier.fillMaxWidth().padding(vertical = 40.dp, horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -247,6 +265,19 @@ fun EmptyState(title: String, message: String, modifier: Modifier = Modifier) {
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 6.dp)
         )
+        if (actionLabel != null && onAction != null) {
+            Button(
+                onClick = onAction,
+                shape = RoundedCornerShape(50),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AurumColors.gold,
+                    contentColor = AurumColors.bg
+                ),
+                modifier = Modifier.padding(top = 18.dp)
+            ) {
+                Text(text = actionLabel, style = MaterialTheme.typography.labelLarge)
+            }
+        }
     }
 }
 

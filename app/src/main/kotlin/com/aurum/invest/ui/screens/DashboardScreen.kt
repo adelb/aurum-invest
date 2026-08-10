@@ -155,7 +155,9 @@ fun DashboardScreen(
                     item {
                         EmptyState(
                             title = "No holdings yet",
-                            message = "Tap + to record your first trade."
+                            message = "Record your first buy and Aurum starts tracking price, P/L and advice for it.",
+                            actionLabel = "Add a trade",
+                            onAction = onAdd
                         )
                     }
                 } else {
@@ -300,7 +302,7 @@ private fun HoldingCard(row: HoldingRow, onClick: () -> Unit, onRemove: () -> Un
                     color = AurumColors.text
                 )
                 Text(
-                    text = "${Fmt.qty(position.shares)} shares",
+                    text = "${Fmt.qty(position.shares)} shares · ${Fmt.money(view.marketValue)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
@@ -343,7 +345,7 @@ private fun HoldingCard(row: HoldingRow, onClick: () -> Unit, onRemove: () -> Un
             Spacer(Modifier.weight(1f))
             row.advice?.let { ActionBadge(action = it.action) }
             Spacer(Modifier.width(6.dp))
-            IconButton(onClick = onRemove, modifier = Modifier.size(28.dp)) {
+            IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
                 Icon(
                     Icons.Rounded.Close,
                     contentDescription = "Remove ${position.symbol} from portfolio",

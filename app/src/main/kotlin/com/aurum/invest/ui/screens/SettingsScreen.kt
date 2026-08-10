@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.aurum.invest.BuildConfig
 import com.aurum.invest.bank.BankNotificationListener
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.GoldGradientText
@@ -227,7 +228,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                     )
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        text = "Version 1.0",
+                        text = "Version ${BuildConfig.VERSION_NAME}",
                         style = MaterialTheme.typography.labelMedium,
                         color = AurumColors.textDim
                     )
