@@ -21,6 +21,9 @@ class PortfolioRepository(private val txDao: TransactionDao) {
 
     fun observeTransactions(): Flow<List<TransactionEntity>> = txDao.observeAll()
 
+    /** The full ledger, ordered — for the accurate day-P/L computation. */
+    suspend fun orderedTransactionsNow(): List<TransactionEntity> = txDao.getAllOrdered()
+
     /** All symbols ever traded; filter shares > 0 for open holdings. */
     fun observePositions(): Flow<List<Position>> =
         txDao.observeAll().map { txs -> computePositions(txs.sortedWith(compareBy({ it.ts }, { it.id }))) }
@@ -101,13 +104,14 @@ class PortfolioRepository(private val txDao: TransactionDao) {
             }
         }
 
-        fun toView(position: Position, quote: Quote?): PositionView {
+        fun toView(position: Position, quote: Quote?, dayPlOverride: Double? = null): PositionView {
             val price = quote?.price ?: position.avgCost
             val marketValue = position.shares * price
             val unrealized = position.shares * (price - position.avgCost)
             val unrealizedPct =
                 if (position.investedCost > 1e-9) unrealized / position.investedCost * 100.0 else 0.0
-            val dayPl = if (quote != null) position.shares * quote.dayChangeAbs else 0.0
+            val dayPl = dayPlOverride
+                ?: if (quote != null) position.shares * quote.dayChangeAbs else 0.0
             return PositionView(
                 position = position,
                 quote = quote,
@@ -118,13 +122,76 @@ class PortfolioRepository(private val txDao: TransactionDao) {
             )
         }
 
+        /**
+         * Accurate "today" P/L per symbol. Shares held from before today move
+         * against the previous close; shares BOUGHT today move only from their
+         * own buy price (fees folded in); shares SOLD today lock in their move
+         * at the sell price (sell fees deducted). Without this, a position
+         * opened mid-session is credited with the whole day's move — including
+         * the part that happened before it was owned.
+         */
+        fun dayPlBySymbol(
+            ordered: List<TransactionEntity>,
+            quotes: Map<String, Quote>,
+            dayStartTs: Long
+        ): Map<String, Double> {
+            val heldStart = computePositions(ordered.filter { it.ts < dayStartTs })
+                .associate { it.symbol to it.shares }
+            val todayBySymbol = ordered.filter { it.ts >= dayStartTs }
+                .groupBy { it.symbol.trim().uppercase() }
+
+            val out = HashMap<String, Double>()
+            for (sym in heldStart.keys + todayBySymbol.keys) {
+                val quote = quotes[sym]
+                var fromYesterday = (heldStart[sym] ?: 0.0).coerceAtLeast(0.0)
+                var pl = 0.0
+                // FIFO lots bought today: [remaining qty, cost per share incl. fees]
+                val lots = ArrayDeque<DoubleArray>()
+                for (tx in todayBySymbol[sym].orEmpty()) {
+                    if (tx.side == TradeSide.BUY.name) {
+                        if (tx.shares > 0.0) {
+                            lots.addLast(doubleArrayOf(tx.shares, tx.price + tx.fees / tx.shares))
+                        }
+                    } else {
+                        var qty = tx.shares
+                        val soldOvernight = minOf(qty, fromYesterday)
+                        if (soldOvernight > 0.0 && quote != null) {
+                            pl += soldOvernight * (tx.price - quote.prevClose)
+                        }
+                        fromYesterday -= soldOvernight
+                        qty -= soldOvernight
+                        while (qty > 1e-9 && lots.isNotEmpty()) {
+                            val lot = lots.first()
+                            val q = minOf(qty, lot[0])
+                            pl += q * (tx.price - lot[1])
+                            lot[0] -= q
+                            qty -= q
+                            if (lot[0] <= 1e-9) lots.removeFirst()
+                        }
+                        pl -= tx.fees
+                    }
+                }
+                // Still-open remainders marked to the live price.
+                if (quote != null) {
+                    if (fromYesterday > 1e-9) pl += fromYesterday * quote.dayChangeAbs
+                    for (lot in lots) pl += lot[0] * (quote.price - lot[1])
+                }
+                out[sym] = pl
+            }
+            return out
+        }
+
         /** [allPositions] must include closed positions so realized P/L is complete. */
-        fun summarize(openViews: List<PositionView>, allPositions: List<Position>): PortfolioSummary {
+        fun summarize(
+            openViews: List<PositionView>,
+            allPositions: List<Position>,
+            dayPlOverride: Double? = null
+        ): PortfolioSummary {
             val marketValue = openViews.sumOf { it.marketValue }
             val invested = openViews.sumOf { it.position.investedCost }
             val unrealized = openViews.sumOf { it.unrealizedPl }
             val realized = allPositions.sumOf { it.realizedPl }
-            val dayPl = openViews.sumOf { it.dayPl }
+            val dayPl = dayPlOverride ?: openViews.sumOf { it.dayPl }
             return PortfolioSummary(
                 marketValue = marketValue,
                 investedCost = invested,

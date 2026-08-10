@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.PortfolioSummary
 import com.aurum.invest.ui.components.ActionBadge
@@ -248,7 +249,8 @@ private fun HeroSummary(summary: PortfolioSummary?) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             DeltaMoney(value = s.dayPl, style = MaterialTheme.typography.titleMedium)
             Text(
-                text = " today",
+                // Before today's US open, the delta belongs to the last session.
+                text = if (Dates.usMarketOpenedToday()) " today" else " last session",
                 style = MaterialTheme.typography.titleMedium,
                 color = AurumColors.textDim
             )

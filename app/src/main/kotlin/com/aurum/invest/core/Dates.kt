@@ -53,6 +53,19 @@ object Dates {
         return d1 == d2
     }
 
+    /** Epoch millis of today's local midnight. */
+    fun todayStartMs(): Long =
+        LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+    /** True once today's US regular session has opened (9:30 AM ET, weekdays). */
+    fun usMarketOpenedToday(): Boolean {
+        val nowEt = java.time.ZonedDateTime.now(ZoneId.of("America/New_York"))
+        if (nowEt.dayOfWeek == DayOfWeek.SATURDAY || nowEt.dayOfWeek == DayOfWeek.SUNDAY) {
+            return false
+        }
+        return !nowEt.toLocalTime().isBefore(java.time.LocalTime.of(9, 30))
+    }
+
     /** State of the power-hour buy window (last 90 min of the US regular session). */
     enum class PowerWindow { WEEKEND, BEFORE, OPEN, CLOSED }
 

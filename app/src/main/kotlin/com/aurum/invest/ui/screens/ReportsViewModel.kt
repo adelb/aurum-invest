@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 data class ReportsState(
+    val daily: List<PeriodReport> = emptyList(),
     val weekly: List<PeriodReport> = emptyList(),
     val monthly: List<PeriodReport> = emptyList(),
     val loading: Boolean = true
@@ -31,11 +32,19 @@ class ReportsViewModel(app: Application) : AndroidViewModel(app) {
     init {
         viewModelScope.launch {
             portfolio.observeTransactions().collectLatest { txs ->
-                val (weekly, monthly) = withContext(Dispatchers.Default) {
-                    ReportsEngine.build(txs, ReportPeriod.WEEK) to
+                val (daily, weekly, monthly) = withContext(Dispatchers.Default) {
+                    Triple(
+                        ReportsEngine.build(txs, ReportPeriod.DAY),
+                        ReportsEngine.build(txs, ReportPeriod.WEEK),
                         ReportsEngine.build(txs, ReportPeriod.MONTH)
+                    )
                 }
-                _state.value = ReportsState(weekly = weekly, monthly = monthly, loading = false)
+                _state.value = ReportsState(
+                    daily = daily,
+                    weekly = weekly,
+                    monthly = monthly,
+                    loading = false
+                )
             }
         }
     }

@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
 import com.aurum.invest.analytics.AdviceEngine
+import com.aurum.invest.core.Dates
 import com.aurum.invest.data.model.Advice
 import com.aurum.invest.data.model.PortfolioSummary
 import com.aurum.invest.data.model.Position
@@ -83,9 +84,23 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
         val quoteMaxAge = if (fresh) 0L else 60_000L
 
         val open = allPositions.filter { PortfolioRepository.isOpen(it) }
-        val quotes = container.market.getQuotes(open.map { it.symbol }, maxAgeMs = quoteMaxAge)
-        val openViews = open.map { PortfolioRepository.toView(it, quotes[it.symbol]) }
-        val summary = PortfolioRepository.summarize(openViews, allPositions)
+
+        // Quotes for every open symbol PLUS anything traded today, so the
+        // "today" P/L also counts positions closed earlier in the session.
+        val ordered = container.portfolio.orderedTransactionsNow()
+        val dayStart = Dates.todayStartMs()
+        val tradedToday = ordered.filter { it.ts >= dayStart }.map { it.symbol.trim().uppercase() }
+        val quotes = container.market.getQuotes(
+            (open.map { it.symbol } + tradedToday).distinct(),
+            maxAgeMs = quoteMaxAge
+        )
+
+        // Day P/L that respects when shares were actually bought or sold today.
+        val dayPl = PortfolioRepository.dayPlBySymbol(ordered, quotes, dayStart)
+        val openViews = open.map {
+            PortfolioRepository.toView(it, quotes[it.symbol], dayPl[it.symbol])
+        }
+        val summary = PortfolioRepository.summarize(openViews, allPositions, dayPl.values.sum())
 
         val rows = coroutineScope {
             openViews.map { view ->

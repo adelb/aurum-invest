@@ -12,7 +12,7 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.TemporalAdjusters
 import java.util.Locale
 
-enum class ReportPeriod { WEEK, MONTH }
+enum class ReportPeriod { DAY, WEEK, MONTH }
 
 /** One transaction as it appears inside a period report. */
 data class TradeLine(
@@ -24,9 +24,9 @@ data class TradeLine(
     val realizedPl: Double?   // non-null for SELL rows only
 )
 
-/** Aggregated trade activity for one week or one month. */
+/** Aggregated trade activity for one day, one week, or one month. */
 data class PeriodReport(
-    val periodKey: String,        // week: ISO Monday "2026-08-03"; month: "2026-08"
+    val periodKey: String,        // day: ISO "2026-08-10"; week: ISO Monday; month: "2026-08"
     val label: String,            // "Week of Aug 3" / "August 2026"
     val startTs: Long,
     val endTs: Long,
@@ -50,6 +50,7 @@ object ReportsEngine {
 
     private val monthKeyFmt = DateTimeFormatter.ofPattern("yyyy-MM", Locale.US)
     private val monthLabelFmt = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.US)
+    private val dayLabelFmt = DateTimeFormatter.ofPattern("EEEE, MMM d", Locale.US)
 
     fun build(transactions: List<TransactionEntity>, period: ReportPeriod): List<PeriodReport> {
         if (transactions.isEmpty()) return emptyList()
@@ -100,6 +101,7 @@ object ReportsEngine {
 
             val day = Instant.ofEpochMilli(tx.ts).atZone(zone).toLocalDate()
             val key = when (period) {
+                ReportPeriod.DAY -> day.toString()
                 ReportPeriod.WEEK ->
                     day.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)).toString()
                 ReportPeriod.MONTH ->
@@ -129,6 +131,12 @@ object ReportsEngine {
             val startTs: Long
             val endTs: Long
             when (period) {
+                ReportPeriod.DAY -> {
+                    val d = LocalDate.parse(key)
+                    label = d.format(dayLabelFmt)
+                    startTs = d.atStartOfDay(zone).toInstant().toEpochMilli()
+                    endTs = d.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1
+                }
                 ReportPeriod.WEEK -> {
                     val monday = LocalDate.parse(key)
                     label = Dates.weekStartLabel(key)

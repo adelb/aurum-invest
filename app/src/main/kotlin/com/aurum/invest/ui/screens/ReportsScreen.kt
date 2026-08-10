@@ -82,7 +82,11 @@ fun ReportsScreen(onBack: () -> Unit) {
             )
         }
 
-        val reports = if (period == "WEEK") state.weekly else state.monthly
+        val reports = when (period) {
+            "DAY" -> state.daily
+            "WEEK" -> state.weekly
+            else -> state.monthly
+        }
 
         if (state.loading) {
             Box(
@@ -121,7 +125,7 @@ private fun PeriodToggle(selected: String, onSelect: (String) -> Unit) {
             .clip(shape)
             .background(AurumColors.surface)
     ) {
-        listOf("WEEK" to "Weekly", "MONTH" to "Monthly").forEach { (key, label) ->
+        listOf("DAY" to "Daily", "WEEK" to "Weekly", "MONTH" to "Monthly").forEach { (key, label) ->
             val isSelected = selected == key
             Box(
                 modifier = Modifier
