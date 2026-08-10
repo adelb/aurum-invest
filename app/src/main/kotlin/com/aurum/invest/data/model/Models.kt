@@ -148,7 +148,38 @@ data class ScreenerQuote(
     val fiftyDayAvg: Double,
     val twoHundredDayAvg: Double,
     val fiftyTwoWeekHigh: Double,
-    val analystRating: Double?       // 1.0 (Strong Buy) .. 5.0 (Sell); null when unrated
+    val analystRating: Double?,      // 1.0 (Strong Buy) .. 5.0 (Sell); null when unrated
+    val dayHigh: Double = 0.0,       // today's session high (0 when absent)
+    val dayLow: Double = 0.0,        // today's session low (0 when absent)
+    val dayVolume: Long = 0L         // today's traded volume so far
+)
+
+/**
+ * A power-hour pick: bought in the last 90 minutes of the session, positioned
+ * for next-day strength off the last 4 trading days' behavior.
+ */
+data class PowerPick(
+    val date: String,
+    val rank: Int,
+    val symbol: String,
+    val name: String,
+    val score: Double,               // 0..100
+    val price: Double,
+    val dayChangePct: Double,
+    val r4Pct: Double,               // move over the last 4 trading days
+    val upDays: Int,                 // up closes among those 4 days (0..4)
+    val closePosPct: Double,         // where price sits in today's range, 0..100
+    val volumeRatio: Double,         // 4-day avg volume vs 20-day average
+    val expectedLowPct: Double,      // honest next-day potential, low bound
+    val expectedHighPct: Double,
+    val target: Double,              // morning-strength exit level
+    val stop: Double,                // hard stop under today's low / ATR
+    val rsi: Double,
+    val techDirection: String,
+    val techBullish: Int,
+    val techTotal: Int,
+    val techConfidence: Int,
+    val reason: String
 )
 
 /** A stock the market-wide scan reads as sitting at a good entry price right now. */

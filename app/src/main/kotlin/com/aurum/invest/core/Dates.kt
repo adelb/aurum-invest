@@ -52,4 +52,27 @@ object Dates {
         val d2 = Instant.ofEpochMilli(ts2).atZone(zone).toLocalDate()
         return d1 == d2
     }
+
+    /** State of the power-hour buy window (last 90 min of the US regular session). */
+    enum class PowerWindow { WEEKEND, BEFORE, OPEN, CLOSED }
+
+    /**
+     * Where "now" sits relative to today's 2:30-4:00 PM ET buy window, plus
+     * the window bounds converted to device-local epoch millis. Regular US
+     * holidays are not modeled — the window simply has no trades those days.
+     */
+    fun powerWindowNow(): Triple<PowerWindow, Long, Long> {
+        val et = ZoneId.of("America/New_York")
+        val nowEt = java.time.ZonedDateTime.now(et)
+        val start = nowEt.toLocalDate().atTime(14, 30).atZone(et).toInstant().toEpochMilli()
+        val end = nowEt.toLocalDate().atTime(16, 0).atZone(et).toInstant().toEpochMilli()
+        val state = when {
+            nowEt.dayOfWeek == DayOfWeek.SATURDAY || nowEt.dayOfWeek == DayOfWeek.SUNDAY ->
+                PowerWindow.WEEKEND
+            System.currentTimeMillis() < start -> PowerWindow.BEFORE
+            System.currentTimeMillis() <= end -> PowerWindow.OPEN
+            else -> PowerWindow.CLOSED
+        }
+        return Triple(state, start, end)
+    }
 }

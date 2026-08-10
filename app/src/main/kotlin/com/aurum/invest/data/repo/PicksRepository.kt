@@ -2,6 +2,7 @@ package com.aurum.invest.data.repo
 
 import com.aurum.invest.analytics.DailyPicker
 import com.aurum.invest.analytics.EntryPicker
+import com.aurum.invest.analytics.PowerPicker
 import com.aurum.invest.analytics.WeeklyPicker
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.db.CacheDao
@@ -10,6 +11,7 @@ import com.aurum.invest.data.db.PicksDao
 import com.aurum.invest.data.db.WeeklyPickEntity
 import com.aurum.invest.data.model.DailyPick
 import com.aurum.invest.data.model.EntryPick
+import com.aurum.invest.data.model.PowerPick
 import com.aurum.invest.data.model.WeeklyPick
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -38,6 +40,46 @@ class PicksRepository(
 
         /** Market-wide best-entry picks, one cached set per local date. */
         private const val ENTRY_KEY_PREFIX = "entrypicks:"
+
+        /** Power-hour picks (buy 2:30-4:00 PM ET), one cached set per local date. */
+        private const val POWER_KEY_PREFIX = "powerpicks:"
+    }
+
+    // ---- power-hour picks (cache-backed, one set per calendar day) ----------------
+
+    private fun powerKey(): String = POWER_KEY_PREFIX + Dates.todayIso()
+
+    /** Today's stored power-hour picks (no computation). Empty on any failure. */
+    suspend fun getPower(): List<PowerPick> = try {
+        cacheDao.get(powerKey())?.let { PowerPicker.fromJson(it.json) } ?: emptyList()
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    /** Today's power-hour picks, computing + storing them when none exist yet. */
+    suspend fun ensurePower(): List<PowerPick> {
+        val existing = getPower()
+        if (existing.isNotEmpty()) return existing
+        return recomputePower()
+    }
+
+    /** Re-runs the power-hour scan and replaces today's stored set. */
+    suspend fun recomputePower(): List<PowerPick> {
+        return try {
+            val picks = PowerPicker(market).computePicks(Dates.todayIso())
+            if (picks.isNotEmpty()) {
+                cacheDao.put(
+                    CacheEntity(
+                        key = powerKey(),
+                        json = PowerPicker.toJson(picks),
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+            }
+            picks
+        } catch (_: Exception) {
+            getPower()
+        }
     }
 
     // ---- best-entry picks (cache-backed, one set per calendar day) ----------------

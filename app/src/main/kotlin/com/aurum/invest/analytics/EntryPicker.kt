@@ -35,8 +35,8 @@ import org.json.JSONObject
 class EntryPicker(private val market: MarketRepository) {
 
     companion object {
-        /** Yahoo's market-wide saved screens used to build the candidate pool. */
-        private val SCREENS = listOf(
+        /** Yahoo's market-wide saved screens; shared by every whole-market scan. */
+        val MARKET_SCREENS = listOf(
             "most_actives",
             "day_gainers",
             "day_losers",
@@ -122,7 +122,7 @@ class EntryPicker(private val market: MarketRepository) {
         return try {
             // Stage 1 — merge the market-wide screener lists into one pool.
             val pool = HashMap<String, ScreenerQuote>()
-            for (chunk in SCREENS.chunked(4)) {
+            for (chunk in MARKET_SCREENS.chunked(4)) {
                 coroutineScope {
                     chunk.map { id -> async { market.getScreener(id) } }.awaitAll()
                 }.forEach { list ->

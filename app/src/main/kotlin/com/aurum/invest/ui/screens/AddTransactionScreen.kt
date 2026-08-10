@@ -184,7 +184,12 @@ fun AddTransactionScreen(prefillSymbol: String?, prefillSide: String?, onDone: (
             enabled = !state.sellAll,
             shape = RoundedCornerShape(16.dp),
             colors = addFieldColors(),
-            label = { Text("Invested amount ($)") },
+            label = {
+                Text(
+                    if (state.side == TradeSide.BUY) "Amount paid ($, fees included)"
+                    else "Amount received ($, after fees)"
+                )
+            },
             placeholder = { Text("0.00") },
             supportingText = {
                 val sh = state.sharesVal

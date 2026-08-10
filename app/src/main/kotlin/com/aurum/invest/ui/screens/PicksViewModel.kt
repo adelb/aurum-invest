@@ -7,6 +7,7 @@ import com.aurum.invest.AurumApp
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.model.DailyPick
 import com.aurum.invest.data.model.EntryPick
+import com.aurum.invest.data.model.PowerPick
 import com.aurum.invest.data.model.Quote
 import com.aurum.invest.data.model.WeeklyPick
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,7 +39,11 @@ data class PicksState(
     // Best entries — market-wide scan for stocks at a good entry price now.
     val entryRows: List<EntryPick> = emptyList(),
     val entryLoading: Boolean = true,
-    val entryRefreshing: Boolean = false
+    val entryRefreshing: Boolean = false,
+    // Power hour — buy in the last 90 min of the session for next-day strength.
+    val powerRows: List<PowerPick> = emptyList(),
+    val powerLoading: Boolean = true,
+    val powerRefreshing: Boolean = false
 )
 
 class PicksViewModel(app: Application) : AndroidViewModel(app) {
@@ -131,6 +136,24 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val entries = picks.ensureEntries()
             _state.update { it.copy(entryRows = entries, entryLoading = false) }
+        }
+        viewModelScope.launch {
+            val power = picks.ensurePower()
+            _state.update { it.copy(powerRows = power, powerLoading = false) }
+        }
+    }
+
+    /** Re-run the power-hour scan from fresh screener + candle data. */
+    fun refreshPower() {
+        if (_state.value.powerRefreshing) return
+        viewModelScope.launch {
+            _state.update { it.copy(powerRefreshing = true) }
+            try {
+                val power = picks.recomputePower()
+                _state.update { it.copy(powerRows = power, powerLoading = false) }
+            } finally {
+                _state.update { it.copy(powerRefreshing = false) }
+            }
         }
     }
 

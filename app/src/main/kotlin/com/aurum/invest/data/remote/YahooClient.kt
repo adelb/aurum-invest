@@ -217,7 +217,12 @@ class YahooClient {
                                 .takeIf { !it.isNaN() } ?: 0.0,
                             fiftyTwoWeekHigh = q.optDouble("fiftyTwoWeekHigh", 0.0)
                                 .takeIf { !it.isNaN() } ?: 0.0,
-                            analystRating = rating
+                            analystRating = rating,
+                            dayHigh = q.optDouble("regularMarketDayHigh", 0.0)
+                                .takeIf { !it.isNaN() } ?: 0.0,
+                            dayLow = q.optDouble("regularMarketDayLow", 0.0)
+                                .takeIf { !it.isNaN() } ?: 0.0,
+                            dayVolume = q.optLong("regularMarketVolume", 0L)
                         )
                     )
                 }

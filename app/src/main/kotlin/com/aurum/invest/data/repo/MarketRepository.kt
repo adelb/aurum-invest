@@ -214,6 +214,9 @@ class MarketRepository(
                     put("twoHundredDayAvg", q.twoHundredDayAvg)
                     put("fiftyTwoWeekHigh", q.fiftyTwoWeekHigh)
                     if (q.analystRating != null) put("analystRating", q.analystRating)
+                    put("dayHigh", q.dayHigh)
+                    put("dayLow", q.dayLow)
+                    put("dayVolume", q.dayVolume)
                 }
             )
         }
@@ -237,7 +240,10 @@ class MarketRepository(
                         fiftyDayAvg = o.optDouble("fiftyDayAvg", 0.0),
                         twoHundredDayAvg = o.optDouble("twoHundredDayAvg", 0.0),
                         fiftyTwoWeekHigh = o.optDouble("fiftyTwoWeekHigh", 0.0),
-                        analystRating = if (o.has("analystRating")) o.getDouble("analystRating") else null
+                        analystRating = if (o.has("analystRating")) o.getDouble("analystRating") else null,
+                        dayHigh = o.optDouble("dayHigh", 0.0),
+                        dayLow = o.optDouble("dayLow", 0.0),
+                        dayVolume = o.optLong("dayVolume", 0L)
                     )
                 )
             }

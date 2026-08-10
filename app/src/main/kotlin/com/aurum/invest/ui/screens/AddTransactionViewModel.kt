@@ -91,8 +91,18 @@ class AddTransactionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setSide(side: TradeSide) {
-        _state.update {
-            if (side == TradeSide.BUY) it.copy(side = side, sellAll = false) else it.copy(side = side)
+        _state.update { st ->
+            val next = if (side == TradeSide.BUY) {
+                st.copy(side = side, sellAll = false)
+            } else {
+                st.copy(side = side)
+            }
+            // The fee direction flips with the side — keep the fields in sync.
+            when {
+                next.sellAll -> syncFromShares(next)
+                next.lastEdited == AddTxLastEdited.AMOUNT -> syncFromAmount(next)
+                else -> syncFromShares(next)
+            }
         }
     }
 
@@ -145,7 +155,16 @@ class AddTransactionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun onFeesChange(value: String) {
-        _state.update { it.copy(fees = sanitizeDecimal(value)) }
+        _state.update { st ->
+            val next = st.copy(fees = sanitizeDecimal(value))
+            // Fees change what the full amount buys/nets — re-sync whichever
+            // field the user did not type in.
+            when {
+                next.sellAll -> syncFromShares(next)
+                next.lastEdited == AddTxLastEdited.AMOUNT -> syncFromAmount(next)
+                else -> syncFromShares(next)
+            }
+        }
     }
 
     /** ON: shares pinned to the full held quantity (fields lock); OFF: editable again. */
@@ -206,19 +225,34 @@ class AddTransactionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Amount follows shares * price when both parse. */
+    /**
+     * Amount is the FULL money that moves, fees included: what leaves the
+     * account on a buy (shares*price + fees), what lands in it on a sell
+     * (shares*price - fees).
+     */
     private fun syncFromShares(st: AddTxState): AddTxState {
         val sh = st.shares.trim().toDoubleOrNull()
         val pr = st.price.trim().toDoubleOrNull()
-        return if (sh != null && pr != null && pr > 0.0) st.copy(amount = amount2.format(sh * pr)) else st
+        if (sh == null || pr == null || pr <= 0.0) return st
+        val full = if (st.side == TradeSide.BUY) {
+            sh * pr + st.feesVal
+        } else {
+            (sh * pr - st.feesVal).coerceAtLeast(0.0)
+        }
+        return st.copy(amount = amount2.format(full))
     }
 
-    /** Shares follow amount / price (4 decimals) when both parse. */
+    /**
+     * Shares follow from the full amount with fees deducted first: a buy of
+     * "$1,000 with $5 fees" purchases $995 of stock; a sell that nets $1,000
+     * after $5 fees must sell $1,005 of stock.
+     */
     private fun syncFromAmount(st: AddTxState): AddTxState {
         val am = st.amount.trim().toDoubleOrNull()
         val pr = st.price.trim().toDoubleOrNull()
         if (am == null || pr == null || pr <= 0.0) return st
-        val sh = round(am / pr * 10_000.0) / 10_000.0
+        val stockValue = if (st.side == TradeSide.BUY) am - st.feesVal else am + st.feesVal
+        val sh = (round(stockValue / pr * 10_000.0) / 10_000.0).coerceAtLeast(0.0)
         return st.copy(shares = shares4.format(sh))
     }
 
