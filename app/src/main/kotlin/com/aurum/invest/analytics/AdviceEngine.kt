@@ -14,8 +14,12 @@ import kotlin.math.round
 /**
  * Rule-based buy/sell advisor. Pure Kotlin — no Android dependencies, never throws.
  *
- * Sell side: ATR-derived target (avgCost * (1 + 2*atrPct)) and stop
- * (avgCost * (1 - 1.5*atrPct)), RSI stretch, and news tone.
+ * Sell side: the target is cost + 2×ATR; the protective stop starts at
+ * cost − 1.5×ATR and, once the position is in profit, TRAILS the market at
+ * 20-day high − 2.5×ATR (chandelier style). Take-profit fires when the gain
+ * is actually at risk — the trailing stop is hit, or the target is reached
+ * with momentum cracking, or the move goes parabolic — never merely because
+ * a healthy winner sits above a level frozen at the entry price.
  * Buy side: RSI dip inside an uptrend plus news tone; a suggested entry price is
  * always produced once 20 daily candles exist.
  */
@@ -29,9 +33,11 @@ object AdviceEngine {
         val rsi = Indicators.rsi(closes)
         val sma20 = Indicators.sma(closes, 20)
         val atr = Indicators.atr(candles)
-        val atrPct = if (atr != null && price > 0.0) atr / price else null
-        val target = if (atrPct != null && avgCost > 0.0) round2(avgCost * (1.0 + 2.0 * atrPct)) else null
-        val stop = if (atrPct != null && avgCost > 0.0) round2(avgCost * (1.0 - 1.5 * atrPct)) else null
+        val high20 = Indicators.recentHigh(closes, 20)
+
+        val target = if (atr != null && avgCost > 0.0) round2(avgCost + 2.0 * atr) else null
+        val costStop = if (atr != null && avgCost > 0.0) round2(avgCost - 1.5 * atr) else null
+        val trailStop = if (atr != null && high20 != null) round2(high20 - 2.5 * atr) else null
 
         if (price <= 0.0 || avgCost <= 0.0) {
             return Advice(
@@ -43,11 +49,19 @@ object AdviceEngine {
                 ),
                 score = 30,
                 targetPrice = target,
-                stopLoss = stop
+                stopLoss = costStop
             )
         }
 
         val plPct = (price - avgCost) / avgCost * 100.0
+
+        // The stop that matters NOW: the loss limit while under water, the
+        // higher of loss limit and trailing stop once in profit.
+        val trailing = plPct > 0.0 && costStop != null && trailStop != null && trailStop > costStop
+        val stop = if (trailing) trailStop else costStop
+
+        // Momentum crack: overbought reading or price back under its 20-day average.
+        val momentumWeak = (rsi != null && rsi > 70.0) || (sma20 != null && price < sma20)
 
         // Bearish composite: news tone, stretched RSI, price under its 20-day average,
         // and a meaningful drawdown all add weight.
@@ -59,17 +73,28 @@ object AdviceEngine {
         if (rsi != null && rsi < 40.0 && plPct < 0.0) bear += 1
 
         val decision: Pair<AdviceAction, String> = when {
-            target != null && price >= target ->
-                AdviceAction.TAKE_PROFIT to
-                    "Up ${fmt1(plPct)}% from cost. Target ${Fmt.money(target)} reached."
-
-            rsi != null && rsi > 72.0 && plPct > 0.0 ->
-                AdviceAction.TAKE_PROFIT to
-                    "Up ${fmt1(plPct)}% from cost. RSI ${fmt0(rsi)} is overbought."
-
-            stop != null && price <= stop ->
+            // Hard loss limit breached — the position never worked.
+            plPct <= 0.0 && stop != null && price <= stop ->
                 AdviceAction.CUT_LOSS to
-                    "Down ${fmt1(abs(plPct))}%, below the ${Fmt.money(stop)} stop."
+                    "Down ${fmt1(abs(plPct))}%, through the ${Fmt.money(stop)} stop."
+
+            // In profit but the trailing stop is hit — the gain is leaking away.
+            trailing && stop != null && price <= stop ->
+                AdviceAction.TAKE_PROFIT to
+                    "Up ${fmt1(plPct)}% from cost, but the trailing stop ${Fmt.money(stop)} " +
+                    "is hit — protect the gain."
+
+            // Target reached AND momentum is cracking — bank it.
+            target != null && price >= target && momentumWeak ->
+                AdviceAction.TAKE_PROFIT to
+                    "Up ${fmt1(plPct)}% from cost, target ${Fmt.money(target)} reached and " +
+                    "momentum is cooling" +
+                    (rsi?.takeIf { it > 70.0 }?.let { " (RSI ${fmt0(it)})" } ?: "") + "."
+
+            // Parabolic stretch — lock in at least part regardless of the target.
+            rsi != null && rsi > 78.0 && plPct >= 8.0 ->
+                AdviceAction.TAKE_PROFIT to
+                    "Up ${fmt1(plPct)}% and RSI ${fmt0(rsi)} is parabolic — take at least part."
 
             bear >= 6 -> {
                 val drivers = mutableListOf<String>()
@@ -81,6 +106,14 @@ object AdviceEngine {
                 AdviceAction.SELL to
                     "Sell signal: ${drivers.joinToString(", ")}."
             }
+
+            // Above target with the trend still healthy — let the winner run.
+            target != null && price >= target && stop != null ->
+                AdviceAction.HOLD to
+                    "Up ${fmt1(plPct)}% — past the ${Fmt.money(target)} target with the trend " +
+                    "healthy. Let it run; " +
+                    (if (trailing) "the stop has trailed up to ${Fmt.money(stop)}."
+                    else "keep the ${Fmt.money(stop)} stop.")
 
             else -> {
                 val headline = if (target != null && stop != null) {
@@ -103,7 +136,8 @@ object AdviceEngine {
             }
         }
         if (target != null && stop != null) {
-            reasons += "ATR exits: target ${Fmt.money(target)} (2×ATR above cost), stop ${Fmt.money(stop)} (1.5×ATR below cost)"
+            reasons += "Exits: target ${Fmt.money(target)} (cost + 2×ATR), stop ${Fmt.money(stop)} " +
+                if (trailing) "(trailing: 20-day high − 2.5×ATR)" else "(cost − 1.5×ATR)"
         }
         if (newsScore != 0) {
             reasons += "News tone over recent days scores ${signedInt(newsScore)} on a -2..+2 scale"
@@ -183,10 +217,17 @@ object AdviceEngine {
         // Good entry = max(20-day low, 20-day SMA * 0.985), rounded to cents.
         // Always available once 20 daily candles exist; kept below the live price on WAIT.
         var entry: Double? = null
+        var entryClamped = false
         if (low20 != null && sma20 != null) {
             var e = max(low20, sma20 * 0.985)
-            if (action == AdviceAction.WAIT && e >= price) e = price * 0.99
-            if (action != AdviceAction.WAIT && e > price) e = price
+            if (action == AdviceAction.WAIT && e >= price) {
+                e = price * 0.99
+                entryClamped = true
+            }
+            if (action != AdviceAction.WAIT && e > price) {
+                e = price
+                entryClamped = true
+            }
             entry = round2(e)
         }
 
@@ -214,7 +255,14 @@ object AdviceEngine {
             }
         }
         if (entry != null && low20 != null) {
-            reasons += "Good entry ≈ ${Fmt.money(entry)} — the higher of the 20-day low ${Fmt.money(low20)} and the 20-day average minus 1.5%"
+            // Only describe the low/SMA anchor when it actually set the entry —
+            // after the clamp, the shown price no longer comes from it.
+            reasons += if (entryClamped) {
+                "Good entry ≈ ${Fmt.money(entry)} — pulled just under the live price; the usual " +
+                    "20-day-low/average anchor sits above the market right now"
+            } else {
+                "Good entry ≈ ${Fmt.money(entry)} — the higher of the 20-day low ${Fmt.money(low20)} and the 20-day average minus 1.5%"
+            }
         }
         if (sma20 != null && sma50 != null) {
             reasons += "Trend: 20-day ${Fmt.money(sma20)} ${if (sma20 >= sma50) "above" else "below"} 50-day ${Fmt.money(sma50)} — " +

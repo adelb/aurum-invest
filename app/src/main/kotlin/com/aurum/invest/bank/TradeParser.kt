@@ -24,16 +24,25 @@ object TradeParser {
     private val BUY_EN = Regex("""\b(?:buy|buys|bought|purchase[ds]?|purchasing)\b""", RegexOption.IGNORE_CASE)
     private val SELL_EN = Regex("""\b(?:sell|sells|sold|selling)\b""", RegexOption.IGNORE_CASE)
 
+    // Arabic keywords need a no-trailing-letter guard (Arabic has no \b):
+    // bare indexOf("بيع") also hits inside المبيعات (sales) or طبيعي (normal).
+    // Prefixed forms (البيع, بالبيع, للشراء) still match.
+    private val BUY_AR = Regex("""شراء(?![ء-ي])""")
+    private val SELL_AR = Regex("""بيع(?![ء-ي])""")
+
     private val SHARES_BEFORE_WORD = Regex("""$NUM\s*(?:shares?|units?|stocks?|أسهم|اسهم|سهم)""", RegexOption.IGNORE_CASE)
     private val SHARES_AFTER_X = Regex("""\bx\s*$NUM""", RegexOption.IGNORE_CASE)
     private val SHARES_BEFORE_X = Regex("""$NUM\s*x\b""", RegexOption.IGNORE_CASE)
 
+    // The trailing (?![\d:]) rejects clock times: in "At 10:30 ... @ 150.25"
+    // the "10" (and its backtracked "1") fail the lookahead, so the price is
+    // taken from the actual @-print, not the timestamp.
     private val PRICE = Regex(
-        """(?:@|\bat\b|بسعر)\s*:?\s*(?:USD|JOD|EUR|GBP|SAR|AED|د\.أ|\$|€|£)?\s*$NUM""",
+        """(?:@|\bat\b|بسعر)\s*:?\s*(?:USD|JOD|EUR|GBP|SAR|AED|د\.أ|\$|€|£)?\s*$NUM(?![\d:])""",
         RegexOption.IGNORE_CASE
     )
     private val AMOUNT = Regex(
-        """(?:\bfor\b|\btotal\b|بقيمة|بمبلغ)\s*:?\s*(?:USD|JOD|EUR|GBP|SAR|AED|د\.أ|\$|€|£)?\s*$NUM""",
+        """(?:\bfor\b|\btotal\b|بقيمة|بمبلغ)\s*:?\s*(?:USD|JOD|EUR|GBP|SAR|AED|د\.أ|\$|€|£)?\s*$NUM(?![\d:])""",
         RegexOption.IGNORE_CASE
     )
 
@@ -144,11 +153,11 @@ object TradeParser {
     private fun detectSide(s: String): TradeSide? {
         val buyIdx = listOfNotNull(
             BUY_EN.find(s)?.range?.first,
-            s.indexOf("شراء").takeIf { it >= 0 }
+            BUY_AR.find(s)?.range?.first
         ).minOrNull()
         val sellIdx = listOfNotNull(
             SELL_EN.find(s)?.range?.first,
-            s.indexOf("بيع").takeIf { it >= 0 }
+            SELL_AR.find(s)?.range?.first
         ).minOrNull()
         return when {
             buyIdx == null && sellIdx == null -> null

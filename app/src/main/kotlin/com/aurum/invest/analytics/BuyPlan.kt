@@ -121,17 +121,34 @@ object BuyPlanEngine {
 
         val totalAmount = tranches.sumOf { it.amount }
         val totalShares = tranches.sumOf { it.shares }
-        val avgEntry = if (totalShares > 1e-9) totalAmount / totalShares else price
+        // Average entry over the INVESTED tranches only — a cash reserve
+        // (shares = 0) carries dollars but no shares and would inflate it,
+        // dragging the stop, risk, and targets with it.
+        val investedAmount = tranches.sumOf { if (it.shares > 0.0) it.amount else 0.0 }
+        val avgEntry = if (totalShares > 1e-9) investedAmount / totalShares else price
 
-        // Stop: ATR-padded structure under the lowest planned entry, never
-        // tighter than 1 ATR and never wider than ~12% below the average entry.
-        val lowestEntry = tranches.minOf { it.price }
+        // Stop: ATR-padded structure, never tighter than 1 ATR, never wider
+        // than ~12% below the average entry — and never ABOVE the lowest
+        // planned entry, or the deep limit would fill straight into a stop-out.
+        val lowestEntry = tranches.filter { it.shares > 0.0 }.minOf { it.price }
         val structure = supports.filter { it < lowestEntry }.maxOrNull() ?: (lowestEntry - atr)
-        var stop = min(structure - 0.75 * atr, price - 1.0 * atr)
-        stop = max(stop, avgEntry * 0.88)
+        val structural = min(structure - 0.75 * atr, price - 1.0 * atr)
+        val floor12 = avgEntry * 0.88
+        val entryCap = lowestEntry - 0.25 * atr
+        var stop = max(structural, floor12)
+        val stopBasis: String
+        if (stop > entryCap) {
+            stop = entryCap
+            stopBasis = "0.25 ATR under the lowest planned entry ${money(lowestEntry)} — the " +
+                "deep limit must be able to fill without an instant stop-out."
+        } else if (floor12 > structural) {
+            stopBasis = "capped 12% under the ${money(round2(avgEntry))} average entry — Elder's " +
+                "rule that no single position may risk more."
+        } else {
+            stopBasis = "0.75 ATR (${money(atr)}) under the ${money(structure)} structure — " +
+                "wide enough that normal daily noise cannot shake the position out."
+        }
         stop = max(stop, 0.01)
-        val stopBasis = "0.75 ATR (${money(atr)}) under the ${money(structure)} structure — " +
-            "wide enough that normal daily noise cannot shake the position out."
 
         val riskPerShare = max(avgEntry - stop, 0.0)
         val riskDollars = round2(totalShares * riskPerShare)

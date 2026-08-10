@@ -73,7 +73,9 @@ class PortfolioRepository(private val txDao: TransactionDao) {
 
             val bySymbol = LinkedHashMap<String, Acc>()
             for (tx in ordered) {
-                val acc = bySymbol.getOrPut(tx.symbol.uppercase()) { Acc() }
+                // trim + uppercase must match ReportsEngine and dayPlBySymbol,
+                // or a stray-whitespace ledger row splits into two positions.
+                val acc = bySymbol.getOrPut(tx.symbol.trim().uppercase()) { Acc() }
                 if (tx.side == TradeSide.BUY.name) {
                     val newShares = acc.shares + tx.shares
                     if (newShares > 0) {

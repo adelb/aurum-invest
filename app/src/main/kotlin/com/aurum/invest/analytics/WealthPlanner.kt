@@ -436,9 +436,13 @@ class WealthPlanner(
         val r60 = if (n >= 60 && closes[n - 60] > 0.0) (last / closes[n - 60] - 1.0) * 100.0 else r20
         val rsi = Indicators.rsi(closes) ?: return null
 
+        // Today's in-progress bar has partial volume — exclude it from the surge read.
         val volumes = candles.map { it.volume.toDouble() }
-        val vol5 = volumes.takeLast(5).average()
-        val vol20 = volumes.takeLast(20).average()
+        val lastIsToday =
+            com.aurum.invest.core.Dates.sameDay(candles.last().ts, System.currentTimeMillis())
+        val volEnd = if (lastIsToday && volumes.size >= 2) volumes.size - 1 else volumes.size
+        val vol5 = volumes.subList((volEnd - 5).coerceAtLeast(0), volEnd).average()
+        val vol20 = volumes.subList((volEnd - 20).coerceAtLeast(0), volEnd).average()
         val volumeRatio = if (vol20 > 0.0) vol5 / vol20 else 1.0
 
         val high20 = Indicators.recentHigh(closes, 20) ?: last

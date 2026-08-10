@@ -268,12 +268,14 @@ class PowerPicker(private val market: MarketRepository) {
             if (base4 <= 0.0) return null
             val r4 = (price / base4 - 1.0) * 100.0
 
-            // Up-day consistency and acceleration into today.
+            // Up-day consistency over the SAME window as r4: the 3 completed
+            // day-over-day moves plus today's live move.
             var upDays = 0
-            for (i in n - 4 until n) {
+            for (i in n - 3 until n) {
                 val prev = cCloses.getOrNull(i - 1) ?: continue
                 if (prev > 0.0 && cCloses[i] > prev) upDays++
             }
+            if (price > cCloses[n - 1]) upDays++
             val today = q.dayChangePct
             val avgPrior3 = ((cCloses[n - 1] / cCloses[n - 4] - 1.0) * 100.0) / 3.0
             val accelerating = today > avgPrior3 && today > 0.0

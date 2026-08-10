@@ -310,8 +310,19 @@ object Techniques {
                 "Close ${Fmt.money(price)} above the 20-day ${Fmt.money(s20)}, itself above the 50-day ${Fmt.money(s50)}.$crossNote"
             TechniqueVerdict.BEARISH ->
                 "Close ${Fmt.money(price)} below the 20-day ${Fmt.money(s20)}, itself below the 50-day ${Fmt.money(s50)}.$crossNote"
-            TechniqueVerdict.NEUTRAL ->
-                "Close ${Fmt.money(price)} sits between the 20-day ${Fmt.money(s20)} and 50-day ${Fmt.money(s50)}; no aligned trend.$crossNote"
+            TechniqueVerdict.NEUTRAL -> {
+                // NEUTRAL also covers price outside BOTH averages with a
+                // crossed 20/50 — only claim "between" when it is true.
+                val position = when {
+                    price > maxOf(s20, s50) ->
+                        "holds above both the 20-day ${Fmt.money(s20)} and 50-day ${Fmt.money(s50)}, but the averages are crossed"
+                    price < minOf(s20, s50) ->
+                        "sits below both the 20-day ${Fmt.money(s20)} and 50-day ${Fmt.money(s50)}, but the averages are crossed"
+                    else ->
+                        "sits between the 20-day ${Fmt.money(s20)} and 50-day ${Fmt.money(s50)}"
+                }
+                "Close ${Fmt.money(price)} $position; no aligned trend.$crossNote"
+            }
         }
         return TechniqueResult("ma", name, verdict, strength, summary)
     }
@@ -628,10 +639,19 @@ object Techniques {
             )
             else -> {
                 val nearest = fib.levels.minByOrNull { distPct(it.second) }!!
+                val nd = distPct(nearest.second)
+                // The nearest level CAN be inside the tag distance here — the
+                // bullish "holds the dip" case only counts approaches from
+                // above; from below it is a test, not a hold.
+                val note = if (nd <= FIB_NEAR_PCT) {
+                    "${fmt1(nd)}% away, testing it from below — no hold confirmed"
+                } else {
+                    "no level within ${fmt1(FIB_NEAR_PCT)}%"
+                }
                 TechniqueResult(
                     "fib", name, TechniqueVerdict.NEUTRAL, 30,
-                    "Price ${Fmt.money(price)} sits nearest the ${nearest.first} level ${Fmt.money(nearest.second)}; " +
-                        "no level tagged within ${fmt1(FIB_NEAR_PCT)}%."
+                    "Price ${Fmt.money(price)} sits nearest the ${nearest.first} level " +
+                        "${Fmt.money(nearest.second)}; $note."
                 )
             }
         }
@@ -831,16 +851,20 @@ object Techniques {
             else -> "flat"
         }
 
+        // The verdict is slope-driven; the printed net change must carry its
+        // OWN sign — an early dip can leave the endpoint delta negative even
+        // while the fitted trend is up (and vice versa).
+        val netTxt = (if (obvDelta >= 0.0) "+" else "-") + Fmt.compact(abs(obvDelta))
         return when {
             slope > 0.0 && priceChgPct <= 0.0 -> TechniqueResult(
                 "obv", name, TechniqueVerdict.BULLISH,
                 (70.0 + min(15.0, abs(priceChgPct) * 2.0)).roundToInt().coerceIn(70, 85),
-                "OBV +${Fmt.compact(abs(obvDelta))} over $window bars with price $priceTxt: accumulation divergence."
+                "OBV trending higher over $window bars (net $netTxt) with price $priceTxt: accumulation divergence."
             )
             slope < 0.0 && priceChgPct > 0.0 -> TechniqueResult(
                 "obv", name, TechniqueVerdict.BEARISH,
                 (70.0 + min(15.0, priceChgPct * 2.0)).roundToInt().coerceIn(70, 85),
-                "OBV -${Fmt.compact(abs(obvDelta))} over $window bars with price $priceTxt: distribution divergence."
+                "OBV trending lower over $window bars (net $netTxt) with price $priceTxt: distribution divergence."
             )
             priceChgPct > 0.0 -> TechniqueResult(
                 "obv", name, TechniqueVerdict.BULLISH, 50,
@@ -1083,9 +1107,15 @@ object Techniques {
         }
         val fresh = run <= 3
         val distPct = if (price > 0.0) abs(price - sarV) / price * 100.0 else 0.0
+        // run counts the bars INSIDE the current regime, flip bar included —
+        // the flip itself happened run-1 bars ago.
+        val flippedAgo = run - 1
         val freshNote =
-            if (fresh) " Flipped $run ${bars(run)} ago — a fresh signal."
-            else " The trend has run $run ${bars(run)}."
+            if (fresh) {
+                " Flipped ${if (flippedAgo == 0) "this bar" else "$flippedAgo ${bars(flippedAgo)} ago"} — a fresh signal."
+            } else {
+                " The trend has run $run ${bars(run)}."
+            }
         return if (up) {
             TechniqueResult(
                 "psar", name, TechniqueVerdict.BULLISH,
