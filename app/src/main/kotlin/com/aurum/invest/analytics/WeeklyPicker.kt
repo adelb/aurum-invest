@@ -70,7 +70,7 @@ class WeeklyPicker(private val market: MarketRepository) {
             "XOM" to "Exxon Mobil",
             "CVX" to "Chevron",
             "COP" to "ConocoPhillips",
-            "SLB" to "Schlumberger",
+            "SLB" to "SLB (Schlumberger)",
             "OXY" to "Occidental Petroleum",
             // Consumer
             "WMT" to "Walmart",
@@ -106,7 +106,7 @@ class WeeklyPicker(private val market: MarketRepository) {
             "TMUS" to "T-Mobile US",
             // Gold miners & royalties (the app tracks gold relations)
             "NEM" to "Newmont",
-            "GOLD" to "Barrick Gold",
+            "B" to "Barrick Mining",
             "AEM" to "Agnico Eagle Mines",
             "FNV" to "Franco-Nevada",
             "RGLD" to "Royal Gold",

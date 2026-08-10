@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Edit
@@ -40,13 +41,16 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurum.invest.analytics.SectorTrend
+import com.aurum.invest.analytics.SectorTrends
 import com.aurum.invest.analytics.WealthAllocation
 import com.aurum.invest.analytics.WealthPlan
 import com.aurum.invest.core.Fmt
@@ -310,7 +314,7 @@ private fun PlanContent(
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item { GoalCard(plan) }
-        item { SectorCard(plan) }
+        item { SectorCard(plan, onOpenAnalysis) }
 
         item {
             Text(
@@ -404,7 +408,7 @@ private fun FeasibilityPill(feasibility: String) {
 }
 
 @Composable
-private fun SectorCard(plan: WealthPlan) {
+private fun SectorCard(plan: WealthPlan, onOpenAnalysis: (String) -> Unit) {
     AurumCard {
         Text(
             text = "This week's market trend",
@@ -418,40 +422,70 @@ private fun SectorCard(plan: WealthPlan) {
             color = AurumColors.text
         )
         Spacer(Modifier.height(10.dp))
-        plan.topSectors.forEach { s -> SectorRow(s) }
+        plan.topSectors.forEach { s -> SectorRow(s, onOpenAnalysis) }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "Tap a ticker for its 15-technique analysis.",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
     }
 }
 
 @Composable
-private fun SectorRow(s: SectorTrend) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
+private fun SectorRow(s: SectorTrend, onOpenStock: (String) -> Unit) {
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
+            .padding(vertical = 5.dp)
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = s.label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = AurumColors.text
-            )
-            Text(
-                text = s.reason,
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.textDim,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = s.label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AurumColors.text
+                )
+                Text(
+                    text = s.reason,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(horizontalAlignment = Alignment.End) {
+                DeltaPct(value = s.r5Pct, style = MaterialTheme.typography.labelMedium)
+                Text(
+                    text = "5 days",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
         }
-        Spacer(Modifier.width(10.dp))
-        Column(horizontalAlignment = Alignment.End) {
-            DeltaPct(value = s.r5Pct, style = MaterialTheme.typography.labelMedium)
-            Text(
-                text = "5 days",
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.textDim
-            )
+        val watch = SectorTrends.WATCH[s.key].orEmpty()
+        if (watch.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                watch.forEach { (symbol, _) ->
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(AurumColors.surfaceHigh)
+                            .clickable { onOpenStock(symbol) }
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = symbol,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.SemiBold
+                            ),
+                            color = AurumColors.text
+                        )
+                    }
+                }
+            }
         }
     }
 }

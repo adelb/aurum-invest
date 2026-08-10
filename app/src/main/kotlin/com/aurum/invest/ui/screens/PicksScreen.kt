@@ -165,7 +165,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.dailyItems(
             item {
                 Text(
                     text = "Stocks the engine reads as capable of a 3-10%+ up-move today, " +
-                        "from momentum, volume, the 11 techniques, pre/post-market prints, and news.",
+                        "from momentum, volume, the 15 techniques, pre/post-market prints, and news.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
@@ -300,7 +300,12 @@ private fun DailyPickCard(pick: DailyPick, onOpen: () -> Unit, onAnalyze: () -> 
                 )
                 DeltaPct(value = pick.dayChangePct, style = MaterialTheme.typography.labelMedium)
                 Text(
-                    text = "today",
+                    // Before the open, price and change still belong to the
+                    // previous regular session — say so instead of "today".
+                    text = when (pick.marketState) {
+                        "PRE", "PREPRE", "CLOSED", "POSTPOST" -> "last session"
+                        else -> "today"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = AurumColors.textDim
                 )

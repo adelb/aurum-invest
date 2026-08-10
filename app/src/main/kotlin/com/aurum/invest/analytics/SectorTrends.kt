@@ -53,6 +53,64 @@ class SectorTrends(
             Triple("solar", "Solar & clean energy", "TAN")
         )
 
+        /** Per theme: 4 representative stocks worth a look when the theme trends. */
+        val WATCH: Map<String, List<Pair<String, String>>> = mapOf(
+            "semis" to listOf(
+                "NVDA" to "Nvidia", "AMD" to "AMD", "AVGO" to "Broadcom", "MU" to "Micron"
+            ),
+            "ai" to listOf(
+                "PLTR" to "Palantir", "TSLA" to "Tesla",
+                "ISRG" to "Intuitive Surgical", "SYM" to "Symbotic"
+            ),
+            "quantum" to listOf(
+                "IONQ" to "IonQ", "RGTI" to "Rigetti",
+                "QBTS" to "D-Wave Quantum", "QUBT" to "Quantum Computing"
+            ),
+            "software" to listOf(
+                "MSFT" to "Microsoft", "GOOGL" to "Alphabet", "META" to "Meta", "CRM" to "Salesforce"
+            ),
+            "oil" to listOf(
+                "XOM" to "Exxon Mobil", "CVX" to "Chevron", "COP" to "ConocoPhillips", "SLB" to "SLB"
+            ),
+            "materials" to listOf(
+                "FCX" to "Freeport-McMoRan", "VALE" to "Vale", "NUE" to "Nucor", "ALB" to "Albemarle"
+            ),
+            "goldminers" to listOf(
+                "NEM" to "Newmont", "B" to "Barrick Mining",
+                "AEM" to "Agnico Eagle", "KGC" to "Kinross Gold"
+            ),
+            "banks" to listOf(
+                "JPM" to "JPMorgan", "BAC" to "Bank of America",
+                "GS" to "Goldman Sachs", "MS" to "Morgan Stanley"
+            ),
+            "health" to listOf(
+                "LLY" to "Eli Lilly", "UNH" to "UnitedHealth",
+                "JNJ" to "Johnson & Johnson", "ABBV" to "AbbVie"
+            ),
+            "biotech" to listOf(
+                "VRTX" to "Vertex", "REGN" to "Regeneron", "GILD" to "Gilead", "MRNA" to "Moderna"
+            ),
+            "defense" to listOf(
+                "LMT" to "Lockheed Martin", "RTX" to "RTX",
+                "NOC" to "Northrop Grumman", "GE" to "GE Aerospace"
+            ),
+            "industrials" to listOf(
+                "CAT" to "Caterpillar", "DE" to "Deere", "HON" to "Honeywell", "UPS" to "UPS"
+            ),
+            "consumer" to listOf(
+                "WMT" to "Walmart", "COST" to "Costco", "HD" to "Home Depot", "MCD" to "McDonald's"
+            ),
+            "utilities" to listOf(
+                "NEE" to "NextEra", "VST" to "Vistra", "DUK" to "Duke Energy", "SO" to "Southern Co."
+            ),
+            "nuclear" to listOf(
+                "CCJ" to "Cameco", "OKLO" to "Oklo", "SMR" to "NuScale", "LEU" to "Centrus"
+            ),
+            "solar" to listOf(
+                "FSLR" to "First Solar", "ENPH" to "Enphase", "RUN" to "Sunrun", "SEDG" to "SolarEdge"
+            )
+        )
+
         /** News tone is fetched only for the strongest movers to keep the scan fast. */
         private const val NEWS_TOP = 6
 
@@ -115,9 +173,18 @@ class SectorTrends(
                             if (last <= 0.0 || c5 <= 0.0 || c20 <= 0.0) return@async null
                             val r5 = (last / c5 - 1.0) * 100.0
                             val r20 = (last / c20 - 1.0) * 100.0
+                            // Today's in-progress bar has partial volume — read
+                            // the surge off the last COMPLETED session instead.
                             val volumes = candles.map { it.volume.toDouble() }
-                            val volIdx = volumes.size - 1
-                            val vol20 = volumes.takeLast(20).average()
+                            val lastIsToday = com.aurum.invest.core.Dates.sameDay(
+                                candles.last().ts, System.currentTimeMillis()
+                            )
+                            val volIdx =
+                                if (lastIsToday && volumes.size >= 2) volumes.size - 2
+                                else volumes.size - 1
+                            val vol20 = volumes
+                                .subList((volIdx - 19).coerceAtLeast(0), volIdx + 1)
+                                .average()
                             val volRatio = if (vol20 > 0.0) volumes[volIdx] / vol20 else 1.0
                             Partial(key, label, etf, r5, r20, volRatio)
                         } catch (_: Exception) {

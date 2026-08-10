@@ -73,9 +73,10 @@ class YahooClient {
     }
 
     /**
-     * v8 chart API, range=1d interval=5m with includePrePost — the latest
-     * session's pre-market and post-market moves, split around the regular
-     * trading window from meta.currentTradingPeriod.
+     * v8 chart API, range=1d interval=5m with includePrePost — the CURRENT
+     * session's pre-market and post-market moves, bounded to the pre/post
+     * windows from meta.currentTradingPeriod. Null when the session has no
+     * prints in that window yet (overnight, weekends).
      */
     suspend fun fetchExtendedHours(symbol: String): ExtendedHours? = withContext(Dispatchers.IO) {
         try {
@@ -94,28 +95,58 @@ class YahooClient {
             val prevClose = metaDouble(meta, "chartPreviousClose")
                 ?: metaDouble(meta, "previousClose")
                 ?: regularPrice
-            val marketState = meta.optString("marketState", "")
 
             val periods = meta.optJSONObject("currentTradingPeriod")
             val regular = periods?.optJSONObject("regular")
+            val prePeriod = periods?.optJSONObject("pre")
+            val postPeriod = periods?.optJSONObject("post")
             val regStart = (regular?.optLong("start", 0L) ?: 0L) * 1000L
             val regEnd = (regular?.optLong("end", 0L) ?: 0L) * 1000L
+            val preStart = (prePeriod?.optLong("start", 0L) ?: 0L) * 1000L
+            val postEnd = (postPeriod?.optLong("end", 0L) ?: 0L) * 1000L
 
             val candles = parseCandles(root)
             var preMarketPct: Double? = null
             var postMarketPct: Double? = null
-            if (regStart > 0L && prevClose > 0.0) {
-                candles.lastOrNull { it.ts < regStart }?.let { pre ->
-                    preMarketPct = (pre.close - prevClose) / prevClose * 100.0
+            // Pre-market = bars inside the current session's pre window
+            // (04:00-09:30 ET), and only while that session is still live.
+            // Without both bounds, an overnight or weekend request matches the
+            // previous session's bars and reports yesterday's move as pre-market.
+            //
+            // Baseline: before today's open Yahoo anchors this chart's meta to
+            // the LAST regular session, so chartPreviousClose is one day too
+            // old and the true "yesterday's close" is regularMarketPrice.
+            // Once today's regular session has traded, chartPreviousClose is
+            // the correct baseline again (regularMarketPrice went live).
+            val regularTime = meta.optLong("regularMarketTime", 0L) * 1000L
+            val now = System.currentTimeMillis()
+            val sessionLive = postEnd <= 0L || now <= postEnd
+            val preBase =
+                if (regularTime in 1 until regStart) regularPrice else prevClose
+            if (preStart in 1 until regStart && preBase > 0.0 && sessionLive) {
+                candles.lastOrNull { it.ts in preStart until regStart }?.let { pre ->
+                    preMarketPct = (pre.close - preBase) / preBase * 100.0
                 }
             }
             if (regEnd > 0L) {
-                val lastPost = candles.lastOrNull { it.ts >= regEnd }
+                val lastPost = candles.lastOrNull {
+                    it.ts >= regEnd && (postEnd <= 0L || it.ts <= postEnd)
+                }
                 val regClose = candles.lastOrNull { it.ts in regStart until regEnd }?.close
                     ?: regularPrice
                 if (lastPost != null && regClose > 0.0) {
                     postMarketPct = (lastPost.close - regClose) / regClose * 100.0
                 }
+            }
+            // Yahoo no longer sends marketState in chart meta; derive it from
+            // the session windows so callers can label prints honestly.
+            val metaState = meta.optString("marketState", "")
+            val marketState = when {
+                metaState.isNotEmpty() -> metaState
+                preStart > 0L && now in preStart until regStart -> "PRE"
+                regStart > 0L && now in regStart until regEnd -> "REGULAR"
+                regEnd > 0L && postEnd > regEnd && now in regEnd until postEnd -> "POST"
+                else -> "CLOSED"
             }
             ExtendedHours(
                 symbol = symbol,

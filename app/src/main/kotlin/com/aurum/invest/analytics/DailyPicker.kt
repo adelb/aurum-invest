@@ -23,7 +23,7 @@ import org.json.JSONObject
  *  1. Cheap screen on cached daily candles — short-term momentum, latest-session
  *     volume surge, ATR capacity (can this name even move 3%+ in a day?),
  *     breakout proximity, and RSI headroom.
- *  2. Deep read on the ~12 finalists — the 11-technique analysis, live quote,
+ *  2. Deep read on the ~12 finalists — the 15-technique analysis, live quote,
  *     pre/post-market prints, and the last 5 days of news with sentiment.
  *
  * Technique-bearish names are dropped; the survivors are ranked and the top
@@ -97,7 +97,7 @@ class DailyPicker(
                         marketState = o.optString("marketState", ""),
                         techDirection = o.optString("techDirection", "NEUTRAL"),
                         techBullish = o.optInt("techBullish", 0),
-                        techTotal = o.optInt("techTotal", 11),
+                        techTotal = o.optInt("techTotal", 15),
                         techConfidence = o.optInt("techConfidence", 0),
                         volumeRatio = o.optDouble("volumeRatio", 1.0),
                         newsScore = o.optInt("newsScore", 0),
@@ -166,7 +166,7 @@ class DailyPicker(
             }
             if (deep.isEmpty()) return emptyList()
 
-            // Keep names the 11 techniques do not read as bearish.
+            // Keep names the 15 techniques do not read as bearish.
             val kept = deep.filter { it.techDirection != TechniqueVerdict.BEARISH.name }
                 .ifEmpty { deep }
 
@@ -358,7 +358,8 @@ class DailyPicker(
                 dayChangePct = dayChangePct,
                 preMarketPct = pre,
                 postMarketPct = post,
-                marketState = quote?.marketState ?: ext?.marketState ?: "",
+                marketState = quote?.marketState.orEmpty()
+                    .ifEmpty { ext?.marketState.orEmpty() },
                 techDirection = direction.name,
                 techBullish = bullishCount,
                 techTotal = techTotal,

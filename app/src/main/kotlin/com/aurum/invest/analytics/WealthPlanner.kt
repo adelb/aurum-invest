@@ -95,7 +95,7 @@ class WealthPlanner(
             ).forEach { put(it, "software") }
             listOf("XOM", "CVX", "COP", "SLB", "OXY", "RIG").forEach { put(it, "oil") }
             listOf("VALE").forEach { put(it, "materials") }
-            listOf("NEM", "GOLD", "AEM", "FNV", "RGLD", "WPM", "KGC", "AU", "HMY")
+            listOf("NEM", "B", "AEM", "FNV", "RGLD", "WPM", "KGC", "AU", "HMY")
                 .forEach { put(it, "goldminers") }
             listOf(
                 "JPM", "BAC", "GS", "MS", "V", "MA", "AXP", "C", "WFC",
@@ -109,8 +109,9 @@ class WealthPlanner(
                 "UBER", "ABNB", "KO", "PEP", "PG", "CL", "F", "CCL", "NCLH",
                 "AAL", "M", "SNAP", "WBD", "NIO", "RIVN", "LCID"
             ).forEach { put(it, "consumer") }
-            listOf("PLUG", "TLRY").forEach { put(it, "solar") }
-            listOf("T", "VZ", "TMUS").forEach { put(it, "utilities") }
+            listOf("PLUG").forEach { put(it, "solar") }
+            // TLRY (cannabis) and T/VZ/TMUS (telecom) have no tracked theme —
+            // left unmapped so no misleading sector label is shown.
         }
 
         private val INSIDER_KEYWORDS = listOf(
