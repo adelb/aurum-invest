@@ -3,6 +3,8 @@ package com.aurum.invest.data.repo
 import com.aurum.invest.analytics.DailyPicker
 import com.aurum.invest.analytics.EntryPicker
 import com.aurum.invest.analytics.PowerPicker
+import com.aurum.invest.analytics.PreMarketPick
+import com.aurum.invest.analytics.PreMarketPicker
 import com.aurum.invest.analytics.WeeklyPicker
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.db.CacheDao
@@ -37,6 +39,9 @@ class PicksRepository(
 
         /** Daily picks live in the JSON cache, one entry per local date. */
         private const val DAILY_KEY_PREFIX = "dailypicks:"
+
+        /** Pre-market picks: one entry per local date and profit target. */
+        private const val PREMARKET_KEY_PREFIX = "premarket:"
 
         /** Market-wide best-entry picks, one cached set per local date. */
         private const val ENTRY_KEY_PREFIX = "entrypicks:"
@@ -79,6 +84,52 @@ class PicksRepository(
             picks
         } catch (_: Exception) {
             getPower()
+        }
+    }
+
+    // ---- pre-market picks (cache-backed; keyed by day AND target) ----------------
+
+    // The target is part of the key: change the goal and you are asking a
+    // different question, so the stored answer must not be reused.
+    private fun preMarketKey(targetPct: Double): String =
+        PREMARKET_KEY_PREFIX + Dates.todayIso() + ":" + String.format(
+            java.util.Locale.US, "%.2f", targetPct
+        )
+
+    /** Today's stored pre-market picks for [targetPct] (no computation). */
+    suspend fun getPreMarket(targetPct: Double): List<PreMarketPick> = try {
+        cacheDao.get(preMarketKey(targetPct))
+            ?.let { PreMarketPicker.fromJson(it.json) } ?: emptyList()
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    /** Today's pre-market picks, computing them when none are stored yet. */
+    suspend fun ensurePreMarket(targetPct: Double): List<PreMarketPick> {
+        val existing = getPreMarket(targetPct)
+        if (existing.isNotEmpty()) return existing
+        return recomputePreMarket(targetPct)
+    }
+
+    /**
+     * Re-runs the pre-market scan for [targetPct]. Pre-market prices move
+     * continuously, so this is what the refresh button calls.
+     */
+    suspend fun recomputePreMarket(targetPct: Double): List<PreMarketPick> {
+        return try {
+            val picks = PreMarketPicker(market).computePicks(Dates.todayIso(), targetPct)
+            if (picks.isNotEmpty()) {
+                cacheDao.put(
+                    CacheEntity(
+                        key = preMarketKey(targetPct),
+                        json = PreMarketPicker.toJson(picks),
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+            }
+            picks
+        } catch (_: Exception) {
+            getPreMarket(targetPct)
         }
     }
 

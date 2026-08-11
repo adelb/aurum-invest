@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Savings
 import androidx.compose.material.icons.rounded.Visibility
@@ -48,6 +49,7 @@ import com.aurum.invest.ui.screens.DashboardScreen
 import com.aurum.invest.ui.screens.EditPositionScreen
 import com.aurum.invest.ui.screens.PicksScreen
 import com.aurum.invest.ui.screens.PositionDetailScreen
+import com.aurum.invest.ui.screens.PreMarketScreen
 import com.aurum.invest.ui.screens.ReportsScreen
 import com.aurum.invest.ui.screens.SettingsScreen
 import com.aurum.invest.ui.screens.WatchlistScreen
@@ -60,6 +62,7 @@ import kotlinx.coroutines.flow.stateIn
 object Routes {
     const val DASHBOARD = "dashboard"; const val WATCHLIST = "watchlist"
     const val PICKS = "picks"; const val WEALTH = "wealth"
+    const val PREMARKET = "premarket"
     const val FEED = "feed"; const val SETTINGS = "settings"
     const val ADD = "add?symbol={symbol}&side={side}"; const val DETAIL = "detail/{symbol}"
     const val ANALYSIS = "analysis/{symbol}"; const val REPORTS = "reports"
@@ -96,7 +99,9 @@ fun AurumRoot() {
             TopDest(Routes.WATCHLIST, "Watchlist", Icons.Rounded.Visibility),
             TopDest(Routes.PICKS, "Picks", Icons.AutoMirrored.Rounded.TrendingUp),
             TopDest(Routes.WEALTH, "Wealth", Icons.Rounded.Savings),
-            TopDest(Routes.FEED, "Feed", Icons.Rounded.Notifications)
+            // The pre-market desk replaces the bank Feed in the bar; the feed
+            // itself stays reachable from Settings.
+            TopDest(Routes.PREMARKET, "Pre-market", Icons.Rounded.Bolt)
         )
     }
 
@@ -197,11 +202,20 @@ fun AurumRoot() {
                     onOpenDetail = { nav.navigate(Routes.detail(it)) }
                 )
             }
+            composable(Routes.PREMARKET) {
+                PreMarketScreen(
+                    onOpenDetail = { nav.navigate(Routes.detail(it)) },
+                    onOpenAnalysis = { nav.navigate(Routes.analysis(it)) }
+                )
+            }
             composable(Routes.FEED) {
                 BankFeedScreen()
             }
             composable(Routes.SETTINGS) {
-                SettingsScreen(onBack = { nav.popBackStack() })
+                SettingsScreen(
+                    onBack = { nav.popBackStack() },
+                    onOpenFeed = { nav.navigate(Routes.FEED) }
+                )
             }
             composable(Routes.REPORTS) {
                 ReportsScreen(onBack = { nav.popBackStack() })

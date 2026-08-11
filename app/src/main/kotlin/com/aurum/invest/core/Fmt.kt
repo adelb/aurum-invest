@@ -44,6 +44,10 @@ object Fmt {
 
     fun qty(v: Double): String = qtyFmt.format(v)
 
+    /** "2.06" not "2.0600" — for pre-filling editable number fields. */
+    fun trimNumber(v: Double): String =
+        java.math.BigDecimal.valueOf(v).stripTrailingZeros().toPlainString()
+
     fun dateShort(ts: Long): String =
         SimpleDateFormat("MMM d", Locale.US).format(Date(ts))
 

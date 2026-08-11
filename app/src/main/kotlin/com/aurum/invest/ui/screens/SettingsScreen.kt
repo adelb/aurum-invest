@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -55,7 +56,7 @@ import com.aurum.invest.ui.components.SectionHeader
 import com.aurum.invest.ui.theme.AurumColors
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, onOpenFeed: () -> Unit = {}) {
     val vm: SettingsViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -102,6 +103,34 @@ fun SettingsScreen(onBack: () -> Unit) {
                         style = MaterialTheme.typography.headlineMedium,
                         color = AurumColors.text
                     )
+                }
+            }
+
+            item(key = "bank-feed-entry") {
+                Spacer(Modifier.height(20.dp))
+                SectionHeader(title = "Bank feed")
+                Spacer(Modifier.height(14.dp))
+                AurumCard(modifier = Modifier.fillMaxWidth(), onClick = onOpenFeed) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Captured trade alerts",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = AurumColors.text
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "Review and import trades caught from bank notifications",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AurumColors.textDim
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = AurumColors.textDim
+                        )
+                    }
                 }
             }
 

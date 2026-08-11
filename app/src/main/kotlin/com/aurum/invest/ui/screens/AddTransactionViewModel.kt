@@ -161,39 +161,6 @@ class AddTransactionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /**
-     * Sizes this trade at [pct]% of the money already invested, filling the
-     * amount field (shares follow from the price). On a sell of a held
-     * symbol, the percentage applies to that position instead — "sell 25%"
-     * means a quarter of those shares, which is what the number should mean
-     * on that side of the trade.
-     */
-    fun applyPercent(pct: Double) {
-        if (pct <= 0.0) return
-        _state.update { st ->
-            if (st.sellAll) return@update st
-            val held = st.held
-            if (st.side == TradeSide.SELL && held != null && held.shares > 0.0) {
-                val shares = held.shares * pct / 100.0
-                syncFromShares(
-                    st.copy(
-                        shares = shares8.format(shares),
-                        lastEdited = AddTxLastEdited.SHARES
-                    )
-                )
-            } else {
-                val base = st.investedTotal
-                if (base <= 0.0) return@update st
-                syncFromAmount(
-                    st.copy(
-                        amount = amount2.format(base * pct / 100.0),
-                        lastEdited = AddTxLastEdited.AMOUNT
-                    )
-                )
-            }
-        }
-    }
-
     fun onPriceChange(value: String) {
         _state.update { st ->
             val next = st.copy(price = sanitizeDecimal(value))

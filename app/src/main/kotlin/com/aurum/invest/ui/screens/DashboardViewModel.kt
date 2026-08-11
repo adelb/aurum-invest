@@ -32,8 +32,33 @@ data class HoldingRow(
     val view: PositionView,
     val spark: List<Double>,
     val advice: Advice?,
-    val ext: ExtendedHours? = null
-)
+    val ext: ExtendedHours? = null,
+    /** User's own profit target for this position, in percent; null when unset. */
+    val targetPct: Double? = null
+) {
+    /** The price this position must reach to realise [targetPct]. */
+    val targetPrice: Double?
+        get() = targetPct?.let {
+            com.aurum.invest.data.repo.TargetsRepository.sellPriceFor(view.position.avgCost, it)
+        }
+
+    /** How far the live price still is from the target, in percent. */
+    val distanceToTargetPct: Double?
+        get() {
+            val target = targetPrice ?: return null
+            val price = view.quote?.price ?: return null
+            if (price <= 0.0) return null
+            return (target - price) / price * 100.0
+        }
+
+    /** True once the live price has reached the target. */
+    val targetReached: Boolean
+        get() {
+            val target = targetPrice ?: return false
+            val price = view.quote?.price ?: return false
+            return price >= target
+        }
+}
 
 data class DashboardState(
     val loading: Boolean = true,
@@ -75,6 +100,20 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Sets (or clears, when [pct] is null) the profit target for [symbol].
+     * The card then shows the exact price that target implies.
+     */
+    fun setTarget(symbol: String, pct: Double?) {
+        viewModelScope.launch {
+            runCatching {
+                if (pct == null) container.targets.clearTarget(symbol)
+                else container.targets.setTarget(symbol, pct)
+            }
+            refresh()
+        }
+    }
+
+    /**
      * Deletes every ledger row for [symbol] — used to clear a test position.
      * Only that symbol is touched; the positions flow re-emits automatically.
      */
@@ -107,6 +146,9 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
             PortfolioRepository.toView(it, quotes[it.symbol], dayPl[it.symbol])
         }
         val summary = PortfolioRepository.summarize(openViews, allPositions, dayPl.values.sum())
+
+        val targets = runCatching { container.targets.getTargets(open.map { it.symbol }) }
+            .getOrDefault(emptyMap())
 
         val (rows, sectors) = coroutineScope {
             val sectorsD = async {
@@ -146,7 +188,13 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                             maxAgeMs = if (fresh) 0L else 300_000L
                         )
                     }.getOrNull()
-                    HoldingRow(view = view, spark = spark, advice = advice, ext = ext)
+                    HoldingRow(
+                        view = view,
+                        spark = spark,
+                        advice = advice,
+                        ext = ext,
+                        targetPct = targets[sym]
+                    )
                 }
             }.awaitAll()
             rowsList to sectorsD.await()

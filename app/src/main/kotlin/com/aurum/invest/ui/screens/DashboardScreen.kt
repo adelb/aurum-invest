@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -32,14 +34,19 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -50,6 +57,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -59,6 +67,7 @@ import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.PortfolioSummary
+import com.aurum.invest.data.repo.TargetsRepository
 import com.aurum.invest.ui.components.ActionBadge
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
@@ -84,6 +93,18 @@ fun DashboardScreen(
     val vm: DashboardViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
     var confirmRemove by remember { mutableStateOf<String?>(null) }
+    var targetFor by remember { mutableStateOf<HoldingRow?>(null) }
+
+    targetFor?.let { row ->
+        SellTargetDialog(
+            row = row,
+            onDismiss = { targetFor = null },
+            onSave = { pct ->
+                vm.setTarget(row.view.position.symbol, pct)
+                targetFor = null
+            }
+        )
+    }
 
     confirmRemove?.let { sym ->
         AlertDialog(
@@ -189,13 +210,12 @@ fun DashboardScreen(
                         )
                     }
                 } else {
-                    val investedTotal = state.holdings.sumOf { it.view.position.investedCost }
                     items(state.holdings, key = { it.view.position.symbol }) { row ->
                         HoldingCard(
                             row = row,
-                            investedTotal = investedTotal,
                             onClick = { onOpenDetail(row.view.position.symbol) },
                             onEdit = { onEditPosition(row.view.position.symbol) },
+                            onSetTarget = { targetFor = row },
                             onRemove = { confirmRemove = row.view.position.symbol }
                         )
                         Spacer(Modifier.height(14.dp))
@@ -512,18 +532,15 @@ private fun SummaryTiles(summary: PortfolioSummary?) {
 @Composable
 private fun HoldingCard(
     row: HoldingRow,
-    investedTotal: Double,
     onClick: () -> Unit,
     onEdit: () -> Unit,
+    onSetTarget: () -> Unit,
     onRemove: () -> Unit
 ) {
     val view = row.view
     val position = view.position
     val quote = view.quote
     val price = quote?.price ?: position.avgCost
-    // Share of the money actually put to work, from this position's cost basis.
-    val investedPct =
-        if (investedTotal > 0.0) position.investedCost / investedTotal * 100.0 else null
 
     AurumCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -534,13 +551,6 @@ private fun HoldingCard(
                         style = MaterialTheme.typography.titleMedium,
                         color = AurumColors.text
                     )
-                    if (investedPct != null) {
-                        Spacer(Modifier.width(8.dp))
-                        PillTag(
-                            text = "${Fmt.pct(investedPct)} of invested",
-                            color = AurumColors.gold
-                        )
-                    }
                 }
                 Text(
                     text = "${Fmt.qty(position.shares)} shares · ${Fmt.money(view.marketValue)}",
@@ -607,5 +617,211 @@ private fun HoldingCard(
             Spacer(Modifier.height(8.dp))
             ExtHoursChips(ext = row.ext)
         }
+        Spacer(Modifier.height(10.dp))
+        SellTargetFlag(row = row, onClick = onSetTarget)
     }
+}
+
+/**
+ * The sell flag: the exact price this position must reach for the profit
+ * percentage the user asked for, plus how far away it still is. Tap to set
+ * or change the percentage; it turns green the moment the price gets there.
+ */
+@Composable
+private fun SellTargetFlag(row: HoldingRow, onClick: () -> Unit) {
+    val targetPrice = row.targetPrice
+    val shape = RoundedCornerShape(10.dp)
+    if (targetPrice == null) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .background(AurumColors.surfaceHigh)
+                .clickable { onClick() }
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Rounded.Flag,
+                contentDescription = null,
+                tint = AurumColors.textDim,
+                modifier = Modifier.size(15.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "Set a profit target — Aurum shows the sell price",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
+        return
+    }
+
+    val reached = row.targetReached
+    val accent = if (reached) AurumColors.gain else AurumColors.gold
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(accent.copy(alpha = 0.10f))
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Rounded.Flag,
+            contentDescription = null,
+            tint = accent,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = if (reached) "Target reached — sell at ${Fmt.money(targetPrice)}"
+                else "Sell at ${Fmt.money(targetPrice)}",
+                style = MaterialTheme.typography.titleSmall,
+                color = accent
+            )
+            Spacer(Modifier.height(2.dp))
+            val distance = row.distanceToTargetPct
+            Text(
+                text = buildString {
+                    append("for ")
+                    append(Fmt.pct(row.targetPct ?: 0.0))
+                    append(" on ")
+                    append(Fmt.money(row.view.position.avgCost))
+                    append(" avg cost")
+                    if (distance != null && !reached) {
+                        append(" · ")
+                        append(Fmt.pct(distance))
+                        append(" to go")
+                    }
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
+        val gain = row.targetPct?.let { row.view.position.shares * row.view.position.avgCost * it / 100.0 }
+        if (gain != null) {
+            Text(
+                text = Fmt.signedMoney(gain),
+                style = MaterialTheme.typography.titleSmall,
+                color = accent
+            )
+        }
+    }
+}
+
+/** Enter any profit percentage; the sell price is computed live as you type. */
+@Composable
+private fun SellTargetDialog(
+    row: HoldingRow,
+    onDismiss: () -> Unit,
+    onSave: (Double?) -> Unit
+) {
+    var text by remember {
+        mutableStateOf(row.targetPct?.let { Fmt.trimNumber(it) } ?: "")
+    }
+    val pct = text.replace(",", "").trim().toDoubleOrNull()
+    val valid = pct != null && pct > 0.0
+    val avgCost = row.view.position.avgCost
+    val shares = row.view.position.shares
+    val price = row.view.quote?.price
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = AurumColors.surface,
+        titleContentColor = AurumColors.text,
+        textContentColor = AurumColors.textDim,
+        title = { Text("Profit target for ${row.view.position.symbol}") },
+        text = {
+            Column {
+                Text(
+                    text = "Enter the profit you want. Aurum computes the price to sell at.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+                Spacer(Modifier.height(14.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text("Target profit (%)") },
+                    placeholder = { Text("2.06") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(16.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = AurumColors.text,
+                        unfocusedTextColor = AurumColors.text,
+                        focusedBorderColor = AurumColors.gold,
+                        unfocusedBorderColor = AurumColors.hairline,
+                        focusedLabelColor = AurumColors.gold,
+                        unfocusedLabelColor = AurumColors.textDim,
+                        cursorColor = AurumColors.gold
+                    ),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (valid) {
+                    val target = TargetsRepository.sellPriceFor(avgCost, pct!!)
+                    Spacer(Modifier.height(14.dp))
+                    Text(
+                        text = "Sell at ${Fmt.money(target)}",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AurumColors.gold
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = buildString {
+                            append("on ")
+                            append(Fmt.money(avgCost))
+                            append(" average cost · ")
+                            append(Fmt.signedMoney(shares * avgCost * pct / 100.0))
+                            append(" on ")
+                            append(Fmt.qty(shares))
+                            append(" shares")
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.textDim
+                    )
+                    if (price != null && price > 0.0) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = if (price >= target) {
+                                "The price is already there — ${Fmt.money(price)} today."
+                            } else {
+                                "${Fmt.pct((target - price) / price * 100.0)} above today's " +
+                                    "${Fmt.money(price)}."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AurumColors.textDim
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { if (valid) onSave(pct) },
+                enabled = valid,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AurumColors.gold,
+                    contentColor = AurumColors.bg,
+                    disabledContainerColor = AurumColors.surfaceHigh,
+                    disabledContentColor = AurumColors.textDim
+                )
+            ) { Text("Set flag") }
+        },
+        dismissButton = {
+            Row {
+                if (row.targetPct != null) {
+                    TextButton(onClick = { onSave(null) }) {
+                        Text("Clear", color = AurumColors.loss)
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel", color = AurumColors.textDim)
+                }
+            }
+        }
+    )
 }
