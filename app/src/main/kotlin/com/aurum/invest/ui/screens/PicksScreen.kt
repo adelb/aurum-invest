@@ -42,6 +42,9 @@ import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.DailyPick
 import com.aurum.invest.data.model.EntryPick
 import com.aurum.invest.data.model.PowerPick
+import com.aurum.invest.analytics.NoteKind
+import com.aurum.invest.analytics.PickNote
+import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.DeltaPct
@@ -241,7 +244,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.dailyItems(
                 DailyPickCard(
                     pick = pick,
                     onOpen = { onOpenDetail(pick.symbol) },
-                    onAnalyze = { onOpenAnalysis(pick.symbol) }
+                    onAnalyze = { onOpenAnalysis(pick.symbol) },
+                    note = noteFor(state, pick.symbol)
                 )
             }
             item {
@@ -308,7 +312,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.powerItems(
                 PowerPickCard(
                     pick = pick,
                     onOpen = { onOpenDetail(pick.symbol) },
-                    onAnalyze = { onOpenAnalysis(pick.symbol) }
+                    onAnalyze = { onOpenAnalysis(pick.symbol) },
+                    note = noteFor(state, pick.symbol)
                 )
             }
             item {
@@ -352,7 +357,12 @@ private fun PowerWindowBanner() {
 }
 
 @Composable
-private fun PowerPickCard(pick: PowerPick, onOpen: () -> Unit, onAnalyze: () -> Unit) {
+private fun PowerPickCard(
+    pick: PowerPick,
+    onOpen: () -> Unit,
+    onAnalyze: () -> Unit,
+    note: PickNote? = null
+) {
     AurumCard(
         modifier = Modifier
             .fillMaxWidth()
@@ -478,6 +488,7 @@ private fun PowerPickCard(pick: PowerPick, onOpen: () -> Unit, onAnalyze: () -> 
                 )
             }
         }
+        PortfolioNoteTag(note)
     }
 }
 
@@ -531,7 +542,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
                 EntryPickCard(
                     pick = pick,
                     onOpen = { onOpenDetail(pick.symbol) },
-                    onAnalyze = { onOpenAnalysis(pick.symbol) }
+                    onAnalyze = { onOpenAnalysis(pick.symbol) },
+                    note = noteFor(state, pick.symbol)
                 )
             }
             item {
@@ -548,7 +560,12 @@ private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
 }
 
 @Composable
-private fun EntryPickCard(pick: EntryPick, onOpen: () -> Unit, onAnalyze: () -> Unit) {
+private fun EntryPickCard(
+    pick: EntryPick,
+    onOpen: () -> Unit,
+    onAnalyze: () -> Unit,
+    note: PickNote? = null
+) {
     AurumCard(
         modifier = Modifier
             .fillMaxWidth()
@@ -679,11 +696,17 @@ private fun EntryPickCard(pick: EntryPick, onOpen: () -> Unit, onAnalyze: () -> 
                 )
             }
         }
+        PortfolioNoteTag(note)
     }
 }
 
 @Composable
-private fun DailyPickCard(pick: DailyPick, onOpen: () -> Unit, onAnalyze: () -> Unit) {
+private fun DailyPickCard(
+    pick: DailyPick,
+    onOpen: () -> Unit,
+    onAnalyze: () -> Unit,
+    note: PickNote? = null
+) {
     AurumCard(
         modifier = Modifier
             .fillMaxWidth()
@@ -804,6 +827,7 @@ private fun DailyPickCard(pick: DailyPick, onOpen: () -> Unit, onAnalyze: () -> 
                 )
             }
         }
+        PortfolioNoteTag(note)
     }
 }
 
@@ -890,7 +914,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.weeklyItems(
             PickCard(
                 row = row,
                 onOpen = { onOpenDetail(row.pick.symbol) },
-                onAnalyze = { onOpenAnalysis(row.pick.symbol) }
+                onAnalyze = { onOpenAnalysis(row.pick.symbol) },
+                note = noteFor(state, row.pick.symbol)
             )
         }
     }
@@ -904,14 +929,20 @@ private fun androidx.compose.foundation.lazy.LazyListScope.weeklyItems(
             PickCard(
                 row = row,
                 onOpen = { onOpenDetail(row.pick.symbol) },
-                onAnalyze = { onOpenAnalysis(row.pick.symbol) }
+                onAnalyze = { onOpenAnalysis(row.pick.symbol) },
+                note = noteFor(state, row.pick.symbol)
             )
         }
     }
 }
 
 @Composable
-private fun PickCard(row: PickRow, onOpen: () -> Unit, onAnalyze: () -> Unit) {
+private fun PickCard(
+    row: PickRow,
+    onOpen: () -> Unit,
+    onAnalyze: () -> Unit,
+    note: PickNote? = null
+) {
     val pick = row.pick
     AurumCard(
         modifier = Modifier
@@ -1003,5 +1034,27 @@ private fun PickCard(row: PickRow, onOpen: () -> Unit, onAnalyze: () -> Unit) {
                 }
             }
         }
+        PortfolioNoteTag(note)
     }
+}
+
+// ------------------------------------------------------- portfolio context
+
+/** The pick's note against the user's live book — null when nothing factual applies. */
+private fun noteFor(state: PicksState, symbol: String): PickNote? =
+    PortfolioLens.pickNote(symbol, state.pickSectors[symbol], state.book)
+
+/** Renders a pick's portfolio note as a stamped tag; held gold, risk red, fresh blue. */
+@Composable
+private fun PortfolioNoteTag(note: PickNote?) {
+    if (note == null) return
+    Spacer(modifier = Modifier.height(10.dp))
+    PillTag(
+        text = note.text,
+        color = when (note.kind) {
+            NoteKind.HELD -> AurumColors.gold
+            NoteKind.CONCENTRATION -> AurumColors.loss
+            NoteKind.DIVERSIFIES -> AurumColors.info
+        }
+    )
 }

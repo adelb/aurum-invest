@@ -5,6 +5,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
 import com.aurum.invest.analytics.AdviceEngine
+import com.aurum.invest.analytics.BookContext
+import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.model.Advice
 import com.aurum.invest.data.model.ExtendedHours
@@ -36,7 +38,9 @@ data class HoldingRow(
 data class DashboardState(
     val loading: Boolean = true,
     val summary: PortfolioSummary? = null,
-    val holdings: List<HoldingRow> = emptyList()
+    val holdings: List<HoldingRow> = emptyList(),
+    /** The book sliced by sector — shared math with Picks and Wealth. */
+    val book: BookContext = BookContext.EMPTY
 )
 
 class DashboardViewModel(app: Application) : AndroidViewModel(app) {
@@ -104,8 +108,12 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
         }
         val summary = PortfolioRepository.summarize(openViews, allPositions, dayPl.values.sum())
 
-        val rows = coroutineScope {
-            openViews.map { view ->
+        val (rows, sectors) = coroutineScope {
+            val sectorsD = async {
+                runCatching { container.market.getSectors(open.map { it.symbol }) }
+                    .getOrDefault(emptyMap())
+            }
+            val rowsList = openViews.map { view ->
                 async {
                     val sym = view.position.symbol
                     val daily = try {
@@ -141,12 +149,14 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                     HoldingRow(view = view, spark = spark, advice = advice, ext = ext)
                 }
             }.awaitAll()
+            rowsList to sectorsD.await()
         }
 
         _state.value = DashboardState(
             loading = false,
             summary = summary,
-            holdings = rows.sortedByDescending { it.view.marketValue }
+            holdings = rows.sortedByDescending { it.view.marketValue },
+            book = PortfolioLens.build(openViews, sectors)
         )
     }
 }

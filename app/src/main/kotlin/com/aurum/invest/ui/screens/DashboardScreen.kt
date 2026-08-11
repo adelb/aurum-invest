@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +23,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -50,6 +53,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.aurum.invest.analytics.BookContext
+import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.PortfolioSummary
@@ -141,7 +146,7 @@ fun DashboardScreen(
                 if (state.holdings.size >= 2) {
                     item {
                         Spacer(Modifier.height(14.dp))
-                        AllocationCard(holdings = state.holdings)
+                        AllocationCard(holdings = state.holdings, book = state.book)
                     }
                 }
 
@@ -205,26 +210,65 @@ fun DashboardScreen(
 }
 
 /**
- * Where the money sits: one flat segmented bar of the open positions by
- * market value, with a wrap-around legend underneath.
+ * Where the money sits. Swipe between two reads of the SAME live values:
+ * page one is per stock, page two compounds the stocks into their sectors
+ * (via the shared [PortfolioLens], so Picks and Wealth agree with it).
  */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
-private fun AllocationCard(holdings: List<HoldingRow>) {
+private fun AllocationCard(holdings: List<HoldingRow>, book: BookContext) {
     val total = holdings.sumOf { it.view.marketValue }
     if (total <= 0.0) return
-    AurumCard {
-        Text(
-            text = "Allocation",
-            style = MaterialTheme.typography.labelMedium,
-            color = AurumColors.textDim
-        )
+    val pagerState = rememberPagerState { 2 }
+    AurumCard(modifier = Modifier.animateContentSize()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Allocation",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.textDim
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = if (pagerState.currentPage == 0) "By stock · swipe for sectors"
+                else "By sector",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+            Spacer(Modifier.width(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                repeat(2) { i ->
+                    Box(
+                        modifier = Modifier
+                            .size(5.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (pagerState.currentPage == i) AurumColors.gold
+                                else AurumColors.hairline
+                            )
+                    )
+                }
+            }
+        }
         Spacer(Modifier.height(10.dp))
+        HorizontalPager(state = pagerState, verticalAlignment = Alignment.Top) { page ->
+            if (page == 0) {
+                StockAllocation(holdings = holdings, total = total)
+            } else {
+                SectorAllocation(book = book)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun StockAllocation(holdings: List<HoldingRow>, total: Double) {
+    Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(10.dp)
-                .clip(RoundedCornerShape(5.dp)),
+                .height(8.dp)
+                .clip(RoundedCornerShape(2.dp)),
             horizontalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             holdings.forEachIndexed { i, row ->
@@ -234,7 +278,7 @@ private fun AllocationCard(holdings: List<HoldingRow>) {
                         modifier = Modifier
                             .weight(weight)
                             .fillMaxHeight()
-                            .clip(RoundedCornerShape(3.dp))
+                            .clip(RoundedCornerShape(1.dp))
                             .background(
                                 AurumColors.allocation[i % AurumColors.allocation.size]
                             )
@@ -251,8 +295,8 @@ private fun AllocationCard(holdings: List<HoldingRow>) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
+                            .size(7.dp)
+                            .clip(RoundedCornerShape(1.dp))
                             .background(
                                 AurumColors.allocation[i % AurumColors.allocation.size]
                             )
@@ -264,6 +308,71 @@ private fun AllocationCard(holdings: List<HoldingRow>) {
                         color = AurumColors.textDim
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectorAllocation(book: BookContext) {
+    if (book.isEmpty) {
+        Text(
+            text = "Sector data is still loading — swipe back, or pull to refresh.",
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+        return
+    }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(8.dp)
+                .clip(RoundedCornerShape(2.dp)),
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            book.slices.forEachIndexed { i, slice ->
+                val weight = (slice.weightPct / 100.0).toFloat()
+                if (weight > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .weight(weight)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(1.dp))
+                            .background(
+                                AurumColors.allocation[i % AurumColors.allocation.size]
+                            )
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        book.slices.forEachIndexed { i, slice ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(vertical = 3.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(RoundedCornerShape(1.dp))
+                        .background(
+                            AurumColors.allocation[i % AurumColors.allocation.size]
+                        )
+                )
+                Text(
+                    text = "  ${slice.sector}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = AurumColors.text
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = slice.symbols.take(4).joinToString(", ") +
+                        (if (slice.symbols.size > 4) " +${slice.symbols.size - 4}" else "") +
+                        "  ·  " + Fmt.pct(slice.weightPct),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
             }
         }
     }

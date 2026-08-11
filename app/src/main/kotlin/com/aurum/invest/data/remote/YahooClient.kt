@@ -253,6 +253,34 @@ class YahooClient {
             }
         }
 
+    /**
+     * Yahoo's sector classification for a symbol ("Technology", "Energy", ...),
+     * read from the search API's exact-symbol match — the one cookie-free
+     * endpoint that carries it. Null when Yahoo doesn't classify the name.
+     */
+    suspend fun fetchSector(symbol: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val url = "https://query1.finance.yahoo.com/v1/finance/search".toHttpUrl()
+                .newBuilder()
+                .addQueryParameter("q", symbol)
+                .addQueryParameter("quotesCount", "6")
+                .addQueryParameter("newsCount", "0")
+                .build()
+                .toString()
+            val root = getJson(url) ?: return@withContext null
+            val quotes = root.optJSONArray("quotes") ?: return@withContext null
+            for (i in 0 until quotes.length()) {
+                val q = quotes.optJSONObject(i) ?: continue
+                if (!q.optString("symbol").equals(symbol, ignoreCase = true)) continue
+                val sector = q.optString("sector", "").ifBlank { q.optString("sectorDisp", "") }
+                return@withContext sector.ifBlank { null }
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     /** v1 search API — (symbol, shortname) pairs, US equities only, max 8. */
     suspend fun searchSymbols(query: String): List<Pair<String, String>> =
         withContext(Dispatchers.IO) {

@@ -12,6 +12,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import com.aurum.invest.ui.theme.AurumColors
 import kotlinx.coroutines.flow.first
@@ -42,7 +43,10 @@ fun AurumRefreshBox(
             state.endRefresh()
         }
     }
-    Box(modifier = modifier.nestedScroll(state.nestedScrollConnection)) {
+    // clipToBounds: at rest the indicator parks just ABOVE this box; without
+    // the clip it bleeds over whatever sits above (headers, tabs, search) as
+    // a stale floating circle. Clipped, it only appears while actually pulled.
+    Box(modifier = modifier.clipToBounds().nestedScroll(state.nestedScrollConnection)) {
         content()
         PullToRefreshContainer(
             state = state,

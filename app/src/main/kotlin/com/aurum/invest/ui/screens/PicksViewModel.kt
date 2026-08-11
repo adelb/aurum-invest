@@ -4,16 +4,21 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
+import com.aurum.invest.analytics.BookContext
+import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.model.DailyPick
 import com.aurum.invest.data.model.EntryPick
 import com.aurum.invest.data.model.PowerPick
 import com.aurum.invest.data.model.Quote
 import com.aurum.invest.data.model.WeeklyPick
+import com.aurum.invest.data.repo.PortfolioRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -43,7 +48,11 @@ data class PicksState(
     // Power hour — buy in the last 90 min of the session for next-day strength.
     val powerRows: List<PowerPick> = emptyList(),
     val powerLoading: Boolean = true,
-    val powerRefreshing: Boolean = false
+    val powerRefreshing: Boolean = false,
+    // The user's book + sector classification of visible picks, so every
+    // suggestion can be read against what is actually held.
+    val book: BookContext = BookContext.EMPTY,
+    val pickSectors: Map<String, String> = emptyMap()
 )
 
 class PicksViewModel(app: Application) : AndroidViewModel(app) {
@@ -140,6 +149,40 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val power = picks.ensurePower()
             _state.update { it.copy(powerRows = power, powerLoading = false) }
+        }
+        // The user's book, kept live so pick notes stay accurate after trades.
+        viewModelScope.launch {
+            container.portfolio.observePositions().collectLatest { positions ->
+                val open = positions.filter { PortfolioRepository.isOpen(it) }
+                if (open.isEmpty()) {
+                    _state.update { it.copy(book = BookContext.EMPTY) }
+                    return@collectLatest
+                }
+                val quotes = market.getQuotes(open.map { it.symbol })
+                val views = open.map { PortfolioRepository.toView(it, quotes[it.symbol]) }
+                val sectors = market.getSectors(open.map { it.symbol })
+                _state.update { it.copy(book = PortfolioLens.build(views, sectors)) }
+            }
+        }
+        // Classify whichever picks are on screen; cached lookups make this cheap.
+        viewModelScope.launch {
+            _state
+                .map { st ->
+                    (st.rows.map { it.pick.symbol } +
+                        st.budgetRows.map { it.pick.symbol } +
+                        st.dailyRows.map { it.symbol } +
+                        st.entryRows.map { it.symbol } +
+                        st.powerRows.map { it.symbol }).toSet()
+                }
+                .distinctUntilChanged()
+                .collect { symbols ->
+                    val missing = symbols - _state.value.pickSectors.keys
+                    if (missing.isEmpty()) return@collect
+                    val fetched = market.getSectors(missing.toList())
+                    if (fetched.isNotEmpty()) {
+                        _state.update { it.copy(pickSectors = it.pickSectors + fetched) }
+                    }
+                }
         }
     }
 

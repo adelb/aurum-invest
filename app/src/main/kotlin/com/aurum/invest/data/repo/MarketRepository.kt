@@ -155,6 +155,38 @@ class MarketRepository(
             emptyList()
         }
 
+    /**
+     * Yahoo's sector for a symbol. Effectively static data — cached 30 days;
+     * only successful lookups are cached, so an unknown stays honestly null
+     * (never guessed) and is retried on a later visit.
+     */
+    suspend fun getSector(symbol: String, maxAgeMs: Long = 30L * 24 * 3_600_000L): String? {
+        val key = "sector:$symbol"
+        val now = System.currentTimeMillis()
+        val cached = readCache(key)
+        if (cached != null && now - cached.updatedAt <= maxAgeMs && cached.json.isNotBlank()) {
+            return cached.json
+        }
+        val fresh = yahoo.fetchSector(symbol)
+        if (!fresh.isNullOrBlank()) {
+            writeCache(key, fresh)
+            return fresh
+        }
+        return cached?.json?.takeIf { it.isNotBlank() }
+    }
+
+    /** Sectors for many symbols, concurrently; unknown symbols are simply absent. */
+    suspend fun getSectors(symbols: List<String>): Map<String, String> {
+        if (symbols.isEmpty()) return emptyMap()
+        return coroutineScope {
+            symbols.distinct()
+                .map { s -> async { s to getSector(s) } }
+                .awaitAll()
+                .mapNotNull { (s, sector) -> sector?.let { s to it } }
+                .toMap()
+        }
+    }
+
     // ---- cache plumbing ----------------------------------------------------
 
     private suspend fun readCache(key: String): CacheEntity? =

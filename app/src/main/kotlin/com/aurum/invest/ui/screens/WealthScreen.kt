@@ -50,9 +50,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.foundation.layout.fillMaxHeight
+import com.aurum.invest.analytics.BookContext
 import com.aurum.invest.analytics.MarketCall
 import com.aurum.invest.analytics.MarketMover
 import com.aurum.invest.analytics.MarketRating
+import com.aurum.invest.analytics.NoteKind
+import com.aurum.invest.analytics.PickNote
+import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.analytics.SectorTrend
 import com.aurum.invest.analytics.SectorTrends
 import com.aurum.invest.analytics.TomorrowPick
@@ -200,6 +205,8 @@ fun WealthScreen(onOpenAnalysis: (String) -> Unit, onOpenDetail: (String) -> Uni
                         plan = state.plan!!,
                         pulse = state.pulse,
                         pulseLoading = state.pulseLoading,
+                        book = state.book,
+                        pulseSectors = state.pulseSectors,
                         onOpenAnalysis = onOpenAnalysis,
                         onOpenDetail = onOpenDetail
                     )
@@ -322,6 +329,8 @@ private fun PlanContent(
     plan: WealthPlan,
     pulse: MarketRating?,
     pulseLoading: Boolean,
+    book: BookContext,
+    pulseSectors: Map<String, String>,
     onOpenAnalysis: (String) -> Unit,
     onOpenDetail: (String) -> Unit
 ) {
@@ -332,16 +341,21 @@ private fun PlanContent(
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item { MarketPulseCard(pulse = pulse, loading = pulseLoading) }
+        if (!book.isEmpty) {
+            item { BookCard(book = book, plan = plan) }
+        }
         if (pulse != null && pulse.call != MarketCall.DEFENSIVE) {
             if (pulse.bestYesterday.isNotEmpty()) {
                 item {
                     SectionHeader(title = "Last session's best performers")
                 }
                 items(pulse.bestYesterday.size) { i ->
+                    val mover = pulse.bestYesterday[i]
                     MoverRow(
                         rank = i + 1,
-                        mover = pulse.bestYesterday[i],
-                        onOpen = { onOpenDetail(pulse.bestYesterday[i].symbol) }
+                        mover = mover,
+                        note = PortfolioLens.pickNote(mover.symbol, pulseSectors[mover.symbol], book),
+                        onOpen = { onOpenDetail(mover.symbol) }
                     )
                 }
             }
@@ -350,10 +364,12 @@ private fun PlanContent(
                     SectionHeader(title = "Positioned for the next session")
                 }
                 items(pulse.nextDay.size) { i ->
+                    val pick = pulse.nextDay[i]
                     TomorrowRow(
-                        pick = pulse.nextDay[i],
-                        onOpen = { onOpenDetail(pulse.nextDay[i].symbol) },
-                        onAnalyze = { onOpenAnalysis(pulse.nextDay[i].symbol) }
+                        pick = pick,
+                        note = PortfolioLens.pickNote(pick.symbol, pulseSectors[pick.symbol], book),
+                        onOpen = { onOpenDetail(pick.symbol) },
+                        onAnalyze = { onOpenAnalysis(pick.symbol) }
                     )
                 }
             }
@@ -533,8 +549,118 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
     }
 }
 
+/**
+ * The invested book by sector — the same PortfolioLens math the dashboard
+ * allocation card and the Picks tags use, so the numbers agree everywhere.
+ */
 @Composable
-private fun MoverRow(rank: Int, mover: MarketMover, onOpen: () -> Unit) {
+private fun BookCard(book: BookContext, plan: WealthPlan) {
+    val trending = plan.topSectors.firstOrNull()
+    val notes = PortfolioLens.exposureNotes(book, trending?.key, trending?.label)
+    AurumCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Your book",
+                style = MaterialTheme.typography.titleMedium,
+                color = AurumColors.text
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = Fmt.money(book.totalValue),
+                style = MaterialTheme.typography.titleSmall,
+                color = AurumColors.text
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(8.dp)
+                .clip(RoundedCornerShape(4.dp)),
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            book.slices.forEachIndexed { i, slice ->
+                val weight = (slice.weightPct / 100.0).toFloat()
+                if (weight > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .weight(weight)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(
+                                AurumColors.allocation[i % AurumColors.allocation.size]
+                            )
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        book.slices.take(4).forEachIndexed { i, slice ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(vertical = 2.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(AurumColors.allocation[i % AurumColors.allocation.size])
+                )
+                Text(
+                    text = "  ${slice.sector}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = AurumColors.text
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = Fmt.pct(slice.weightPct),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        if (notes.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            notes.forEach { note ->
+                Row(modifier = Modifier.padding(vertical = 2.dp)) {
+                    Text(
+                        text = "•  ",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.gold
+                    )
+                    Text(
+                        text = note,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** A pick's portfolio note as a stamped tag; held gold, risk red, fresh blue. */
+@Composable
+private fun WealthNoteTag(note: PickNote?) {
+    if (note == null) return
+    Spacer(Modifier.height(8.dp))
+    PillTag(
+        text = note.text,
+        color = when (note.kind) {
+            NoteKind.HELD -> AurumColors.gold
+            NoteKind.CONCENTRATION -> AurumColors.loss
+            NoteKind.DIVERSIFIES -> AurumColors.info
+        }
+    )
+}
+
+@Composable
+private fun MoverRow(
+    rank: Int,
+    mover: MarketMover,
+    note: PickNote? = null,
+    onOpen: () -> Unit
+) {
     AurumCard(onClick = onOpen) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -573,11 +699,17 @@ private fun MoverRow(rank: Int, mover: MarketMover, onOpen: () -> Unit) {
                 )
             }
         }
+        WealthNoteTag(note)
     }
 }
 
 @Composable
-private fun TomorrowRow(pick: TomorrowPick, onOpen: () -> Unit, onAnalyze: () -> Unit) {
+private fun TomorrowRow(
+    pick: TomorrowPick,
+    note: PickNote? = null,
+    onOpen: () -> Unit,
+    onAnalyze: () -> Unit
+) {
     AurumCard(onClick = onOpen) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
@@ -653,6 +785,7 @@ private fun TomorrowRow(pick: TomorrowPick, onOpen: () -> Unit, onAnalyze: () ->
                 color = AurumColors.textDim
             )
         }
+        WealthNoteTag(note)
     }
 }
 
