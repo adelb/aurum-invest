@@ -1,5 +1,7 @@
 package com.aurum.invest.data.repo
 
+import com.aurum.invest.analytics.MarketPulse
+import com.aurum.invest.analytics.MarketRating
 import com.aurum.invest.analytics.WealthPlan
 import com.aurum.invest.analytics.WealthPlanner
 import com.aurum.invest.core.Dates
@@ -23,6 +25,7 @@ class WealthRepository(
 
     companion object {
         private const val PLAN_KEY = "wealthplan"
+        private const val PULSE_KEY = "marketpulse"
     }
 
     /** (base, target) or null when the user has not set the inputs yet. */
@@ -92,5 +95,43 @@ class WealthRepository(
     suspend fun recomputeIfConfigured(): WealthPlan? {
         getInputs() ?: return null
         return recompute()
+    }
+
+    // ---- market pulse -------------------------------------------------------
+
+    /**
+     * The whole-market rating for the Wealth header. Served from cache while
+     * fresh (30 min); recomputed otherwise, with the stale copy as fallback.
+     */
+    suspend fun getMarketPulse(maxAgeMs: Long = 1_800_000L): MarketRating? {
+        val cached = try {
+            cacheDao.get(PULSE_KEY)
+        } catch (_: Exception) {
+            null
+        }
+        val now = System.currentTimeMillis()
+        if (cached != null && now - cached.updatedAt <= maxAgeMs) {
+            MarketPulse.fromJson(cached.json)?.let { return it }
+        }
+        return recomputeMarketPulse() ?: cached?.let { MarketPulse.fromJson(it.json) }
+    }
+
+    /** Recomputes the market rating from live data and stores it. */
+    suspend fun recomputeMarketPulse(): MarketRating? {
+        return try {
+            val rating = MarketPulse(market).compute(Dates.todayIso())
+            if (rating != null) {
+                cacheDao.put(
+                    CacheEntity(
+                        key = PULSE_KEY,
+                        json = MarketPulse.toJson(rating),
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+            }
+            rating
+        } catch (_: Exception) {
+            null
+        }
     }
 }

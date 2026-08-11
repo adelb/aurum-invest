@@ -50,8 +50,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.aurum.invest.analytics.MarketCall
+import com.aurum.invest.analytics.MarketMover
+import com.aurum.invest.analytics.MarketRating
 import com.aurum.invest.analytics.SectorTrend
 import com.aurum.invest.analytics.SectorTrends
+import com.aurum.invest.analytics.TomorrowPick
 import com.aurum.invest.analytics.WealthAllocation
 import com.aurum.invest.analytics.WealthPlan
 import com.aurum.invest.core.Fmt
@@ -59,6 +63,8 @@ import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.PillTag
+import com.aurum.invest.ui.components.ScoreBar
+import com.aurum.invest.ui.components.SectionHeader
 import com.aurum.invest.ui.components.SentimentDot
 import com.aurum.invest.ui.components.StatTile
 import com.aurum.invest.ui.theme.AurumColors
@@ -192,6 +198,8 @@ fun WealthScreen(onOpenAnalysis: (String) -> Unit, onOpenDetail: (String) -> Uni
                 ) {
                     PlanContent(
                         plan = state.plan!!,
+                        pulse = state.pulse,
+                        pulseLoading = state.pulseLoading,
                         onOpenAnalysis = onOpenAnalysis,
                         onOpenDetail = onOpenDetail
                     )
@@ -312,6 +320,8 @@ private fun SetupForm(
 @Composable
 private fun PlanContent(
     plan: WealthPlan,
+    pulse: MarketRating?,
+    pulseLoading: Boolean,
     onOpenAnalysis: (String) -> Unit,
     onOpenDetail: (String) -> Unit
 ) {
@@ -321,6 +331,33 @@ private fun PlanContent(
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 28.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        item { MarketPulseCard(pulse = pulse, loading = pulseLoading) }
+        if (pulse != null && pulse.call != MarketCall.DEFENSIVE) {
+            if (pulse.bestYesterday.isNotEmpty()) {
+                item {
+                    SectionHeader(title = "Last session's best performers")
+                }
+                items(pulse.bestYesterday.size) { i ->
+                    MoverRow(
+                        rank = i + 1,
+                        mover = pulse.bestYesterday[i],
+                        onOpen = { onOpenDetail(pulse.bestYesterday[i].symbol) }
+                    )
+                }
+            }
+            if (pulse.nextDay.isNotEmpty()) {
+                item {
+                    SectionHeader(title = "Positioned for the next session")
+                }
+                items(pulse.nextDay.size) { i ->
+                    TomorrowRow(
+                        pick = pulse.nextDay[i],
+                        onOpen = { onOpenDetail(pulse.nextDay[i].symbol) },
+                        onAnalyze = { onOpenAnalysis(pulse.nextDay[i].symbol) }
+                    )
+                }
+            }
+        }
         item { GoalCard(plan) }
         item { SectorCard(plan, onOpenAnalysis) }
 
@@ -355,6 +392,265 @@ private fun PlanContent(
                 style = MaterialTheme.typography.labelSmall,
                 color = AurumColors.textDim,
                 modifier = Modifier.padding(horizontal = 4.dp)
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------- market pulse
+
+@Composable
+private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
+    AurumCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Market pulse",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AurumColors.text
+                )
+                Text(
+                    text = when {
+                        pulse != null -> "Updated ${Fmt.timeAgo(pulse.computedAt)}"
+                        loading -> "Reading the market…"
+                        else -> "Market data unreachable"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+            if (loading && pulse == null) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    color = AurumColors.gold,
+                    strokeWidth = 2.dp
+                )
+            } else if (pulse != null) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        text = "${pulse.score}",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = when (pulse.call) {
+                            MarketCall.INVEST -> AurumColors.gain
+                            MarketCall.SELECTIVE -> AurumColors.gold
+                            MarketCall.DEFENSIVE -> AurumColors.loss
+                        }
+                    )
+                    Text(
+                        text = " /100",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
+        }
+        if (pulse == null) {
+            if (!loading) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "Pull down to try again.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+            }
+            return@AurumCard
+        }
+
+        Spacer(Modifier.height(10.dp))
+        ScoreBar(score = pulse.score.toDouble(), modifier = Modifier.fillMaxWidth())
+
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            when (pulse.call) {
+                MarketCall.INVEST -> PillTag(text = "Worth investing this week", color = AurumColors.gain)
+                MarketCall.SELECTIVE -> PillTag(text = "Selective entries only", color = AurumColors.gold)
+                MarketCall.DEFENSIVE -> PillTag(text = "Not this week", color = AurumColors.loss)
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = pulse.headline,
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = pulse.advice,
+            style = MaterialTheme.typography.bodyMedium,
+            color = AurumColors.textDim
+        )
+
+        if (pulse.reasons.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            pulse.reasons.forEach { reason ->
+                Row(modifier = Modifier.padding(vertical = 2.dp)) {
+                    Text(
+                        text = "•  ",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.gold
+                    )
+                    Text(
+                        text = reason,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
+        }
+
+        if (pulse.indexes.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Row(modifier = Modifier.fillMaxWidth()) {
+                pulse.indexes.forEach { ix ->
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = ix.name,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AurumColors.textDim
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        DeltaPct(
+                            value = ix.r5Pct,
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = "5 days · ${Fmt.signedPct(ix.vs50Pct)} vs 50d",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AurumColors.textDim
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = "Live index, breadth and screener data · decision support, not financial advice",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+    }
+}
+
+@Composable
+private fun MoverRow(rank: Int, mover: MarketMover, onOpen: () -> Unit) {
+    AurumCard(onClick = onOpen) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "%02d".format(rank),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = AurumColors.gold
+            )
+            Spacer(Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = mover.symbol,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text
+                )
+                Text(
+                    text = mover.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                DeltaPct(
+                    value = mover.dayChangePct,
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Text(
+                    text = buildString {
+                        append(Fmt.money(mover.price))
+                        if (mover.volumeRatio > 0.0) append(" · ${mover.volumeRatio}x vol")
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TomorrowRow(pick: TomorrowPick, onOpen: () -> Unit, onAnalyze: () -> Unit) {
+    AurumCard(onClick = onOpen) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = pick.symbol,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text
+                )
+                Text(
+                    text = pick.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = Fmt.money(pick.price),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text
+                )
+                DeltaPct(
+                    value = pick.dayChangePct,
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+            IconButton(onClick = onAnalyze, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    Icons.Rounded.QueryStats,
+                    contentDescription = "Open ${pick.symbol} analysis",
+                    tint = AurumColors.gold
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = pick.reason,
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Entry ${Fmt.money(pick.entry)}",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.gold
+            )
+            Text(
+                text = "  ·  next session ",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.textDim
+            )
+            Text(
+                text = Fmt.signedPct(pick.expectedLowPct),
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.loss
+            )
+            Text(
+                text = " … ",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.textDim
+            )
+            Text(
+                text = Fmt.signedPct(pick.expectedHighPct),
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.gain
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = "Score ${pick.score}",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
             )
         }
     }

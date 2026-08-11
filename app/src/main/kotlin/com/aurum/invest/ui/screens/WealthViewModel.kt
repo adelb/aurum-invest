@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
+import com.aurum.invest.analytics.MarketRating
 import com.aurum.invest.analytics.WealthPlan
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,7 +20,10 @@ data class WealthState(
     val targetProfit: Double? = null,
     val plan: WealthPlan? = null,
     /** True while the setup form is showing (first run or user editing). */
-    val editing: Boolean = false
+    val editing: Boolean = false,
+    /** Whole-market rating; null while loading or when the market is unreachable. */
+    val pulse: MarketRating? = null,
+    val pulseLoading: Boolean = true
 )
 
 class WealthViewModel(app: Application) : AndroidViewModel(app) {
@@ -30,6 +34,11 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<WealthState> = _state.asStateFlow()
 
     init {
+        // The market pulse is independent of the user's plan inputs.
+        viewModelScope.launch {
+            val pulse = wealth.getMarketPulse()
+            _state.update { it.copy(pulse = pulse, pulseLoading = false) }
+        }
         viewModelScope.launch {
             val inputs = wealth.getInputs()
             if (inputs == null) {
@@ -67,9 +76,14 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Re-runs this week's full market scan. */
+    /** Re-runs this week's full market scan — the plan AND the market pulse. */
     fun refresh() {
         if (_state.value.computing) return
+        viewModelScope.launch {
+            _state.update { it.copy(pulseLoading = true) }
+            val pulse = wealth.recomputeMarketPulse()
+            _state.update { it.copy(pulse = pulse ?: it.pulse, pulseLoading = false) }
+        }
         viewModelScope.launch {
             _state.update { it.copy(computing = true) }
             val plan = wealth.recompute()
