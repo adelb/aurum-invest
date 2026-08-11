@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.AdviceAction
+import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.ui.theme.AurumColors
 
 /** Flat segmented toggle — gold fill marks the selected option. */
@@ -78,6 +79,43 @@ fun SegmentedToggle(
                 )
             }
         }
+    }
+}
+
+/**
+ * Extended-hours chips: "Pre-market +1.2%" and "After hours −0.3%".
+ * Renders nothing when the session has neither print.
+ */
+@Composable
+fun ExtHoursChips(ext: ExtendedHours?, modifier: Modifier = Modifier) {
+    val pre = ext?.preMarketPct
+    val post = ext?.postMarketPct
+    if (pre == null && post == null) return
+    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (pre != null) ExtHoursChip(label = "Pre-market", value = pre)
+        if (post != null) ExtHoursChip(label = "After hours", value = post)
+    }
+}
+
+@Composable
+private fun ExtHoursChip(label: String, value: Double) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(AurumColors.surfaceHigh)
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+        Text(
+            text = " ${Fmt.signedPct(value)}",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.deltaColor(value)
+        )
     }
 }
 

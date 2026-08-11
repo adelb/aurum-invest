@@ -7,6 +7,8 @@ import com.aurum.invest.AurumApp
 import com.aurum.invest.analytics.AdviceEngine
 import com.aurum.invest.analytics.GoldCorrelation
 import com.aurum.invest.data.model.Advice
+import com.aurum.invest.data.model.Candle
+import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.GoldRelation
 import com.aurum.invest.data.model.NewsItem
 import com.aurum.invest.data.model.Position
@@ -23,12 +25,26 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+/** One chart series: closes with index-aligned bar timestamps. */
+data class ChartSeries(
+    val closes: List<Double> = emptyList(),
+    val timestamps: List<Long> = emptyList()
+) {
+    companion object {
+        fun of(candles: List<Candle>): ChartSeries =
+            ChartSeries(candles.map { it.close }, candles.map { it.ts })
+    }
+}
+
 data class DetailState(
     val loading: Boolean = true,
     val symbol: String = "",
     val quote: Quote? = null,
-    val intradayCloses: List<Double> = emptyList(),
-    val dailyCloses: List<Double> = emptyList(),
+    val chart1D: ChartSeries = ChartSeries(),
+    val chart1W: ChartSeries = ChartSeries(),
+    val chart1M: ChartSeries = ChartSeries(),
+    val chart3M: ChartSeries = ChartSeries(),
+    val ext: ExtendedHours? = null,
     val position: Position? = null,
     val view: PositionView? = null,
     val isHeld: Boolean = false,
@@ -71,7 +87,10 @@ class PositionDetailViewModel(app: Application) : AndroidViewModel(app) {
                 coroutineScope {
                     val quoteD = async { container.market.getQuote(symKey) }
                     val intradayD = async { container.market.getIntraday(symKey) }
+                    val weekD = async { container.market.getRangeCandles(symKey, "5d", "30m") }
+                    val monthD = async { container.market.getRangeCandles(symKey, "1mo", "60m") }
                     val dailyD = async { container.market.getDailyCandles(symKey, 120) }
+                    val extD = async { container.market.getExtendedHours(symKey) }
                     val goldD = async { container.market.getGoldCandles() }
                     val positionsD = async { container.portfolio.positionsNow() }
                     val watchD = async {
@@ -113,8 +132,11 @@ class PositionDetailViewModel(app: Application) : AndroidViewModel(app) {
                         loading = false,
                         symbol = symKey,
                         quote = quote,
-                        intradayCloses = intraday.map { it.close },
-                        dailyCloses = daily.map { it.close },
+                        chart1D = ChartSeries.of(intraday),
+                        chart1W = ChartSeries.of(weekD.await()),
+                        chart1M = ChartSeries.of(monthD.await()),
+                        chart3M = ChartSeries.of(daily),
+                        ext = runCatching { extD.await() }.getOrNull(),
                         position = position,
                         view = view,
                         isHeld = position != null,

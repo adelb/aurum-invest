@@ -50,6 +50,9 @@ object Fmt {
     fun dateTime(ts: Long): String =
         SimpleDateFormat("MMM d, HH:mm", Locale.US).format(Date(ts))
 
+    fun timeShort(ts: Long): String =
+        SimpleDateFormat("HH:mm", Locale.US).format(Date(ts))
+
     fun timeAgo(ts: Long): String {
         val diff = System.currentTimeMillis() - ts
         val min = diff / 60_000

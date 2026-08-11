@@ -10,6 +10,7 @@ import com.aurum.invest.data.db.WatchItemEntity
 import com.aurum.invest.data.model.Advice
 import com.aurum.invest.data.model.GoldLink
 import com.aurum.invest.data.model.Quote
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -19,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -37,7 +39,8 @@ data class WatchState(
     val rows: List<WatchRow> = emptyList(),
     val suggestions: List<Pair<String, String>> = emptyList(),
     val query: String = "",
-    val loading: Boolean = true
+    val loading: Boolean = true,
+    val refreshing: Boolean = false
 )
 
 class WatchlistViewModel(app: Application) : AndroidViewModel(app) {
@@ -50,16 +53,27 @@ class WatchlistViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<WatchState> = _state.asStateFlow()
 
     private var searchJob: Job? = null
+    private val refreshTick = MutableStateFlow(0)
+    private val forceFresh = AtomicBoolean(false)
 
     init {
         viewModelScope.launch {
-            watch.observeAll().collectLatest { items -> loadRows(items) }
+            combine(watch.observeAll(), refreshTick) { items, _ -> items }
+                .collectLatest { items -> loadRows(items) }
         }
     }
 
+    /** Pull-to-refresh: re-hydrates every row with cache-bypassing quotes. */
+    fun refresh() {
+        forceFresh.set(true)
+        _state.update { it.copy(refreshing = true) }
+        refreshTick.update { it + 1 }
+    }
+
     private suspend fun loadRows(items: List<WatchItemEntity>) {
+        val fresh = forceFresh.getAndSet(false)
         if (items.isEmpty()) {
-            _state.update { it.copy(rows = emptyList(), loading = false) }
+            _state.update { it.copy(rows = emptyList(), loading = false, refreshing = false) }
             return
         }
         // Seed placeholder rows immediately so new symbols and pin toggles feel instant;
@@ -84,10 +98,11 @@ class WatchlistViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         val goldCandles = if (items.any { it.pinned }) market.getGoldCandles() else emptyList()
+        val quoteMaxAge = if (fresh) 0L else 60_000L
         val rows = coroutineScope {
             items.map { item ->
                 async {
-                    val quote = market.getQuote(item.symbol)
+                    val quote = market.getQuote(item.symbol, maxAgeMs = quoteMaxAge)
                     val daily = market.getDailyCandles(item.symbol, 120)
                     val spark = daily.takeLast(30).map { c -> c.close }
                     val advice = if (quote != null && daily.isNotEmpty()) {
@@ -108,7 +123,7 @@ class WatchlistViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }.awaitAll()
         }
-        _state.update { it.copy(rows = rows, loading = false) }
+        _state.update { it.copy(rows = rows, loading = false, refreshing = false) }
     }
 
     /** Debounced ticker search: >= 2 chars, 300 ms after the last keystroke. */

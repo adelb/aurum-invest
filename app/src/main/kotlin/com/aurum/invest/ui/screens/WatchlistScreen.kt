@@ -52,6 +52,7 @@ import com.aurum.invest.ui.components.ActionBadge
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.EmptyState
+import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.PillTag
 import com.aurum.invest.ui.components.SectionHeader
 import com.aurum.invest.ui.components.Sparkline
@@ -134,6 +135,11 @@ fun WatchlistScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
             }
         }
 
+        AurumRefreshBox(
+            refreshing = state.refreshing,
+            onRefresh = vm::refresh,
+            modifier = Modifier.fillMaxSize()
+        ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 28.dp),
@@ -171,6 +177,7 @@ fun WatchlistScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
                     )
                 }
             }
+        }
         }
     }
 }

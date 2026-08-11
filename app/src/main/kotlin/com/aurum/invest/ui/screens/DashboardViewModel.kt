@@ -7,6 +7,7 @@ import com.aurum.invest.AurumApp
 import com.aurum.invest.analytics.AdviceEngine
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.model.Advice
+import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.PortfolioSummary
 import com.aurum.invest.data.model.Position
 import com.aurum.invest.data.model.PositionView
@@ -28,7 +29,8 @@ import kotlinx.coroutines.launch
 data class HoldingRow(
     val view: PositionView,
     val spark: List<Double>,
-    val advice: Advice?
+    val advice: Advice?,
+    val ext: ExtendedHours? = null
 )
 
 data class DashboardState(
@@ -130,7 +132,13 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                                 AdviceEngine.sellAdvice(view.position, quote, daily, newsScore = 0)
                             }.getOrNull()
                         } else null
-                    HoldingRow(view = view, spark = spark, advice = advice)
+                    val ext = runCatching {
+                        container.market.getExtendedHours(
+                            sym,
+                            maxAgeMs = if (fresh) 0L else 300_000L
+                        )
+                    }.getOrNull()
+                    HoldingRow(view = view, spark = spark, advice = advice, ext = ext)
                 }
             }.awaitAll()
         }

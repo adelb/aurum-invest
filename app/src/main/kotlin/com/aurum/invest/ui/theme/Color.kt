@@ -25,6 +25,18 @@ object AurumColors {
     val lossSoft = Color(0x26F87171)
     val goldSoft = Color(0x26E9B95C)
 
+    /** Flat series colors for the portfolio allocation bar; cycled when holdings exceed it. */
+    val allocation = listOf(
+        gold,
+        info,
+        gain,
+        Color(0xFFB48EF0),
+        Color(0xFF5ED3E8),
+        Color(0xFFE8955E),
+        Color(0xFFE87DA2),
+        Color(0xFFA9C46C)
+    )
+
     /** Brand accent as a Brush. Flat gold — Aurum does not use gradients. */
     fun goldGradient(width: Float = 600f): Brush = SolidColor(gold)
 

@@ -49,19 +49,25 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.GoldLink
 import com.aurum.invest.data.model.NewsItem
+import com.aurum.invest.data.model.Quote
 import com.aurum.invest.ui.components.ActionBadge
 import com.aurum.invest.ui.components.AurumCard
+import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.DeltaMoney
 import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.EmptyState
+import com.aurum.invest.ui.components.ExtHoursChips
 import com.aurum.invest.ui.components.PillTag
-import com.aurum.invest.ui.components.PriceChart
 import com.aurum.invest.ui.components.SectionHeader
 import com.aurum.invest.ui.components.SentimentDot
 import com.aurum.invest.ui.components.StatTile
+import com.aurum.invest.ui.components.ZoomablePriceChart
 import com.aurum.invest.ui.theme.AurumColors
 
 @Composable
@@ -138,7 +144,7 @@ fun PositionDetailScreen(
             ) {
                 CircularProgressIndicator(color = AurumColors.gold)
             }
-        } else if (state.quote == null && state.dailyCloses.isEmpty()) {
+        } else if (state.quote == null && state.chart3M.closes.isEmpty()) {
             Column(modifier = Modifier.fillMaxWidth().weight(1f)) {
                 EmptyState(
                     title = "Couldn't load ${state.symbol.ifEmpty { symbol.uppercase() }}",
@@ -148,8 +154,13 @@ fun PositionDetailScreen(
                 )
             }
         } else {
+            AurumRefreshBox(
+                refreshing = state.loading,
+                onRefresh = vm::refresh,
+                modifier = Modifier.fillMaxWidth().weight(1f)
+            ) {
             LazyColumn(
-                modifier = Modifier.fillMaxWidth().weight(1f),
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp)
             ) {
                 // price hero
@@ -157,7 +168,7 @@ fun PositionDetailScreen(
                     val quote = state.quote
                     Column {
                         Text(
-                            text = Fmt.money(quote?.price ?: state.dailyCloses.lastOrNull() ?: 0.0),
+                            text = Fmt.money(quote?.price ?: state.chart3M.closes.lastOrNull() ?: 0.0),
                             style = MaterialTheme.typography.displayLarge,
                             color = AurumColors.text
                         )
@@ -175,31 +186,53 @@ fun PositionDetailScreen(
                                 )
                             }
                         }
+                        val ext = state.ext
+                        if (ext?.preMarketPct != null || ext?.postMarketPct != null) {
+                            Spacer(Modifier.height(8.dp))
+                            ExtHoursChips(ext = ext)
+                        }
                     }
                     Spacer(Modifier.height(20.dp))
                 }
 
                 // chart + range chips
                 item {
-                    val closes = if (range == "1D") state.intradayCloses else state.dailyCloses
+                    val series = when (range) {
+                        "1D" -> state.chart1D
+                        "1W" -> state.chart1W
+                        "1M" -> state.chart1M
+                        else -> state.chart3M
+                    }
                     val baseline =
                         if (range == "1D") state.quote?.prevClose
                         else state.position?.avgCost
                     AurumCard(contentPadding = PaddingValues(14.dp)) {
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             RangeChip(label = "1D", selected = range == "1D") { range = "1D" }
+                            RangeChip(label = "1W", selected = range == "1W") { range = "1W" }
+                            RangeChip(label = "1M", selected = range == "1M") { range = "1M" }
                             RangeChip(label = "3M", selected = range == "3M") { range = "3M" }
                         }
                         Spacer(Modifier.height(14.dp))
-                        if (closes.size >= 2) {
-                            PriceChart(
-                                closes = closes,
-                                baseline = baseline,
-                                modifier = Modifier.fillMaxWidth().height(210.dp)
+                        if (series.closes.size >= 2) {
+                            // key(range) so switching ranges resets the zoom viewport
+                            androidx.compose.runtime.key(range) {
+                                ZoomablePriceChart(
+                                    closes = series.closes,
+                                    timestamps = series.timestamps,
+                                    baseline = baseline,
+                                    modifier = Modifier.fillMaxWidth().height(230.dp)
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = "Pinch to zoom · drag to pan · hold for crosshair",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AurumColors.textDim
                             )
                         } else {
                             Box(
-                                modifier = Modifier.fillMaxWidth().height(210.dp),
+                                modifier = Modifier.fillMaxWidth().height(230.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
@@ -246,6 +279,22 @@ fun PositionDetailScreen(
                         }
                     }
                     Spacer(Modifier.height(28.dp))
+                }
+
+                // key stats (only when the quote carries them)
+                val statsQuote = state.quote
+                if (statsQuote != null && (
+                        (statsQuote.dayLow != null && statsQuote.dayHigh != null) ||
+                            (statsQuote.fiftyTwoWeekLow != null && statsQuote.fiftyTwoWeekHigh != null) ||
+                            statsQuote.volume != null
+                        )
+                ) {
+                    item {
+                        SectionHeader(title = "Key stats")
+                        Spacer(Modifier.height(14.dp))
+                        KeyStatsCard(quote = statsQuote)
+                        Spacer(Modifier.height(28.dp))
+                    }
                 }
 
                 // position card (only when held)
@@ -439,6 +488,7 @@ fun PositionDetailScreen(
                     }
                 }
             }
+            }
 
             // ------- trade actions -------
             Row(
@@ -471,6 +521,98 @@ fun PositionDetailScreen(
                     Text(text = "Buy", style = MaterialTheme.typography.labelLarge)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun KeyStatsCard(quote: Quote) {
+    AurumCard {
+        var first = true
+        if (quote.dayLow != null && quote.dayHigh != null) {
+            RangeMeter(
+                label = "Day range",
+                low = quote.dayLow,
+                high = quote.dayHigh,
+                value = quote.price
+            )
+            first = false
+        }
+        if (quote.fiftyTwoWeekLow != null && quote.fiftyTwoWeekHigh != null) {
+            if (!first) Spacer(Modifier.height(14.dp))
+            RangeMeter(
+                label = "52-week range",
+                low = quote.fiftyTwoWeekLow,
+                high = quote.fiftyTwoWeekHigh,
+                value = quote.price
+            )
+            first = false
+        }
+        if (!first) Spacer(Modifier.height(14.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            quote.volume?.let {
+                StatTile(
+                    label = "Volume",
+                    value = Fmt.compact(it.toDouble()),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            StatTile(
+                label = "Prev close",
+                value = Fmt.money(quote.prevClose),
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                label = "Day move",
+                value = Fmt.signedPct(quote.dayChangePct),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.deltaColor(quote.dayChangePct)
+            )
+        }
+    }
+}
+
+/** A low—high track with the current price marked on it. */
+@Composable
+private fun RangeMeter(label: String, low: Double, high: Double, value: Double) {
+    if (high <= low) return
+    val frac = ((value - low) / (high - low)).coerceIn(0.0, 1.0).toFloat()
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.textDim
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = "${Fmt.money(low)} – ${Fmt.money(high)}",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.text
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Canvas(modifier = Modifier.fillMaxWidth().height(12.dp)) {
+            val y = size.height / 2f
+            drawLine(
+                color = AurumColors.surfaceHigh,
+                start = Offset(0f, y),
+                end = Offset(size.width, y),
+                strokeWidth = 6f,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = AurumColors.gold.copy(alpha = 0.35f),
+                start = Offset(0f, y),
+                end = Offset(frac * size.width, y),
+                strokeWidth = 6f,
+                cap = StrokeCap.Round
+            )
+            drawCircle(
+                color = AurumColors.gold,
+                radius = 6f,
+                center = Offset(frac * size.width, y)
+            )
         }
     }
 }

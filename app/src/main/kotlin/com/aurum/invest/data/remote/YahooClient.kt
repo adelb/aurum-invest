@@ -36,7 +36,12 @@ class YahooClient {
                 currency = meta.optString("currency", "USD").ifEmpty { "USD" },
                 marketState = meta.optString("marketState", ""),
                 shortName = meta.optString("shortName", ""),
-                fetchedAt = System.currentTimeMillis()
+                fetchedAt = System.currentTimeMillis(),
+                dayHigh = metaDouble(meta, "regularMarketDayHigh"),
+                dayLow = metaDouble(meta, "regularMarketDayLow"),
+                fiftyTwoWeekHigh = metaDouble(meta, "fiftyTwoWeekHigh"),
+                fiftyTwoWeekLow = metaDouble(meta, "fiftyTwoWeekLow"),
+                volume = meta.optLong("regularMarketVolume", -1L).takeIf { it >= 0L }
             )
         } catch (_: Exception) {
             null
@@ -55,6 +60,22 @@ class YahooClient {
                     else -> "1y"
                 }
                 val root = getJson(chartUrl(symbol, range = range, interval = "1d"))
+                    ?: return@withContext emptyList()
+                parseCandles(root)
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+
+    /**
+     * v8 chart API with an explicit Yahoo [range] ("5d", "1mo", ...) and
+     * [interval] ("30m", "60m", "1d", ...) — the chart-screen ranges that
+     * don't fit the daily/intraday helpers.
+     */
+    suspend fun fetchRangeCandles(symbol: String, range: String, interval: String): List<Candle> =
+        withContext(Dispatchers.IO) {
+            try {
+                val root = getJson(chartUrl(symbol, range = range, interval = interval))
                     ?: return@withContext emptyList()
                 parseCandles(root)
             } catch (_: Exception) {

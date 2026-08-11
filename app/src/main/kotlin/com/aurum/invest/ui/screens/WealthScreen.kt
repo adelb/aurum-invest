@@ -57,6 +57,7 @@ import com.aurum.invest.analytics.WealthPlan
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.DeltaPct
+import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.PillTag
 import com.aurum.invest.ui.components.SentimentDot
 import com.aurum.invest.ui.components.StatTile
@@ -184,11 +185,17 @@ fun WealthScreen(onOpenAnalysis: (String) -> Unit, onOpenDetail: (String) -> Uni
                 }
             }
             else -> {
-                PlanContent(
-                    plan = state.plan!!,
-                    onOpenAnalysis = onOpenAnalysis,
-                    onOpenDetail = onOpenDetail
-                )
+                AurumRefreshBox(
+                    refreshing = state.computing,
+                    onRefresh = vm::refresh,
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    PlanContent(
+                        plan = state.plan!!,
+                        onOpenAnalysis = onOpenAnalysis,
+                        onOpenDetail = onOpenDetail
+                    )
+                }
             }
         }
     }

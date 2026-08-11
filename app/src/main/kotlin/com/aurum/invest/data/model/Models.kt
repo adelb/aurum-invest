@@ -8,7 +8,13 @@ data class Quote(
     val currency: String = "USD",
     val marketState: String = "",
     val shortName: String = "",
-    val fetchedAt: Long = 0L
+    val fetchedAt: Long = 0L,
+    // Session stats from the chart meta; null when Yahoo omits them.
+    val dayHigh: Double? = null,
+    val dayLow: Double? = null,
+    val fiftyTwoWeekHigh: Double? = null,
+    val fiftyTwoWeekLow: Double? = null,
+    val volume: Long? = null
 ) {
     val dayChangeAbs: Double get() = price - prevClose
     val dayChangePct: Double get() = if (prevClose > 0.0) (price - prevClose) / prevClose * 100.0 else 0.0

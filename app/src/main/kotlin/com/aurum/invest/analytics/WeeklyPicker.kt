@@ -11,7 +11,9 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 
 /**
- * Scans a fixed universe of liquid US names every week and ranks the 10 best set-ups.
+ * Ranks the 10 best weekly set-ups from a fixed universe of liquid US names
+ * PLUS live market-wide candidates pulled from Yahoo's saved screens (most
+ * actives, gainers, growth), so each refresh sees what is actually moving.
  * Signals: 5-day and 20-day momentum, RSI sweet band (40..65 best), volume surge
  * (5-day vs 20-day average), and distance from the 20-day high.
  * Never throws — symbols that fail to fetch are skipped; total failure yields an empty list.
@@ -19,6 +21,16 @@ import kotlinx.coroutines.coroutineScope
 class WeeklyPicker(private val market: MarketRepository) {
 
     companion object {
+        /** Yahoo saved screens that widen the weekly universe with live movers. */
+        private val LIVE_SCREENS = listOf(
+            "most_actives",
+            "day_gainers",
+            "growth_technology_stocks",
+            "undervalued_growth_stocks"
+        )
+
+        /** How many live screener names may join the fixed universe per scan. */
+        private const val LIVE_CAP = 50
         /** ~80 liquid large/mid-cap US names across sectors, plus gold miners. */
         val UNIVERSE: List<Pair<String, String>> = listOf(
             // Tech
@@ -163,11 +175,48 @@ class WeeklyPicker(private val market: MarketRepository) {
         val lastClose: Double
     )
 
+    /**
+     * Live candidates from the market-wide screens. Liquidity-gated so thin
+     * names can't ride a one-day spike into the weekly list. With [maxPrice]
+     * set, the gate loosens to what the under-$25 scan needs.
+     */
+    private suspend fun liveCandidates(maxPrice: Double? = null): List<Pair<String, String>> {
+        return try {
+            val pools = coroutineScope {
+                LIVE_SCREENS.map { id ->
+                    async {
+                        try {
+                            market.getScreener(id)
+                        } catch (_: Exception) {
+                            emptyList()
+                        }
+                    }
+                }.awaitAll()
+            }
+            pools.flatten()
+                .asSequence()
+                .filter { it.avgVolume3M >= 1_000_000L }
+                .filter {
+                    if (maxPrice != null) it.price in 1.0..maxPrice
+                    else it.price >= 5.0 && it.marketCap >= 2_000_000_000.0
+                }
+                .distinctBy { it.symbol }
+                .sortedByDescending { it.avgVolume3M }
+                .take(LIVE_CAP)
+                .map { it.symbol to it.name.ifEmpty { it.symbol } }
+                .toList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     suspend fun computePicks(weekStart: String): List<WeeklyPick> {
         return try {
+            val candidates = (UNIVERSE + liveCandidates()).distinctBy { it.first }
+
             // Fetch candles in chunks of 10 concurrent requests; skip symbols that fail.
             val candlesBySymbol = HashMap<String, List<Candle>>()
-            for (chunk in UNIVERSE.chunked(CHUNK_SIZE)) {
+            for (chunk in candidates.chunked(CHUNK_SIZE)) {
                 val results = coroutineScope {
                     chunk.map { (symbol, _) ->
                         async {
@@ -185,7 +234,7 @@ class WeeklyPicker(private val market: MarketRepository) {
                 }
             }
 
-            val scored = UNIVERSE.mapNotNull { (symbol, name) ->
+            val scored = candidates.mapNotNull { (symbol, name) ->
                 val candles = candlesBySymbol[symbol] ?: return@mapNotNull null
                 scoreSymbol(symbol, name, candles)
             }
@@ -232,7 +281,9 @@ class WeeklyPicker(private val market: MarketRepository) {
         count: Int = 5
     ): List<WeeklyPick> {
         return try {
-            val candidates = (UNIVERSE + BUDGET_EXTRA).distinctBy { it.first }
+            val candidates =
+                (UNIVERSE + BUDGET_EXTRA + liveCandidates(maxPrice = maxPrice * PRICE_PREFILTER_MARGIN))
+                    .distinctBy { it.first }
 
             val candlesBySymbol = HashMap<String, List<Candle>>()
             for (chunk in candidates.chunked(CHUNK_SIZE)) {

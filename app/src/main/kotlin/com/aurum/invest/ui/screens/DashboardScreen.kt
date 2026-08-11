@@ -5,11 +5,15 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,6 +22,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
@@ -39,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -48,9 +55,11 @@ import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.PortfolioSummary
 import com.aurum.invest.ui.components.ActionBadge
 import com.aurum.invest.ui.components.AurumCard
+import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.DeltaMoney
 import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.EmptyState
+import com.aurum.invest.ui.components.ExtHoursChips
 import com.aurum.invest.ui.components.GoldGradientText
 import com.aurum.invest.ui.components.SectionHeader
 import com.aurum.invest.ui.components.Sparkline
@@ -99,7 +108,11 @@ fun DashboardScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize().background(AurumColors.bg)) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        AurumRefreshBox(
+            refreshing = state.loading,
+            onRefresh = vm::refresh,
+            modifier = Modifier.fillMaxSize()
+        ) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
@@ -123,6 +136,13 @@ fun DashboardScreen(
                 item {
                     Spacer(Modifier.height(20.dp))
                     SummaryTiles(summary = state.summary)
+                }
+
+                if (state.holdings.size >= 2) {
+                    item {
+                        Spacer(Modifier.height(14.dp))
+                        AllocationCard(holdings = state.holdings)
+                    }
                 }
 
                 item {
@@ -180,6 +200,71 @@ fun DashboardScreen(
             modifier = Modifier.align(Alignment.BottomEnd).padding(24.dp)
         ) {
             Icon(Icons.Rounded.Add, contentDescription = "Add trade")
+        }
+    }
+}
+
+/**
+ * Where the money sits: one flat segmented bar of the open positions by
+ * market value, with a wrap-around legend underneath.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AllocationCard(holdings: List<HoldingRow>) {
+    val total = holdings.sumOf { it.view.marketValue }
+    if (total <= 0.0) return
+    AurumCard {
+        Text(
+            text = "Allocation",
+            style = MaterialTheme.typography.labelMedium,
+            color = AurumColors.textDim
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(10.dp)
+                .clip(RoundedCornerShape(5.dp)),
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            holdings.forEachIndexed { i, row ->
+                val weight = (row.view.marketValue / total).toFloat()
+                if (weight > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .weight(weight)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(
+                                AurumColors.allocation[i % AurumColors.allocation.size]
+                            )
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            holdings.forEachIndexed { i, row ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(
+                                AurumColors.allocation[i % AurumColors.allocation.size]
+                            )
+                    )
+                    Text(
+                        text = "  ${row.view.position.symbol} " +
+                            Fmt.pct(row.view.marketValue / total * 100.0),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
         }
     }
 }
@@ -353,6 +438,10 @@ private fun HoldingCard(row: HoldingRow, onClick: () -> Unit, onRemove: () -> Un
                     modifier = Modifier.size(16.dp)
                 )
             }
+        }
+        if (row.ext?.preMarketPct != null || row.ext?.postMarketPct != null) {
+            Spacer(Modifier.height(8.dp))
+            ExtHoursChips(ext = row.ext)
         }
     }
 }

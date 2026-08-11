@@ -43,6 +43,7 @@ import com.aurum.invest.data.model.DailyPick
 import com.aurum.invest.data.model.EntryPick
 import com.aurum.invest.data.model.PowerPick
 import com.aurum.invest.ui.components.AurumCard
+import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.EmptyState
 import com.aurum.invest.ui.components.PillTag
@@ -152,6 +153,23 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
             modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp)
         )
 
+        AurumRefreshBox(
+            refreshing = when (tab) {
+                PicksTab.DAILY -> state.dailyRefreshing
+                PicksTab.ENTRIES -> state.entryRefreshing
+                PicksTab.POWER -> state.powerRefreshing
+                PicksTab.WEEKLY -> state.refreshing
+            },
+            onRefresh = {
+                when (tab) {
+                    PicksTab.DAILY -> vm.refreshDaily()
+                    PicksTab.ENTRIES -> vm.refreshEntries()
+                    PicksTab.POWER -> vm.refreshPower()
+                    PicksTab.WEEKLY -> vm.refresh()
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 28.dp),
@@ -163,6 +181,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 PicksTab.POWER -> powerItems(state, onOpenDetail, onOpenAnalysis, vm::refreshPower)
                 PicksTab.WEEKLY -> weeklyItems(state, onOpenDetail, onOpenAnalysis, vm::refresh)
             }
+        }
         }
     }
 }

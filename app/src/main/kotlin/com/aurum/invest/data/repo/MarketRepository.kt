@@ -71,6 +71,31 @@ class MarketRepository(
         return cached?.let { candlesFromJson(it.json) } ?: emptyList()
     }
 
+    /**
+     * Candles for an explicit Yahoo range/interval pair (chart-screen 1W and 1M
+     * views). Cached like intraday data — briefly, keyed by range and interval.
+     */
+    suspend fun getRangeCandles(
+        symbol: String,
+        range: String,
+        interval: String,
+        maxAgeMs: Long = 900_000L
+    ): List<Candle> {
+        val key = "range:$symbol:$range:$interval"
+        val now = System.currentTimeMillis()
+        val cached = readCache(key)
+        if (cached != null && now - cached.updatedAt <= maxAgeMs) {
+            val parsed = candlesFromJson(cached.json)
+            if (parsed.isNotEmpty()) return parsed
+        }
+        val fresh = yahoo.fetchRangeCandles(symbol, range, interval)
+        if (fresh.isNotEmpty()) {
+            writeCache(key, candlesToJson(fresh).toString())
+            return fresh
+        }
+        return cached?.let { candlesFromJson(it.json) } ?: emptyList()
+    }
+
     suspend fun getIntraday(symbol: String, maxAgeMs: Long = 300_000L): List<Candle> {
         val key = "intraday:$symbol"
         val now = System.currentTimeMillis()
@@ -157,6 +182,11 @@ class MarketRepository(
         put("marketState", q.marketState)
         put("shortName", q.shortName)
         put("fetchedAt", q.fetchedAt)
+        if (q.dayHigh != null) put("dayHigh", q.dayHigh)
+        if (q.dayLow != null) put("dayLow", q.dayLow)
+        if (q.fiftyTwoWeekHigh != null) put("w52High", q.fiftyTwoWeekHigh)
+        if (q.fiftyTwoWeekLow != null) put("w52Low", q.fiftyTwoWeekLow)
+        if (q.volume != null) put("volume", q.volume)
     }
 
     private fun quoteFromJson(s: String): Quote? =
@@ -169,7 +199,12 @@ class MarketRepository(
                 currency = o.optString("currency", "USD"),
                 marketState = o.optString("marketState", ""),
                 shortName = o.optString("shortName", ""),
-                fetchedAt = o.optLong("fetchedAt", 0L)
+                fetchedAt = o.optLong("fetchedAt", 0L),
+                dayHigh = if (o.has("dayHigh")) o.getDouble("dayHigh") else null,
+                dayLow = if (o.has("dayLow")) o.getDouble("dayLow") else null,
+                fiftyTwoWeekHigh = if (o.has("w52High")) o.getDouble("w52High") else null,
+                fiftyTwoWeekLow = if (o.has("w52Low")) o.getDouble("w52Low") else null,
+                volume = if (o.has("volume")) o.getLong("volume") else null
             )
         } catch (_: Exception) {
             null
