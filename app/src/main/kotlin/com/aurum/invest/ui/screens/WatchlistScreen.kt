@@ -35,7 +35,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldColors
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -49,17 +48,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.GoldLink
+import com.aurum.invest.ui.components.ActionBadge
 import com.aurum.invest.ui.components.AurumCard
-import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.DeltaPct
-import com.aurum.invest.ui.components.DetailLine
-import com.aurum.invest.ui.components.DisclosureRow
 import com.aurum.invest.ui.components.EmptyState
-import com.aurum.invest.ui.components.RowDivider
-import com.aurum.invest.ui.components.ScreenTitle
-import com.aurum.invest.ui.components.Space
+import com.aurum.invest.ui.components.AurumRefreshBox
+import com.aurum.invest.ui.components.PillTag
+import com.aurum.invest.ui.components.SectionHeader
 import com.aurum.invest.ui.components.Sparkline
-import com.aurum.invest.ui.components.adviceLabel
 import com.aurum.invest.ui.theme.AurumColors
 
 @Composable
@@ -73,10 +69,14 @@ fun WatchlistScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
             .fillMaxSize()
             .background(AurumColors.bg)
     ) {
-        Column(modifier = Modifier.padding(horizontal = Space.screenH)) {
+        Column(modifier = Modifier.padding(horizontal = 20.dp)) {
             Spacer(modifier = Modifier.height(18.dp))
-            ScreenTitle(overline = "Tracking", title = "Watchlist")
-            Spacer(modifier = Modifier.height(20.dp))
+            Text(
+                text = "Watchlist",
+                style = MaterialTheme.typography.headlineMedium,
+                color = AurumColors.text
+            )
+            Spacer(modifier = Modifier.height(16.dp))
             OutlinedTextField(
                 value = state.query,
                 onValueChange = vm::onQueryChange,
@@ -164,7 +164,9 @@ fun WatchlistScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
                     )
                 }
             } else {
-                item { RowDivider() }
+                item {
+                    SectionHeader(title = "Watching")
+                }
                 items(state.rows, key = { it.symbol }) { row ->
                     WatchRowCard(
                         row = row,
@@ -173,7 +175,6 @@ fun WatchlistScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
                         onRemove = { vm.remove(row.symbol) },
                         onAnalyze = { onOpenAnalysis(row.symbol) }
                     )
-                    RowDivider()
                 }
             }
         }
@@ -214,10 +215,6 @@ private fun SuggestionRow(symbol: String, name: String, onAdd: () -> Unit) {
     }
 }
 
-/**
- * One watched name: ticker, price and today's move at rest. The buy read,
- * gold relation and the pin/analyse/remove actions open on tap.
- */
 @Composable
 private fun WatchRowCard(
     row: WatchRow,
@@ -226,109 +223,113 @@ private fun WatchRowCard(
     onRemove: () -> Unit,
     onAnalyze: () -> Unit
 ) {
-    DisclosureRow(
-        header = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(vertical = 10.dp)
-            ) {
-                if (row.pinned) {
-                    Icon(
-                        imageVector = Icons.Rounded.Star,
-                        contentDescription = "Pinned",
-                        tint = AurumColors.gold,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                }
-                Column(modifier = Modifier.weight(1f)) {
+    AurumCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(),
+        onClick = onOpen
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onPin, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    imageVector = if (row.pinned) Icons.Rounded.Star else Icons.Rounded.StarBorder,
+                    contentDescription = if (row.pinned) "Unpin ${row.symbol}" else "Pin ${row.symbol}",
+                    tint = if (row.pinned) AurumColors.gold else AurumColors.textDim
+                )
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = row.symbol,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AurumColors.text
+                )
+                if (row.name.isNotBlank()) {
                     Text(
-                        text = row.symbol,
+                        text = row.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.textDim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            Sparkline(
+                data = row.spark,
+                modifier = Modifier
+                    .width(90.dp)
+                    .height(36.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(horizontalAlignment = Alignment.End) {
+                val quote = row.quote
+                if (quote != null) {
+                    Text(
+                        text = Fmt.money(quote.price),
                         style = MaterialTheme.typography.titleMedium,
                         color = AurumColors.text
                     )
-                    if (row.name.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = row.name,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = AurumColors.textDim,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-                if (row.spark.size >= 2) {
-                    Sparkline(
-                        data = row.spark,
-                        modifier = Modifier.width(56.dp).height(22.dp),
-                        fill = false
+                    DeltaPct(
+                        value = quote.dayChangePct,
+                        style = MaterialTheme.typography.labelMedium
                     )
-                    Spacer(modifier = Modifier.width(14.dp))
+                } else {
+                    Text(
+                        text = "—",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AurumColors.textDim
+                    )
                 }
-                Column(horizontalAlignment = Alignment.End) {
-                    val quote = row.quote
-                    if (quote != null) {
-                        Text(
-                            text = Fmt.money(quote.price),
-                            style = MaterialTheme.typography.titleSmall,
-                            color = AurumColors.text
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        DeltaPct(
-                            value = quote.dayChangePct,
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    } else {
-                        Text(
-                            text = "—",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = AurumColors.textDim
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.width(6.dp))
             }
         }
-    ) {
-        Column(modifier = Modifier.padding(bottom = 12.dp)) {
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             val advice = row.advice
             if (advice != null) {
-                Text(
-                    text = advice.headline,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                advice.suggestedBuyPrice?.let {
-                    DetailLine("Good entry", Fmt.money(it), valueColor = AurumColors.gold)
+                ActionBadge(action = advice.action)
+                val entry = advice.suggestedBuyPrice
+                if (entry != null) {
+                    Text(
+                        text = "Entry ≈ " + Fmt.money(entry),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = AurumColors.gold
+                    )
                 }
-                DetailLine("Read", adviceLabel(advice.action))
             } else {
                 Text(
                     text = "Analyzing…",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelMedium,
                     color = AurumColors.textDim
                 )
             }
-            if (row.pinned && row.goldLink != null) {
-                DetailLine(
-                    label = "Gold relation",
-                    value = when (row.goldLink) {
-                        GoldLink.WITH_GOLD -> "Moves with gold"
-                        GoldLink.INVERSE_GOLD -> "Inverse to gold"
-                        GoldLink.NEUTRAL -> "No link"
-                    }
+            Spacer(modifier = Modifier.weight(1f))
+            if (row.pinned) {
+                when (row.goldLink) {
+                    GoldLink.WITH_GOLD -> PillTag(text = "Moves with gold", color = AurumColors.gold)
+                    GoldLink.INVERSE_GOLD -> PillTag(text = "Inverse to gold", color = AurumColors.loss)
+                    GoldLink.NEUTRAL -> PillTag(text = "—", color = AurumColors.textDim)
+                    null -> Unit
+                }
+            }
+            IconButton(onClick = onAnalyze, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    imageVector = Icons.Rounded.QueryStats,
+                    contentDescription = "Analyze ${row.symbol}",
+                    tint = AurumColors.gold,
+                    modifier = Modifier.size(18.dp)
                 )
             }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = onOpen) { Text(row.symbol, color = AurumColors.gold) }
-                TextButton(onClick = onAnalyze) { Text("Analysis", color = AurumColors.gold) }
-                TextButton(onClick = onPin) {
-                    Text(if (row.pinned) "Unpin" else "Pin", color = AurumColors.textDim)
-                }
-                TextButton(onClick = onRemove) { Text("Remove", color = AurumColors.textDim) }
+            Spacer(modifier = Modifier.width(2.dp))
+            IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "Remove ${row.symbol}",
+                    tint = AurumColors.textDim,
+                    modifier = Modifier.size(16.dp)
+                )
             }
         }
     }
