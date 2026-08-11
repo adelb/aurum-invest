@@ -442,12 +442,35 @@ private fun HeroSummary(summary: PortfolioSummary?) {
             color = AurumColors.text
         )
         Spacer(Modifier.height(4.dp))
+        // The headline delta: how the holdings stand AGAINST THE MONEY PUT IN
+        // (market value vs remaining cost basis), not just today's move.
         Row(verticalAlignment = Alignment.CenterVertically) {
-            DeltaMoney(value = s.dayPl, style = MaterialTheme.typography.titleMedium)
+            DeltaMoney(value = s.unrealizedPl, style = MaterialTheme.typography.titleMedium)
+            if (s.investedCost > 0.0) {
+                Text(
+                    text = "  ·  ",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AurumColors.textDim
+                )
+                DeltaPct(
+                    value = s.unrealizedPl / s.investedCost * 100.0,
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            Text(
+                text = " vs invested",
+                style = MaterialTheme.typography.titleMedium,
+                color = AurumColors.textDim
+            )
+        }
+        Spacer(Modifier.height(2.dp))
+        // The session move, demoted to a secondary line.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DeltaMoney(value = s.dayPl, style = MaterialTheme.typography.bodySmall)
             Text(
                 // Before today's US open, the delta belongs to the last session.
                 text = if (Dates.usMarketOpenedToday()) " today" else " last session",
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = AurumColors.textDim
             )
         }
