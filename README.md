@@ -1,8 +1,6 @@
 # Aurum
 
-A native Android investment-wallet tracker for the US market. Kotlin + Jetpack Compose, no accounts and no backend — everything runs on the device.
-
-The design is a private banker's ledger: warm ink-black paper, ruled hairline panels, a brass accent, Spectral serif display type, IBM Plex Sans working text, and IBM Plex Mono for every small data print — tabular figures throughout so columns of money align.
+A native Android investment-wallet tracker for the US market. Kotlin + Jetpack Compose, dark premium design, no accounts and no backend — everything runs on the device.
 
 ## Features
 

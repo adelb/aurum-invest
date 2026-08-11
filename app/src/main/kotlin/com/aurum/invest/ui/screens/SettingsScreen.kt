@@ -145,7 +145,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                             Spacer(Modifier.height(12.dp))
                             Button(
                                 onClick = { BankNotificationListener.openSettings(context) },
-                                shape = RoundedCornerShape(3.dp),
+                                shape = RoundedCornerShape(12.dp),
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = AurumColors.gold,
                                     contentColor = AurumColors.bg

@@ -13,15 +13,15 @@
     <!-- left facet (light) -->
     <path
         android:pathData="M31,76 L54,30 L54,45 L42,76 Z"
-        android:fillColor="#FFE9D6A7" />
+        android:fillColor="#FFF1C468" />
 
     <!-- right facet (deep) -->
     <path
         android:pathData="M77,76 L54,30 L54,45 L66,76 Z"
-        android:fillColor="#FF8A6D38" />
+        android:fillColor="#FFCE9C38" />
 
     <!-- crossbar, mid tone, edges parallel to the inner slopes -->
     <path
         android:pathData="M49,58 L59,58 L61.4,64 L46.6,64 Z"
-        android:fillColor="#FFC8A25E" />
+        android:fillColor="#FFE3B455" />
 </vector>

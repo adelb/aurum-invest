@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
@@ -196,7 +197,6 @@ fun DashboardScreen(
             onClick = onAdd,
             containerColor = AurumColors.gold,
             contentColor = AurumColors.bg,
-            shape = RoundedCornerShape(4.dp),
             modifier = Modifier.align(Alignment.BottomEnd).padding(24.dp)
         ) {
             Icon(Icons.Rounded.Add, contentDescription = "Add trade")
@@ -223,8 +223,8 @@ private fun AllocationCard(holdings: List<HoldingRow>) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(8.dp)
-                .clip(RoundedCornerShape(2.dp)),
+                .height(10.dp)
+                .clip(RoundedCornerShape(5.dp)),
             horizontalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             holdings.forEachIndexed { i, row ->
@@ -234,7 +234,7 @@ private fun AllocationCard(holdings: List<HoldingRow>) {
                         modifier = Modifier
                             .weight(weight)
                             .fillMaxHeight()
-                            .clip(RoundedCornerShape(1.dp))
+                            .clip(RoundedCornerShape(3.dp))
                             .background(
                                 AurumColors.allocation[i % AurumColors.allocation.size]
                             )
@@ -251,8 +251,8 @@ private fun AllocationCard(holdings: List<HoldingRow>) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(7.dp)
-                            .clip(RoundedCornerShape(1.dp))
+                            .size(8.dp)
+                            .clip(CircleShape)
                             .background(
                                 AurumColors.allocation[i % AurumColors.allocation.size]
                             )

@@ -51,7 +51,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.GoldLink
@@ -501,7 +500,7 @@ fun PositionDetailScreen(
                 OutlinedButton(
                     onClick = { onTrade(state.symbol.ifEmpty { symbol.uppercase() }, "SELL") },
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(3.dp),
+                    shape = RoundedCornerShape(50),
                     border = BorderStroke(1.dp, AurumColors.hairline)
                 ) {
                     Text(
@@ -513,7 +512,7 @@ fun PositionDetailScreen(
                 Button(
                     onClick = { onTrade(state.symbol.ifEmpty { symbol.uppercase() }, "BUY") },
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(3.dp),
+                    shape = RoundedCornerShape(50),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = AurumColors.gold,
                         contentColor = AurumColors.bg
@@ -620,23 +619,23 @@ private fun RangeMeter(label: String, low: Double, high: Double, value: Double) 
 
 @Composable
 private fun RangeChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(2.dp)
+    val shape = RoundedCornerShape(50)
     Box(
         modifier = Modifier
             .clip(shape)
-            .background(if (selected) AurumColors.goldSoft else Color.Transparent)
+            .background(if (selected) AurumColors.goldSoft else AurumColors.surfaceHigh)
             .border(
                 width = 1.dp,
-                color = if (selected) AurumColors.gold.copy(alpha = 0.5f) else AurumColors.hairline,
+                color = if (selected) AurumColors.gold.copy(alpha = 0.45f) else AurumColors.hairline,
                 shape = shape
             )
             .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 5.dp)
+            .padding(horizontal = 16.dp, vertical = 6.dp)
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = if (selected) AurumColors.goldBright else AurumColors.textDim
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) AurumColors.gold else AurumColors.textDim
         )
     }
 }

@@ -96,7 +96,7 @@ fun AddTransactionScreen(prefillSymbol: String?, prefillSide: String?, onDone: (
             onValueChange = vm::onSymbolChange,
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
-            shape = RoundedCornerShape(4.dp),
+            shape = RoundedCornerShape(16.dp),
             colors = addFieldColors(),
             label = { Text("Symbol") },
             placeholder = { Text("AAPL") },
@@ -156,7 +156,7 @@ fun AddTransactionScreen(prefillSymbol: String?, prefillSide: String?, onDone: (
                 modifier = Modifier.weight(1f),
                 singleLine = true,
                 enabled = !state.sellAll,
-                shape = RoundedCornerShape(4.dp),
+                shape = RoundedCornerShape(16.dp),
                 colors = addFieldColors(),
                 label = { Text("Shares") },
                 placeholder = { Text("0") },
@@ -167,7 +167,7 @@ fun AddTransactionScreen(prefillSymbol: String?, prefillSide: String?, onDone: (
                 onValueChange = vm::onPriceChange,
                 modifier = Modifier.weight(1f),
                 singleLine = true,
-                shape = RoundedCornerShape(4.dp),
+                shape = RoundedCornerShape(16.dp),
                 colors = addFieldColors(),
                 label = { Text("Price (per share $)") },
                 placeholder = { Text("0.00") },
@@ -182,7 +182,7 @@ fun AddTransactionScreen(prefillSymbol: String?, prefillSide: String?, onDone: (
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             enabled = !state.sellAll,
-            shape = RoundedCornerShape(4.dp),
+            shape = RoundedCornerShape(16.dp),
             colors = addFieldColors(),
             label = {
                 Text(
@@ -238,7 +238,7 @@ fun AddTransactionScreen(prefillSymbol: String?, prefillSide: String?, onDone: (
             onValueChange = vm::onFeesChange,
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
-            shape = RoundedCornerShape(4.dp),
+            shape = RoundedCornerShape(16.dp),
             colors = addFieldColors(),
             label = { Text("Fees (optional)") },
             placeholder = { Text("0.00") },
@@ -272,7 +272,7 @@ fun AddTransactionScreen(prefillSymbol: String?, prefillSide: String?, onDone: (
             modifier = Modifier
                 .fillMaxWidth()
                 .height(54.dp),
-            shape = RoundedCornerShape(4.dp),
+            shape = RoundedCornerShape(16.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = AurumColors.gold,
                 contentColor = AurumColors.bg,
@@ -297,10 +297,10 @@ fun AddTransactionScreen(prefillSymbol: String?, prefillSide: String?, onDone: (
     }
 }
 
-/** Two-option ledger toggle — flat brass fill marks the selected side. */
+/** Custom two-option pill toggle — flat gold fill when selected, per M7/P5 contract. */
 @Composable
 private fun SideToggle(side: TradeSide, onChange: (TradeSide) -> Unit) {
-    val shape = RoundedCornerShape(3.dp)
+    val shape = RoundedCornerShape(50)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -329,7 +329,7 @@ private fun SideOption(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    val shape = RoundedCornerShape(2.dp)
+    val shape = RoundedCornerShape(50)
     val m = modifier
         .clip(shape)
         .clickable { onClick() }
