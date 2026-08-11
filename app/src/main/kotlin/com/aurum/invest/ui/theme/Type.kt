@@ -15,18 +15,22 @@ val Inter = FontFamily(
     Font(R.font.inter_bold, FontWeight.Bold)
 )
 
+// Hierarchy is carried by SIZE and WEIGHT contrast, not by color or chrome:
+// one large figure per screen, quiet uppercase overlines, and body copy that
+// stays readable at a glance. Overlines get real letterspacing because they
+// are set small and in caps.
 val AurumTypography = Typography(
     displayLarge = TextStyle(
         fontFamily = Inter, fontWeight = FontWeight.Bold,
-        fontSize = 44.sp, letterSpacing = (-1).sp
+        fontSize = 42.sp, letterSpacing = (-1.2).sp
     ),
     displaySmall = TextStyle(
         fontFamily = Inter, fontWeight = FontWeight.Bold,
-        fontSize = 32.sp, letterSpacing = (-0.5).sp
+        fontSize = 30.sp, letterSpacing = (-0.6).sp
     ),
     headlineMedium = TextStyle(
         fontFamily = Inter, fontWeight = FontWeight.Bold,
-        fontSize = 24.sp, letterSpacing = (-0.3).sp
+        fontSize = 25.sp, letterSpacing = (-0.5).sp
     ),
     titleLarge = TextStyle(
         fontFamily = Inter, fontWeight = FontWeight.SemiBold,
@@ -50,7 +54,7 @@ val AurumTypography = Typography(
     ),
     bodySmall = TextStyle(
         fontFamily = Inter, fontWeight = FontWeight.Normal,
-        fontSize = 12.sp, lineHeight = 17.sp
+        fontSize = 12.5.sp, lineHeight = 19.sp
     ),
     labelLarge = TextStyle(
         fontFamily = Inter, fontWeight = FontWeight.SemiBold,
@@ -60,8 +64,9 @@ val AurumTypography = Typography(
         fontFamily = Inter, fontWeight = FontWeight.Medium,
         fontSize = 12.sp, letterSpacing = 0.2.sp
     ),
+    // Overline / caption voice: small caps-friendly with wide tracking.
     labelSmall = TextStyle(
         fontFamily = Inter, fontWeight = FontWeight.Medium,
-        fontSize = 10.sp, letterSpacing = 0.4.sp
+        fontSize = 10.sp, letterSpacing = 0.9.sp
     )
 )

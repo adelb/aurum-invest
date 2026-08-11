@@ -63,6 +63,18 @@ object PortfolioLens {
         "utilities" to setOf("Utilities")
     )
 
+    /**
+     * Share of the book sitting in [themeKey]'s sectors, or null when the
+     * theme has no unambiguous sector mapping (AI, quantum, nuclear, solar) —
+     * callers must then measure coverage some other honest way rather than
+     * treating null as zero.
+     */
+    fun themeCoveragePct(themeKey: String, book: BookContext): Double? {
+        val sectors = THEME_SECTORS[themeKey] ?: return null
+        if (book.isEmpty) return 0.0
+        return book.slices.filter { it.sector in sectors }.sumOf { it.weightPct }
+    }
+
     /** Slice the open positions by sector. Positions without a live value are skipped. */
     fun build(views: List<PositionView>, sectors: Map<String, String>): BookContext {
         val open = views.filter { it.marketValue > 0.0 }

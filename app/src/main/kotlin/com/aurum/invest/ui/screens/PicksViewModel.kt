@@ -57,9 +57,19 @@ data class PicksState(
 
 class PicksViewModel(app: Application) : AndroidViewModel(app) {
 
+    companion object {
+        const val TAB_DAILY = "daily"
+        const val TAB_ENTRIES = "entries"
+        const val TAB_POWER = "power"
+        const val TAB_WEEKLY = "weekly"
+    }
+
     private val container = (app as AurumApp).container
     private val picks = container.picks
     private val market = container.market
+
+    /** Tabs whose scan has already been kicked off this session. */
+    private val started = java.util.Collections.synchronizedSet(HashSet<String>())
 
     private val _state = MutableStateFlow(
         PicksState(
@@ -129,27 +139,10 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
-        viewModelScope.launch {
-            picks.ensureCurrentWeek()
-            _state.update { it.copy(loading = false) }
-        }
-        viewModelScope.launch {
-            picks.ensureBudgetWeek()
-        }
-        viewModelScope.launch {
-            if (!Dates.isSaturday()) {
-                val daily = picks.ensureDaily()
-                _state.update { it.copy(dailyRows = daily, dailyLoading = false) }
-            }
-        }
-        viewModelScope.launch {
-            val entries = picks.ensureEntries()
-            _state.update { it.copy(entryRows = entries, entryLoading = false) }
-        }
-        viewModelScope.launch {
-            val power = picks.ensurePower()
-            _state.update { it.copy(powerRows = power, powerLoading = false) }
-        }
+        // NOTE: the four market-wide scans are NOT started here. Each one
+        // sweeps hundreds of symbols, and firing all four on open buried the
+        // app in requests (and tripped Yahoo's throttling). They load when
+        // their tab is actually shown — see [ensureTab].
         // The user's book, kept live so pick notes stay accurate after trades.
         viewModelScope.launch {
             container.portfolio.observePositions().collectLatest { positions ->
@@ -183,6 +176,37 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
                         _state.update { it.copy(pickSectors = it.pickSectors + fetched) }
                     }
                 }
+        }
+    }
+
+    /**
+     * Loads the data for [tab] the first time it is shown. Each scan runs at
+     * most once per session; already-loaded tabs return immediately.
+     */
+    fun ensureTab(tab: String) {
+        if (!started.add(tab)) return
+        when (tab) {
+            TAB_DAILY -> viewModelScope.launch {
+                if (Dates.isSaturday()) {
+                    _state.update { it.copy(dailyLoading = false) }
+                    return@launch
+                }
+                val daily = picks.ensureDaily()
+                _state.update { it.copy(dailyRows = daily, dailyLoading = false) }
+            }
+            TAB_ENTRIES -> viewModelScope.launch {
+                val entries = picks.ensureEntries()
+                _state.update { it.copy(entryRows = entries, entryLoading = false) }
+            }
+            TAB_POWER -> viewModelScope.launch {
+                val power = picks.ensurePower()
+                _state.update { it.copy(powerRows = power, powerLoading = false) }
+            }
+            TAB_WEEKLY -> viewModelScope.launch {
+                picks.ensureCurrentWeek()
+                _state.update { it.copy(loading = false) }
+                picks.ensureBudgetWeek()
+            }
         }
     }
 

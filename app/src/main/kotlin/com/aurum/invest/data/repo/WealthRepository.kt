@@ -1,7 +1,11 @@
 package com.aurum.invest.data.repo
 
+import com.aurum.invest.analytics.BookContext
 import com.aurum.invest.analytics.MarketPulse
 import com.aurum.invest.analytics.MarketRating
+import com.aurum.invest.analytics.SectorStrategy
+import com.aurum.invest.analytics.SectorTrends
+import com.aurum.invest.analytics.WeeklyStrategy
 import com.aurum.invest.analytics.WealthPlan
 import com.aurum.invest.analytics.WealthPlanner
 import com.aurum.invest.core.Dates
@@ -115,6 +119,23 @@ class WealthRepository(
         }
         return recomputeMarketPulse() ?: cached?.let { MarketPulse.fromJson(it.json) }
     }
+
+    // ---- weekly sector strategy --------------------------------------------
+
+    /**
+     * The week's sector answer for THIS book: which trending themes the
+     * portfolio is missing, the stock to use for each, and how to split
+     * [investable] across them. The expensive inputs (ETF trends, member
+     * candles) are already cached by their own repositories, so repeat calls
+     * are cheap. Returns null only when the market is unreachable.
+     */
+    suspend fun getStrategy(book: BookContext, investable: Double): WeeklyStrategy? =
+        try {
+            val trends = SectorTrends(market, news).compute()
+            SectorStrategy(market).build(trends, book, investable)
+        } catch (_: Exception) {
+            null
+        }
 
     /** Recomputes the market rating from live data and stores it. */
     suspend fun recomputeMarketPulse(): MarketRating? {

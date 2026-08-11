@@ -1,8 +1,6 @@
 package com.aurum.invest.ui.screens
 
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.QueryStats
@@ -25,8 +24,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -37,161 +37,277 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.aurum.invest.analytics.NoteKind
+import com.aurum.invest.analytics.PickNote
+import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.DailyPick
 import com.aurum.invest.data.model.EntryPick
 import com.aurum.invest.data.model.PowerPick
-import com.aurum.invest.analytics.NoteKind
-import com.aurum.invest.analytics.PickNote
-import com.aurum.invest.analytics.PortfolioLens
-import com.aurum.invest.ui.components.AurumCard
-import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.DeltaPct
+import com.aurum.invest.ui.components.DetailLine
+import com.aurum.invest.ui.components.DisclosureRow
 import com.aurum.invest.ui.components.EmptyState
-import com.aurum.invest.ui.components.PillTag
-import com.aurum.invest.ui.components.ScoreBar
-import com.aurum.invest.ui.components.SectionHeader
+import com.aurum.invest.ui.components.Footnote
+import com.aurum.invest.ui.components.RowDivider
+import com.aurum.invest.ui.components.ScreenTitle
 import com.aurum.invest.ui.components.SegmentedToggle
-import com.aurum.invest.ui.components.SentimentDot
-import com.aurum.invest.ui.components.StatTile
+import com.aurum.invest.ui.components.Space
+import com.aurum.invest.ui.components.StatusTag
+import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.theme.AurumColors
 import java.util.Locale
-import kotlin.math.roundToInt
 
-private enum class PicksTab { DAILY, ENTRIES, POWER, WEEKLY }
+private enum class PicksTab(val key: String, val label: String) {
+    DAILY(PicksViewModel.TAB_DAILY, "Today"),
+    ENTRIES(PicksViewModel.TAB_ENTRIES, "Entries"),
+    POWER(PicksViewModel.TAB_POWER, "Power"),
+    WEEKLY(PicksViewModel.TAB_WEEKLY, "Weekly")
+}
 
+/**
+ * Picks: one list, one job per tab. Each row states the stock and the single
+ * number that matters for that list; the supporting evidence opens on tap so
+ * the page stays scannable.
+ */
 @Composable
 fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit) {
     val vm: PicksViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableStateOf(PicksTab.DAILY) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(AurumColors.bg)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 20.dp, end = 20.dp, top = 18.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = when (tab) {
-                        PicksTab.DAILY -> "Daily Picks"
-                        PicksTab.ENTRIES -> "Best Entries"
-                        PicksTab.POWER -> "Power Hour"
-                        PicksTab.WEEKLY -> "Weekly Picks"
-                    },
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = AurumColors.text
-                )
-                Text(
-                    text = when (tab) {
-                        PicksTab.DAILY -> state.dailyLabel
-                        PicksTab.ENTRIES -> "Market-wide entry-price scan"
-                        PicksTab.POWER -> "Buy 2:30–4:00 PM ET · sell into tomorrow"
-                        PicksTab.WEEKLY -> state.weekLabel
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = AurumColors.textDim
-                )
-            }
-            val busy = when (tab) {
-                PicksTab.DAILY -> state.dailyRefreshing
-                PicksTab.ENTRIES -> state.entryRefreshing
-                PicksTab.POWER -> state.powerRefreshing
-                PicksTab.WEEKLY -> state.refreshing
-            }
-            // Fixed 48dp slot so the header doesn't shift when the
-            // refresh button swaps to the busy spinner and back.
-            Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                if (busy) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(22.dp),
-                        color = AurumColors.gold,
-                        strokeWidth = 2.dp
-                    )
-                } else {
-                    IconButton(
-                        onClick = {
-                            when (tab) {
-                                PicksTab.DAILY -> vm.refreshDaily()
-                                PicksTab.ENTRIES -> vm.refreshEntries()
-                                PicksTab.POWER -> vm.refreshPower()
-                                PicksTab.WEEKLY -> vm.refresh()
-                            }
-                        }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Refresh,
-                            contentDescription = "Recompute picks",
-                            tint = AurumColors.gold
+    // Each tab's market-wide scan starts when that tab is first shown.
+    LaunchedEffect(tab) { vm.ensureTab(tab.key) }
+
+    val busy = when (tab) {
+        PicksTab.DAILY -> state.dailyRefreshing
+        PicksTab.ENTRIES -> state.entryRefreshing
+        PicksTab.POWER -> state.powerRefreshing
+        PicksTab.WEEKLY -> state.refreshing
+    }
+    val onRefresh: () -> Unit = {
+        when (tab) {
+            PicksTab.DAILY -> vm.refreshDaily()
+            PicksTab.ENTRIES -> vm.refreshEntries()
+            PicksTab.POWER -> vm.refreshPower()
+            PicksTab.WEEKLY -> vm.refresh()
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize().background(AurumColors.bg)) {
+        ScreenTitle(
+            overline = when (tab) {
+                PicksTab.DAILY -> state.dailyLabel
+                PicksTab.ENTRIES -> "Market-wide scan"
+                PicksTab.POWER -> "2:30–4:00 PM ET"
+                PicksTab.WEEKLY -> state.weekLabel
+            },
+            title = when (tab) {
+                PicksTab.DAILY -> "Today"
+                PicksTab.ENTRIES -> "Best entries"
+                PicksTab.POWER -> "Power hour"
+                PicksTab.WEEKLY -> "This week"
+            },
+            modifier = Modifier.padding(start = Space.screenH, end = Space.screenH, top = 18.dp),
+            trailing = {
+                Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                    if (busy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = AurumColors.gold,
+                            strokeWidth = 2.dp
                         )
+                    } else {
+                        IconButton(onClick = onRefresh) {
+                            Icon(
+                                Icons.Rounded.Refresh,
+                                contentDescription = "Rescan",
+                                tint = AurumColors.gold
+                            )
+                        }
                     }
                 }
             }
-        }
+        )
 
         SegmentedToggle(
-            options = listOf("Today", "Entries", "Power", "Weekly"),
-            selected = when (tab) {
-                PicksTab.DAILY -> 0
-                PicksTab.ENTRIES -> 1
-                PicksTab.POWER -> 2
-                PicksTab.WEEKLY -> 3
-            },
-            onSelect = {
-                tab = when (it) {
-                    0 -> PicksTab.DAILY
-                    1 -> PicksTab.ENTRIES
-                    2 -> PicksTab.POWER
-                    else -> PicksTab.WEEKLY
-                }
-            },
+            options = PicksTab.entries.map { it.label },
+            selected = tab.ordinal,
+            onSelect = { tab = PicksTab.entries[it] },
             compact = true,
-            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp)
+            modifier = Modifier.padding(start = Space.screenH, end = Space.screenH, top = 16.dp)
         )
 
         AurumRefreshBox(
-            refreshing = when (tab) {
-                PicksTab.DAILY -> state.dailyRefreshing
-                PicksTab.ENTRIES -> state.entryRefreshing
-                PicksTab.POWER -> state.powerRefreshing
-                PicksTab.WEEKLY -> state.refreshing
-            },
-            onRefresh = {
-                when (tab) {
-                    PicksTab.DAILY -> vm.refreshDaily()
-                    PicksTab.ENTRIES -> vm.refreshEntries()
-                    PicksTab.POWER -> vm.refreshPower()
-                    PicksTab.WEEKLY -> vm.refresh()
-                }
-            },
+            refreshing = busy,
+            onRefresh = onRefresh,
             modifier = Modifier.fillMaxSize()
         ) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            when (tab) {
-                PicksTab.DAILY -> dailyItems(state, onOpenDetail, onOpenAnalysis, vm::refreshDaily)
-                PicksTab.ENTRIES -> entryItems(state, onOpenDetail, onOpenAnalysis, vm::refreshEntries)
-                PicksTab.POWER -> powerItems(state, onOpenDetail, onOpenAnalysis, vm::refreshPower)
-                PicksTab.WEEKLY -> weeklyItems(state, onOpenDetail, onOpenAnalysis, vm::refresh)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    start = Space.screenH, end = Space.screenH, top = 20.dp, bottom = 32.dp
+                )
+            ) {
+                when (tab) {
+                    PicksTab.DAILY -> dailyItems(state, onOpenDetail, onOpenAnalysis, onRefresh)
+                    PicksTab.ENTRIES -> entryItems(state, onOpenDetail, onOpenAnalysis, onRefresh)
+                    PicksTab.POWER -> powerItems(state, onOpenDetail, onOpenAnalysis, onRefresh)
+                    PicksTab.WEEKLY -> weeklyItems(state, onOpenDetail, onOpenAnalysis, onRefresh)
+                }
             }
-        }
         }
     }
 }
 
-// ---------------------------------------------------------------- daily tab
+// ------------------------------------------------------------------ scaffolding
 
-private fun androidx.compose.foundation.lazy.LazyListScope.dailyItems(
+private fun LazyListScope.loadingItem(message: String) {
+    item {
+        Box(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 64.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator(color = AurumColors.gold)
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+    }
+}
+
+private fun LazyListScope.footnoteItem(text: String) {
+    item {
+        Spacer(Modifier.height(18.dp))
+        Footnote(text)
+    }
+}
+
+/**
+ * The shared shape of every pick row: rank, name, the headline number, an
+ * optional portfolio tag — and the evidence one tap away.
+ */
+@Composable
+private fun PickRowItem(
+    rank: Int,
+    symbol: String,
+    name: String,
+    headline: String,
+    headlineColor: androidx.compose.ui.graphics.Color,
+    support: String,
+    note: PickNote?,
+    onOpen: () -> Unit,
+    onAnalyze: () -> Unit,
+    detail: @Composable () -> Unit
+) {
+    DisclosureRow(
+        header = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(vertical = 10.dp)
+            ) {
+                Text(
+                    text = rank.toString().padStart(2, '0'),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.gold,
+                    modifier = Modifier.width(22.dp)
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = symbol,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = AurumColors.text
+                        )
+                        if (note != null) {
+                            Spacer(Modifier.width(8.dp))
+                            StatusTag(
+                                text = when (note.kind) {
+                                    NoteKind.HELD -> "held"
+                                    NoteKind.CONCENTRATION -> "concentrates"
+                                    NoteKind.DIVERSIFIES -> "new sector"
+                                },
+                                color = when (note.kind) {
+                                    NoteKind.HELD -> AurumColors.gold
+                                    NoteKind.CONCENTRATION -> AurumColors.loss
+                                    NoteKind.DIVERSIFIES -> AurumColors.info
+                                }
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = name.ifBlank { support },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = headline,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = headlineColor
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = support,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
+            }
+        }
+    ) {
+        Column(modifier = Modifier.padding(bottom = 12.dp)) {
+            detail()
+            note?.let {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = it.text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = when (it.kind) {
+                        NoteKind.HELD -> AurumColors.gold
+                        NoteKind.CONCENTRATION -> AurumColors.loss
+                        NoteKind.DIVERSIFIES -> AurumColors.info
+                    }
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = onOpen) { Text(symbol, color = AurumColors.gold) }
+                TextButton(onClick = onAnalyze) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Rounded.QueryStats,
+                            contentDescription = null,
+                            tint = AurumColors.gold,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text("Analysis", color = AurumColors.gold)
+                    }
+                }
+            }
+        }
+    }
+    RowDivider()
+}
+
+private fun noteFor(state: PicksState, symbol: String): PickNote? =
+    PortfolioLens.pickNote(symbol, state.pickSectors[symbol], state.book)
+
+// ------------------------------------------------------------------ today
+
+private fun LazyListScope.dailyItems(
     state: PicksState,
     onOpenDetail: (String) -> Unit,
     onOpenAnalysis: (String) -> Unit,
@@ -200,69 +316,174 @@ private fun androidx.compose.foundation.lazy.LazyListScope.dailyItems(
     when {
         state.saturday -> item {
             EmptyState(
-                title = "Daily picks are off on Saturday",
-                message = "The US market is closed. Fresh same-day candidates return tomorrow, " +
-                    "built from the latest pre-market moves, volume, techniques, and news."
+                title = "Closed on Saturday",
+                message = "Fresh same-day candidates return tomorrow."
             )
         }
-        state.dailyRows.isEmpty() && (state.dailyLoading || state.dailyRefreshing) -> item {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 56.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = AurumColors.gold)
-                    Spacer(modifier = Modifier.height(14.dp))
-                    Text(
-                        text = "Scanning for today's movers…",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = AurumColors.textDim
-                    )
-                }
-            }
-        }
+        state.dailyRows.isEmpty() && (state.dailyLoading || state.dailyRefreshing) ->
+            loadingItem("Scanning today's movers…")
         state.dailyRows.isEmpty() -> item {
             EmptyState(
-                title = "No daily picks yet",
-                message = "Scan the market for stocks set up for a 3-10%+ move today.",
+                title = "No picks yet",
+                message = "Scan for stocks set up to move 3–10% today.",
                 actionLabel = "Scan now",
                 onAction = onRefresh
             )
         }
         else -> {
             item {
-                Text(
-                    text = "Stocks the engine reads as capable of a 3-10%+ up-move today, " +
-                        "from momentum, volume, the 15 techniques, pre/post-market prints, and news.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim
-                )
+                Footnote("Ranked on momentum, volume, the 15 techniques, extended hours and news.")
+                Spacer(Modifier.height(12.dp))
+                RowDivider()
             }
             items(state.dailyRows, key = { "d-${it.symbol}" }) { pick ->
-                DailyPickCard(
-                    pick = pick,
-                    onOpen = { onOpenDetail(pick.symbol) },
-                    onAnalyze = { onOpenAnalysis(pick.symbol) },
-                    note = noteFor(state, pick.symbol)
-                )
+                DailyRow(pick, noteFor(state, pick.symbol), onOpenDetail, onOpenAnalysis)
             }
-            item {
-                Text(
-                    text = "Recomputed each day except Saturday. Potential ranges come from " +
-                        "volatility (ATR) plus live catalysts — decision support, not financial advice.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
-            }
+            footnoteItem(
+                "Ranges come from volatility (ATR) plus live catalysts — decision support, " +
+                    "not financial advice."
+            )
         }
     }
 }
 
-// ---------------------------------------------------------------- power tab
+@Composable
+private fun DailyRow(
+    pick: DailyPick,
+    note: PickNote?,
+    onOpenDetail: (String) -> Unit,
+    onOpenAnalysis: (String) -> Unit
+) {
+    PickRowItem(
+        rank = pick.rank,
+        symbol = pick.symbol,
+        name = pick.name,
+        headline = String.format(
+            Locale.US, "+%.0f–%.0f%%", pick.expectedLowPct, pick.expectedHighPct
+        ),
+        headlineColor = AurumColors.gain,
+        support = "potential today",
+        note = note,
+        onOpen = { onOpenDetail(pick.symbol) },
+        onAnalyze = { onOpenAnalysis(pick.symbol) }
+    ) {
+        Text(
+            text = pick.reason,
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+        Spacer(Modifier.height(8.dp))
+        DetailLine("Price", Fmt.money(pick.price))
+        DetailLine(
+            label = when (pick.marketState) {
+                "PRE", "PREPRE", "CLOSED", "POSTPOST" -> "Last session"
+                else -> "Today"
+            },
+            value = Fmt.signedPct(pick.dayChangePct),
+            valueColor = AurumColors.deltaColor(pick.dayChangePct)
+        )
+        pick.preMarketPct?.let {
+            DetailLine("Pre-market", Fmt.signedPct(it), valueColor = AurumColors.deltaColor(it))
+        }
+        pick.postMarketPct?.let {
+            DetailLine("After hours", Fmt.signedPct(it), valueColor = AurumColors.deltaColor(it))
+        }
+        DetailLine("Volume", String.format(Locale.US, "%.1fx average", pick.volumeRatio))
+        if (pick.techTotal > 0) {
+            DetailLine("Techniques", "${pick.techBullish}/${pick.techTotal} bullish")
+        }
+        if (pick.headline.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "“${pick.headline}” — ${pick.headlineSource}",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
+    }
+}
 
-private fun androidx.compose.foundation.lazy.LazyListScope.powerItems(
+// ------------------------------------------------------------------ entries
+
+private fun LazyListScope.entryItems(
+    state: PicksState,
+    onOpenDetail: (String) -> Unit,
+    onOpenAnalysis: (String) -> Unit,
+    onRefresh: () -> Unit
+) {
+    when {
+        state.entryRows.isEmpty() && (state.entryLoading || state.entryRefreshing) ->
+            loadingItem("Sweeping the market for entry setups…")
+        state.entryRows.isEmpty() -> item {
+            EmptyState(
+                title = "No entry setups",
+                message = "No stock sits at a compelling entry right now.",
+                actionLabel = "Sweep again",
+                onAction = onRefresh
+            )
+        }
+        else -> {
+            item {
+                Footnote("Long trend intact, pulled back toward support, technique board still constructive.")
+                Spacer(Modifier.height(12.dp))
+                RowDivider()
+            }
+            items(state.entryRows, key = { "e-${it.symbol}" }) { pick ->
+                EntryRow(pick, noteFor(state, pick.symbol), onOpenDetail, onOpenAnalysis)
+            }
+            footnoteItem(
+                "Entry, target and stop derive from support/resistance and volatility (ATR) — " +
+                    "decision support, not financial advice."
+            )
+        }
+    }
+}
+
+@Composable
+private fun EntryRow(
+    pick: EntryPick,
+    note: PickNote?,
+    onOpenDetail: (String) -> Unit,
+    onOpenAnalysis: (String) -> Unit
+) {
+    PickRowItem(
+        rank = pick.rank,
+        symbol = pick.symbol,
+        name = pick.name,
+        headline = Fmt.money(pick.entryLimit),
+        headlineColor = AurumColors.gold,
+        support = "entry",
+        note = note,
+        onOpen = { onOpenDetail(pick.symbol) },
+        onAnalyze = { onOpenAnalysis(pick.symbol) }
+    ) {
+        Text(
+            text = pick.reason,
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+        Spacer(Modifier.height(8.dp))
+        DetailLine("Last price", Fmt.money(pick.price))
+        DetailLine("Target", Fmt.money(pick.target), valueColor = AurumColors.gain)
+        DetailLine("Stop", Fmt.money(pick.stop), valueColor = AurumColors.loss)
+        DetailLine(
+            label = "Upside vs risk",
+            value = String.format(
+                Locale.US, "%+.1f%% / -%.1f%% · %.1f:1",
+                pick.upsidePct, pick.riskPct, pick.rewardRisk
+            )
+        )
+        DetailLine("RSI", String.format(Locale.US, "%.0f", pick.rsi))
+        DetailLine("Off the 20-day high", String.format(Locale.US, "%.1f%%", pick.dipPct))
+        if (pick.techTotal > 0) {
+            DetailLine("Techniques", "${pick.techBullish}/${pick.techTotal} bullish")
+        }
+    }
+}
+
+// ------------------------------------------------------------------ power
+
+private fun LazyListScope.powerItems(
     state: PicksState,
     onOpenDetail: (String) -> Unit,
     onOpenAnalysis: (String) -> Unit,
@@ -270,61 +491,29 @@ private fun androidx.compose.foundation.lazy.LazyListScope.powerItems(
 ) {
     item { PowerWindowBanner() }
     when {
-        state.powerRows.isEmpty() && (state.powerLoading || state.powerRefreshing) -> item {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 56.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = AurumColors.gold)
-                    Spacer(modifier = Modifier.height(14.dp))
-                    Text(
-                        text = "Sweeping the market for closing strength…",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = AurumColors.textDim
-                    )
-                }
-            }
-        }
+        state.powerRows.isEmpty() && (state.powerLoading || state.powerRefreshing) ->
+            loadingItem("Sweeping for closing strength…")
         state.powerRows.isEmpty() -> item {
             EmptyState(
-                title = "No power-hour setups found",
-                message = "No stock shows the 4-day strength this play needs right now. " +
-                    "Rescan during the buy window for the freshest read.",
+                title = "No power-hour setups",
+                message = "No stock shows the 4-day strength this play needs.",
                 actionLabel = "Scan now",
                 onAction = onRefresh
             )
         }
         else -> {
             item {
-                Text(
-                    text = "The 10 strongest candidates to buy in the last 90 minutes and hold " +
-                        "into tomorrow: the whole market screened for names finishing near " +
-                        "their daily high on hot volume after 4 strong trading days, confirmed " +
-                        "by the 15-technique board. Refresh inside the window for the live read.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim
-                )
+                Footnote("Buy in the last 90 minutes, sell into tomorrow morning's strength.")
+                Spacer(Modifier.height(12.dp))
+                RowDivider()
             }
             items(state.powerRows, key = { "p-${it.symbol}" }) { pick ->
-                PowerPickCard(
-                    pick = pick,
-                    onOpen = { onOpenDetail(pick.symbol) },
-                    onAnalyze = { onOpenAnalysis(pick.symbol) },
-                    note = noteFor(state, pick.symbol)
-                )
+                PowerRow(pick, noteFor(state, pick.symbol), onOpenDetail, onOpenAnalysis)
             }
-            item {
-                Text(
-                    text = "Overnight positions carry gap risk — next-day potential comes from " +
-                        "volatility (ATR) plus the momentum evidence, never a promise. Sell into " +
-                        "morning strength and honor every stop. Decision support, not financial advice.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
-            }
+            footnoteItem(
+                "Overnight positions carry gap risk. Ranges come from volatility plus momentum " +
+                    "evidence, never a promise — honor every stop."
+            )
         }
     }
 }
@@ -333,728 +522,158 @@ private fun androidx.compose.foundation.lazy.LazyListScope.powerItems(
 private fun PowerWindowBanner() {
     val (window, startMs, endMs) = Dates.powerWindowNow()
     val fmt = java.text.SimpleDateFormat("h:mm a", Locale.US)
-    val (text, color) = when (window) {
-        Dates.PowerWindow.OPEN ->
-            "Buy window OPEN — closes ${fmt.format(java.util.Date(endMs))} your time " +
-                "(4:00 PM ET)." to AurumColors.gain
-        Dates.PowerWindow.BEFORE ->
-            "Buy window opens ${fmt.format(java.util.Date(startMs))} your time " +
-                "(2:30 PM ET)." to AurumColors.gold
-        Dates.PowerWindow.CLOSED ->
-            "Today's buy window has closed — these picks are for the next session." to
-                AurumColors.textDim
-        Dates.PowerWindow.WEEKEND ->
-            "Market closed — the buy window returns Monday 2:30–4:00 PM ET." to
-                AurumColors.textDim
+    val open = window == Dates.PowerWindow.OPEN
+    val label = when (window) {
+        Dates.PowerWindow.OPEN -> "Buy window open — until ${fmt.format(java.util.Date(endMs))}"
+        Dates.PowerWindow.BEFORE -> "Buy window opens ${fmt.format(java.util.Date(startMs))}"
+        Dates.PowerWindow.WEEKEND -> "Market closed for the weekend"
+        Dates.PowerWindow.CLOSED -> "Buy window closed — next session ${fmt.format(java.util.Date(startMs))}"
     }
-    AurumCard {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp)
+    ) {
+        StatusTag(
+            text = if (open) "live" else "waiting",
+            color = if (open) AurumColors.gain else AurumColors.textDim
+        )
+        Spacer(Modifier.width(10.dp))
         Text(
-            text = text,
-            style = MaterialTheme.typography.labelMedium,
-            color = color
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
         )
     }
 }
 
 @Composable
-private fun PowerPickCard(
+private fun PowerRow(
     pick: PowerPick,
-    onOpen: () -> Unit,
-    onAnalyze: () -> Unit,
-    note: PickNote? = null
-) {
-    AurumCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .animateContentSize(),
-        onClick = onOpen
-    ) {
-        Row(verticalAlignment = Alignment.Top) {
-            Text(
-                text = pick.rank.toString().padStart(2, '0'),
-                style = MaterialTheme.typography.headlineMedium,
-                color = AurumColors.gold
-            )
-            Spacer(modifier = Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
-                        text = pick.symbol,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
-                    )
-                    if (pick.name.isNotBlank()) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = pick.name,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = AurumColors.textDim,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    PillTag(
-                        text = String.format(
-                            Locale.US, "+%.1f–%.1f%% overnight potential",
-                            pick.expectedLowPct, pick.expectedHighPct
-                        ),
-                        color = AurumColors.gold
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    if (pick.techDirection == "BULLISH" && pick.techTotal > 0) {
-                        PillTag(
-                            text = "${pick.techBullish}/${pick.techTotal} bullish",
-                            color = AurumColors.gain
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ScoreBar(score = pick.score, modifier = Modifier.weight(1f))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = pick.score.roundToInt().toString(),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
-                    )
-                }
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    StatTile(
-                        label = "Buy at",
-                        value = Fmt.money(pick.price),
-                        modifier = Modifier.weight(1f)
-                    )
-                    StatTile(
-                        label = "Morning target",
-                        value = Fmt.money(pick.target),
-                        modifier = Modifier.weight(1f),
-                        valueColor = AurumColors.gain
-                    )
-                    StatTile(
-                        label = "Stop",
-                        value = Fmt.money(pick.stop),
-                        modifier = Modifier.weight(1f),
-                        valueColor = AurumColors.loss
-                    )
-                }
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = "Sell into tomorrow morning's strength — at the target, or by " +
-                        "10:30 AM ET; exit immediately if the stop breaks.",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = AurumColors.text
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = pick.reason,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.heightIn(min = 40.dp).clickable { onAnalyze() }
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.QueryStats,
-                        contentDescription = null,
-                        tint = AurumColors.gold,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Full analysis & $3,000 plan",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = Fmt.money(pick.price),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
-                )
-                DeltaPct(value = pick.dayChangePct, style = MaterialTheme.typography.labelMedium)
-                Text(
-                    text = "today",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
-            }
-        }
-        PortfolioNoteTag(note)
-    }
-}
-
-// ---------------------------------------------------------------- entries tab
-
-private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
-    state: PicksState,
+    note: PickNote?,
     onOpenDetail: (String) -> Unit,
-    onOpenAnalysis: (String) -> Unit,
-    onRefresh: () -> Unit
+    onOpenAnalysis: (String) -> Unit
 ) {
-    when {
-        state.entryRows.isEmpty() && (state.entryLoading || state.entryRefreshing) -> item {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 56.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = AurumColors.gold)
-                    Spacer(modifier = Modifier.height(14.dp))
-                    Text(
-                        text = "Sweeping the whole market for entry setups…",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = AurumColors.textDim
-                    )
-                }
-            }
-        }
-        state.entryRows.isEmpty() -> item {
-            EmptyState(
-                title = "No entry setups found",
-                message = "The market-wide scan found no stock at a compelling entry right now.",
-                actionLabel = "Sweep again",
-                onAction = onRefresh
-            )
-        }
-        else -> {
-            item {
-                Text(
-                    text = "The 10 best entry prices on the market right now: hundreds of names " +
-                        "from Yahoo's market-wide screens, kept only when the long trend is " +
-                        "intact, the price has pulled back toward support, and the 15-technique " +
-                        "board does not read the dip as a falling knife.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim
-                )
-            }
-            items(state.entryRows, key = { "e-${it.symbol}" }) { pick ->
-                EntryPickCard(
-                    pick = pick,
-                    onOpen = { onOpenDetail(pick.symbol) },
-                    onAnalyze = { onOpenAnalysis(pick.symbol) },
-                    note = noteFor(state, pick.symbol)
-                )
-            }
-            item {
-                Text(
-                    text = "Rescanned on demand from live screener and price data. Entry, target, " +
-                        "and stop derive from support/resistance and volatility (ATR) — decision " +
-                        "support, not financial advice.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun EntryPickCard(
-    pick: EntryPick,
-    onOpen: () -> Unit,
-    onAnalyze: () -> Unit,
-    note: PickNote? = null
-) {
-    AurumCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .animateContentSize(),
-        onClick = onOpen
+    PickRowItem(
+        rank = pick.rank,
+        symbol = pick.symbol,
+        name = pick.name,
+        headline = String.format(
+            Locale.US, "+%.0f–%.0f%%", pick.expectedLowPct, pick.expectedHighPct
+        ),
+        headlineColor = AurumColors.gain,
+        support = "by tomorrow",
+        note = note,
+        onOpen = { onOpenDetail(pick.symbol) },
+        onAnalyze = { onOpenAnalysis(pick.symbol) }
     ) {
-        Row(verticalAlignment = Alignment.Top) {
-            Text(
-                text = pick.rank.toString().padStart(2, '0'),
-                style = MaterialTheme.typography.headlineMedium,
-                color = AurumColors.gold
-            )
-            Spacer(modifier = Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
-                        text = pick.symbol,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
-                    )
-                    if (pick.name.isNotBlank()) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = pick.name,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = AurumColors.textDim,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    PillTag(
-                        text = String.format(Locale.US, "RR %.1f", pick.rewardRisk),
-                        color = AurumColors.gold
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    if (pick.techDirection == "BULLISH" && pick.techTotal > 0) {
-                        PillTag(
-                            text = "${pick.techBullish}/${pick.techTotal} bullish",
-                            color = AurumColors.gain
-                        )
-                    }
-                    val rating = pick.analystRating
-                    if (rating != null && rating <= 2.5) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        PillTag(text = "Buy-rated", color = AurumColors.info)
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ScoreBar(score = pick.score, modifier = Modifier.weight(1f))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = pick.score.roundToInt().toString(),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
-                    )
-                }
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    StatTile(
-                        label = if (pick.entryLimit >= pick.price) "Enter at" else "Limit at",
-                        value = Fmt.money(if (pick.entryLimit >= pick.price) pick.price else pick.entryLimit),
-                        modifier = Modifier.weight(1f)
-                    )
-                    StatTile(
-                        label = "Target",
-                        value = Fmt.money(pick.target),
-                        modifier = Modifier.weight(1f),
-                        valueColor = AurumColors.gain
-                    )
-                    StatTile(
-                        label = "Stop",
-                        value = Fmt.money(pick.stop),
-                        modifier = Modifier.weight(1f),
-                        valueColor = AurumColors.loss
-                    )
-                }
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = String.format(
-                        Locale.US,
-                        "+%.1f%% to target · %.1f%% risk to the stop",
-                        pick.upsidePct, pick.riskPct
-                    ),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = AurumColors.gain
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = pick.reason,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.heightIn(min = 40.dp).clickable { onAnalyze() }
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.QueryStats,
-                        contentDescription = null,
-                        tint = AurumColors.gold,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Full analysis & $3,000 plan",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = Fmt.money(pick.price),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
-                )
-                DeltaPct(value = pick.dayChangePct, style = MaterialTheme.typography.labelMedium)
-                Text(
-                    text = "last session",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
-            }
-        }
-        PortfolioNoteTag(note)
-    }
-}
-
-@Composable
-private fun DailyPickCard(
-    pick: DailyPick,
-    onOpen: () -> Unit,
-    onAnalyze: () -> Unit,
-    note: PickNote? = null
-) {
-    AurumCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .animateContentSize(),
-        onClick = onOpen
-    ) {
-        Row(verticalAlignment = Alignment.Top) {
-            Text(
-                text = pick.rank.toString().padStart(2, '0'),
-                style = MaterialTheme.typography.headlineMedium,
-                color = AurumColors.gold
-            )
-            Spacer(modifier = Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
-                        text = pick.symbol,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
-                    )
-                    if (pick.name.isNotBlank()) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = pick.name,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = AurumColors.textDim,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    PillTag(
-                        text = String.format(
-                            Locale.US, "+%.0f–%.0f%% potential",
-                            pick.expectedLowPct, pick.expectedHighPct
-                        ),
-                        color = AurumColors.gold
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    if (pick.techDirection == "BULLISH" && pick.techTotal > 0) {
-                        PillTag(
-                            text = "${pick.techBullish}/${pick.techTotal} bullish",
-                            color = AurumColors.gain
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ScoreBar(score = pick.score, modifier = Modifier.weight(1f))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = pick.score.roundToInt().toString(),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
-                    )
-                }
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = pick.reason,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim
-                )
-                ExtendedHoursRow(pick)
-                if (pick.headline.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        SentimentDot(sentiment = pick.headlineSentiment)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (pick.headlineSource.isBlank()) pick.headline
-                            else "${pick.headline} — ${pick.headlineSource}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = AurumColors.text,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.heightIn(min = 40.dp).clickable { onAnalyze() }
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.QueryStats,
-                        contentDescription = null,
-                        tint = AurumColors.gold,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Full analysis & $3,000 plan",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = Fmt.money(pick.price),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
-                )
-                DeltaPct(value = pick.dayChangePct, style = MaterialTheme.typography.labelMedium)
-                Text(
-                    // Before the open, price and change still belong to the
-                    // previous regular session — say so instead of "today".
-                    text = when (pick.marketState) {
-                        "PRE", "PREPRE", "CLOSED", "POSTPOST" -> "last session"
-                        else -> "today"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
-            }
-        }
-        PortfolioNoteTag(note)
-    }
-}
-
-/** "Pre-market +2.1% · After hours -0.3%" line; hidden when neither print exists. */
-@Composable
-private fun ExtendedHoursRow(pick: DailyPick) {
-    val pre = pick.preMarketPct
-    val post = pick.postMarketPct
-    if (pre == null && post == null) return
-    Spacer(modifier = Modifier.height(6.dp))
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        if (pre != null) {
-            Text(
-                text = "Pre-market ",
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.textDim
-            )
-            Text(
-                text = Fmt.signedPct(pre),
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.deltaColor(pre)
-            )
-        }
-        if (pre != null && post != null) {
-            Text(
-                text = "  ·  ",
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.textDim
-            )
-        }
-        if (post != null) {
-            Text(
-                text = "After hours ",
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.textDim
-            )
-            Text(
-                text = Fmt.signedPct(post),
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.deltaColor(post)
-            )
+        Text(
+            text = pick.reason,
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+        Spacer(Modifier.height(8.dp))
+        DetailLine("Price", Fmt.money(pick.price))
+        DetailLine("Morning target", Fmt.money(pick.target), valueColor = AurumColors.gain)
+        DetailLine("Stop", Fmt.money(pick.stop), valueColor = AurumColors.loss)
+        DetailLine(
+            label = "Last 4 days",
+            value = String.format(Locale.US, "%+.1f%% · %d of 4 up", pick.r4Pct, pick.upDays)
+        )
+        DetailLine(
+            label = "Closing position",
+            value = String.format(Locale.US, "%.0f%% of the day's range", pick.closePosPct)
+        )
+        DetailLine("Volume", String.format(Locale.US, "%.1fx average", pick.volumeRatio))
+        if (pick.techTotal > 0) {
+            DetailLine("Techniques", "${pick.techBullish}/${pick.techTotal} bullish")
         }
     }
 }
 
-// ---------------------------------------------------------------- weekly tab
+// ------------------------------------------------------------------ weekly
 
-private fun androidx.compose.foundation.lazy.LazyListScope.weeklyItems(
+private fun LazyListScope.weeklyItems(
     state: PicksState,
     onOpenDetail: (String) -> Unit,
     onOpenAnalysis: (String) -> Unit,
     onRefresh: () -> Unit
 ) {
     if (state.rows.isEmpty()) {
-        item {
-            if (state.loading || state.refreshing) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 56.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = AurumColors.gold)
-                        Spacer(modifier = Modifier.height(14.dp))
-                        Text(
-                            text = "Scanning the market…",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = AurumColors.textDim
-                        )
-                    }
-                }
-            } else {
+        if (state.loading || state.refreshing) {
+            loadingItem("Scanning the market…")
+        } else {
+            item {
                 EmptyState(
-                    title = "No picks this week yet",
-                    message = "Scan the market to rank this week's ten strongest setups.",
+                    title = "No picks this week",
+                    message = "Scan to rank this week's strongest setups.",
                     actionLabel = "Scan now",
                     onAction = onRefresh
                 )
             }
         }
     } else {
+        item {
+            Footnote("The strongest setups from the tracked universe plus this week's live movers.")
+            Spacer(Modifier.height(12.dp))
+            RowDivider()
+        }
         items(state.rows, key = { it.pick.symbol }) { row ->
-            PickCard(
-                row = row,
-                onOpen = { onOpenDetail(row.pick.symbol) },
-                onAnalyze = { onOpenAnalysis(row.pick.symbol) },
-                note = noteFor(state, row.pick.symbol)
-            )
+            WeeklyRow(row, noteFor(state, row.pick.symbol), onOpenDetail, onOpenAnalysis)
         }
     }
 
     if (state.budgetRows.isNotEmpty()) {
         item {
-            Spacer(modifier = Modifier.height(14.dp))
-            SectionHeader(title = "Under $25 · weekly watch")
+            Spacer(Modifier.height(28.dp))
+            Text(
+                text = "UNDER $25",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+            Spacer(Modifier.height(12.dp))
+            RowDivider()
         }
         items(state.budgetRows, key = { "u25-${it.pick.symbol}" }) { row ->
-            PickCard(
-                row = row,
-                onOpen = { onOpenDetail(row.pick.symbol) },
-                onAnalyze = { onOpenAnalysis(row.pick.symbol) },
-                note = noteFor(state, row.pick.symbol)
-            )
+            WeeklyRow(row, noteFor(state, row.pick.symbol), onOpenDetail, onOpenAnalysis)
         }
     }
 }
 
 @Composable
-private fun PickCard(
+private fun WeeklyRow(
     row: PickRow,
-    onOpen: () -> Unit,
-    onAnalyze: () -> Unit,
-    note: PickNote? = null
+    note: PickNote?,
+    onOpenDetail: (String) -> Unit,
+    onOpenAnalysis: (String) -> Unit
 ) {
     val pick = row.pick
-    AurumCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .animateContentSize(),
-        onClick = onOpen
+    val since = row.sincePickPct
+    PickRowItem(
+        rank = pick.rank,
+        symbol = pick.symbol,
+        name = pick.name,
+        headline = Fmt.money(row.quote?.price ?: pick.priceAtPick),
+        headlineColor = AurumColors.text,
+        support = if (since != null) "${Fmt.signedPct(since)} since pick" else "at pick",
+        note = note,
+        onOpen = { onOpenDetail(pick.symbol) },
+        onAnalyze = { onOpenAnalysis(pick.symbol) }
     ) {
-        Row(verticalAlignment = Alignment.Top) {
-            Text(
-                text = pick.rank.toString().padStart(2, '0'),
-                style = MaterialTheme.typography.headlineMedium,
-                color = AurumColors.gold
+        Text(
+            text = pick.reason,
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+        Spacer(Modifier.height(8.dp))
+        DetailLine("Price at pick", Fmt.money(pick.priceAtPick))
+        row.quote?.let { DetailLine("Now", Fmt.money(it.price)) }
+        since?.let {
+            DetailLine(
+                label = "Since pick",
+                value = Fmt.signedPct(it),
+                valueColor = AurumColors.deltaColor(it)
             )
-            Spacer(modifier = Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
-                        text = pick.symbol,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
-                    )
-                    if (pick.name.isNotBlank()) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = pick.name,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = AurumColors.textDim,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ScoreBar(score = pick.score, modifier = Modifier.weight(1f))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = pick.score.roundToInt().toString(),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
-                    )
-                }
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = pick.reason,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.heightIn(min = 40.dp).clickable { onAnalyze() }
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.QueryStats,
-                        contentDescription = null,
-                        tint = AurumColors.gold,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "5-day analysis",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = Fmt.money(pick.priceAtPick),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
-                )
-                Text(
-                    text = "at pick",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
-                val since = row.sincePickPct
-                if (since != null) {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    DeltaPct(value = since, style = MaterialTheme.typography.labelMedium)
-                    Text(
-                        text = "since pick",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = AurumColors.textDim
-                    )
-                }
-            }
         }
-        PortfolioNoteTag(note)
+        DetailLine("Score", String.format(Locale.US, "%.0f / 100", pick.score))
     }
-}
-
-// ------------------------------------------------------- portfolio context
-
-/** The pick's note against the user's live book — null when nothing factual applies. */
-private fun noteFor(state: PicksState, symbol: String): PickNote? =
-    PortfolioLens.pickNote(symbol, state.pickSectors[symbol], state.book)
-
-/** Renders a pick's portfolio note as a stamped tag; held gold, risk red, fresh blue. */
-@Composable
-private fun PortfolioNoteTag(note: PickNote?) {
-    if (note == null) return
-    Spacer(modifier = Modifier.height(10.dp))
-    PillTag(
-        text = note.text,
-        color = when (note.kind) {
-            NoteKind.HELD -> AurumColors.gold
-            NoteKind.CONCENTRATION -> AurumColors.loss
-            NoteKind.DIVERSIFIES -> AurumColors.info
-        }
-    )
 }

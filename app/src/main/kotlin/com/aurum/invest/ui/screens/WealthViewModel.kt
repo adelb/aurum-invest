@@ -7,8 +7,10 @@ import com.aurum.invest.AurumApp
 import com.aurum.invest.analytics.BookContext
 import com.aurum.invest.analytics.MarketRating
 import com.aurum.invest.analytics.PortfolioLens
+import com.aurum.invest.analytics.WeeklyStrategy
 import com.aurum.invest.analytics.WealthPlan
 import com.aurum.invest.data.repo.PortfolioRepository
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,7 +33,10 @@ data class WealthState(
     /** The user's book by sector — same math as the dashboard allocation. */
     val book: BookContext = BookContext.EMPTY,
     /** Sector classification for the pulse's suggested symbols. */
-    val pulseSectors: Map<String, String> = emptyMap()
+    val pulseSectors: Map<String, String> = emptyMap(),
+    /** This week's sector gaps + deployment plan for this book. */
+    val strategy: WeeklyStrategy? = null,
+    val strategyLoading: Boolean = true
 )
 
 class WealthViewModel(app: Application) : AndroidViewModel(app) {
@@ -41,6 +46,8 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _state = MutableStateFlow(WealthState())
     val state: StateFlow<WealthState> = _state.asStateFlow()
+
+    private var strategyJob: Job? = null
 
     init {
         // The market pulse is independent of the user's plan inputs.
@@ -61,17 +68,20 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                 val views = open.map { PortfolioRepository.toView(it, quotes[it.symbol]) }
                 val sectors = container.market.getSectors(open.map { it.symbol })
                 _state.update { it.copy(book = PortfolioLens.build(views, sectors)) }
+                refreshStrategy()
             }
         }
         viewModelScope.launch {
             val inputs = wealth.getInputs()
             if (inputs == null) {
                 _state.update { it.copy(loading = false, editing = true) }
+                refreshStrategy()
                 return@launch
             }
             _state.update {
                 it.copy(baseAmount = inputs.first, targetProfit = inputs.second)
             }
+            refreshStrategy()
             // Serve the stored plan instantly, then freshen if the week rolled.
             val stored = wealth.getPlan()
             if (stored != null) {
@@ -97,6 +107,24 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
             wealth.setInputs(base, target)
             val plan = wealth.recompute()
             _state.update { it.copy(computing = false, loading = false, plan = plan) }
+            refreshStrategy()
+        }
+    }
+
+    /**
+     * Recomputes this week's sector gaps + deployment split for the current
+     * book and budget. Cheap on repeat — its inputs are cached — so it can
+     * re-run whenever the portfolio changes.
+     */
+    private fun refreshStrategy() {
+        strategyJob?.cancel()
+        strategyJob = viewModelScope.launch {
+            _state.update { it.copy(strategyLoading = true) }
+            val st = _state.value
+            val strategy = wealth.getStrategy(st.book, st.baseAmount ?: 0.0)
+            _state.update {
+                it.copy(strategy = strategy ?: it.strategy, strategyLoading = false)
+            }
         }
     }
 
@@ -125,6 +153,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(computing = true) }
             val plan = wealth.recompute()
             _state.update { it.copy(computing = false, plan = plan ?: it.plan) }
+            refreshStrategy()
         }
     }
 

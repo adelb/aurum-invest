@@ -48,6 +48,59 @@ class YahooClient {
         }
     }
 
+    /**
+     * v8 spark API — MANY symbols in ONE request. Returns price + previous
+     * close only, so results are marked [Quote.lite]. This is what keeps list
+     * screens from firing one request per symbol (and tripping Yahoo's
+     * per-IP throttling). Symbols that fail are simply absent.
+     */
+    suspend fun fetchQuotesBatch(symbols: List<String>): Map<String, Quote> =
+        withContext(Dispatchers.IO) {
+            if (symbols.isEmpty()) return@withContext emptyMap()
+            try {
+                val url = "https://query1.finance.yahoo.com/v8/finance/spark".toHttpUrl()
+                    .newBuilder()
+                    .addQueryParameter("symbols", symbols.joinToString(","))
+                    .addQueryParameter("range", "1d")
+                    .addQueryParameter("interval", "5m")
+                    .build()
+                    .toString()
+                val root = getJson(url) ?: return@withContext emptyMap()
+                val now = System.currentTimeMillis()
+                val out = HashMap<String, Quote>(symbols.size)
+                for (symbol in symbols) {
+                    val o = root.optJSONObject(symbol) ?: continue
+                    val closes = o.optJSONArray("close") ?: continue
+                    // Walk back from the newest bar: the last entries can be null.
+                    var price = Double.NaN
+                    for (i in closes.length() - 1 downTo 0) {
+                        if (closes.isNull(i)) continue
+                        val v = closes.optDouble(i, Double.NaN)
+                        if (!v.isNaN() && v > 0.0) {
+                            price = v
+                            break
+                        }
+                    }
+                    if (price.isNaN()) continue
+                    val prevClose = listOf("chartPreviousClose", "previousClose")
+                        .firstNotNullOfOrNull { key ->
+                            if (!o.has(key) || o.isNull(key)) null
+                            else o.optDouble(key, Double.NaN).takeIf { !it.isNaN() }
+                        } ?: price
+                    out[symbol] = Quote(
+                        symbol = symbol,
+                        price = price,
+                        prevClose = prevClose,
+                        fetchedAt = now,
+                        lite = true
+                    )
+                }
+                out
+            } catch (_: Exception) {
+                emptyMap()
+            }
+        }
+
     /** v8 chart API, interval=1d; range picked from [rangeDays]. */
     suspend fun fetchDailyCandles(symbol: String, rangeDays: Int): List<Candle> =
         withContext(Dispatchers.IO) {
@@ -327,22 +380,33 @@ class YahooClient {
             .build()
             .toString()
 
-    /** Executes a GET and parses the body as JSON. Returns null on any failure. */
+    /**
+     * Executes a GET and parses the body as JSON. Returns null on any failure.
+     * Yahoo answers 429 when a burst comes too fast from one IP; that case
+     * gets one backoff retry rather than surfacing as missing data.
+     */
     private fun getJson(url: String): JSONObject? {
-        return try {
-            val request = Request.Builder()
-                .url(url)
-                .header("User-Agent", USER_AGENT)
-                .get()
-                .build()
-            http.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return null
-                val body = response.body?.string() ?: return null
-                JSONObject(body)
+        repeat(2) { attempt ->
+            try {
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", USER_AGENT)
+                    .get()
+                    .build()
+                http.newCall(request).execute().use { response ->
+                    if (response.code == 429 && attempt == 0) {
+                        Thread.sleep(700L)
+                        return@use
+                    }
+                    if (!response.isSuccessful) return null
+                    val body = response.body?.string() ?: return null
+                    return JSONObject(body)
+                }
+            } catch (_: Exception) {
+                return null
             }
-        } catch (_: Exception) {
-            null
         }
+        return null
     }
 
     private fun chartResult(root: JSONObject): JSONObject? {

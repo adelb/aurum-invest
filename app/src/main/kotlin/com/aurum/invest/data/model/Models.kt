@@ -14,7 +14,13 @@ data class Quote(
     val dayLow: Double? = null,
     val fiftyTwoWeekHigh: Double? = null,
     val fiftyTwoWeekLow: Double? = null,
-    val volume: Long? = null
+    val volume: Long? = null,
+    /**
+     * True when this came from the batch (spark) endpoint, which carries only
+     * price and previous close. Screens needing the full read (detail's key
+     * stats) re-fetch instead of trusting a lite entry.
+     */
+    val lite: Boolean = false
 ) {
     val dayChangeAbs: Double get() = price - prevClose
     val dayChangePct: Double get() = if (prevClose > 0.0) (price - prevClose) / prevClose * 100.0 else 0.0

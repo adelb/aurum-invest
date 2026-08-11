@@ -99,10 +99,12 @@ class WatchlistViewModel(app: Application) : AndroidViewModel(app) {
 
         val goldCandles = if (items.any { it.pinned }) market.getGoldCandles() else emptyList()
         val quoteMaxAge = if (fresh) 0L else 60_000L
+        // One batched request for every watched symbol instead of one call each.
+        val quotes = market.getQuotes(items.map { it.symbol }, maxAgeMs = quoteMaxAge)
         val rows = coroutineScope {
             items.map { item ->
                 async {
-                    val quote = market.getQuote(item.symbol, maxAgeMs = quoteMaxAge)
+                    val quote = quotes[item.symbol]
                     val daily = market.getDailyCandles(item.symbol, 120)
                     val spark = daily.takeLast(30).map { c -> c.close }
                     val advice = if (quote != null && daily.isNotEmpty()) {

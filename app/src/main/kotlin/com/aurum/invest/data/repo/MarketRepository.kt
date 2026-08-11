@@ -23,12 +23,18 @@ class MarketRepository(
     private val cacheDao: CacheDao
 ) {
 
+    /**
+     * The full read for one symbol (price, ranges, volume, name). A cached
+     * LITE entry from the batch endpoint is not enough here, so it is
+     * refreshed rather than returned.
+     */
     suspend fun getQuote(symbol: String, maxAgeMs: Long = 60_000L): Quote? {
         val key = "quote:$symbol"
         val now = System.currentTimeMillis()
         val cached = readCache(key)
-        if (cached != null && now - cached.updatedAt <= maxAgeMs) {
-            quoteFromJson(cached.json)?.let { return it }
+        val cachedQuote = cached?.let { quoteFromJson(it.json) }
+        if (cachedQuote != null && !cachedQuote.lite && now - cached.updatedAt <= maxAgeMs) {
+            return cachedQuote
         }
         val fresh = yahoo.fetchQuote(symbol)
         if (fresh != null) {
@@ -36,19 +42,67 @@ class MarketRepository(
             return fresh
         }
         // Network failed — serve stale cache when available.
-        return cached?.let { quoteFromJson(it.json) }
+        return cachedQuote
     }
 
-    /** Fetches quotes concurrently; symbols that fail are simply absent from the map. */
+    /**
+     * Quotes for many symbols. Fresh cache entries are served directly and
+     * everything else goes out in BATCHES (one request per [BATCH_SIZE]
+     * symbols) instead of one request per symbol — the difference between a
+     * list screen making 60 calls and making 2. Symbols that fail are absent.
+     */
     suspend fun getQuotes(symbols: List<String>, maxAgeMs: Long = 60_000L): Map<String, Quote> {
         if (symbols.isEmpty()) return emptyMap()
-        return coroutineScope {
-            symbols.distinct()
-                .map { symbol -> async { symbol to getQuote(symbol, maxAgeMs) } }
-                .awaitAll()
-                .mapNotNull { (symbol, quote) -> quote?.let { symbol to it } }
-                .toMap()
+        val wanted = symbols.distinct()
+        val now = System.currentTimeMillis()
+        val out = HashMap<String, Quote>(wanted.size)
+        val stale = HashMap<String, Quote>()
+        val misses = ArrayList<String>()
+
+        for (symbol in wanted) {
+            val cached = readCache("quote:$symbol")
+            val quote = cached?.let { quoteFromJson(it.json) }
+            if (quote != null && now - cached.updatedAt <= maxAgeMs) {
+                out[symbol] = quote
+            } else {
+                if (quote != null) stale[symbol] = quote
+                misses.add(symbol)
+            }
         }
+        if (misses.isEmpty()) return out
+
+        val fetched = coroutineScope {
+            misses.chunked(BATCH_SIZE)
+                .map { chunk -> async { yahoo.fetchQuotesBatch(chunk) } }
+                .awaitAll()
+        }.fold(HashMap<String, Quote>()) { acc, map -> acc.apply { putAll(map) } }
+
+        for (symbol in misses) {
+            val fresh = fetched[symbol]
+            if (fresh != null) {
+                // Carry forward richer fields from a stale full entry so the
+                // batch read never erases a name or range we already knew.
+                val prior = stale[symbol]
+                val merged =
+                    if (prior != null && !prior.lite) {
+                        fresh.copy(
+                            currency = prior.currency,
+                            shortName = prior.shortName,
+                            dayHigh = prior.dayHigh,
+                            dayLow = prior.dayLow,
+                            fiftyTwoWeekHigh = prior.fiftyTwoWeekHigh,
+                            fiftyTwoWeekLow = prior.fiftyTwoWeekLow,
+                            volume = prior.volume
+                        )
+                    } else fresh
+                writeCache("quote:$symbol", quoteToJson(merged).toString())
+                out[symbol] = merged
+            } else {
+                // Batch failed for this symbol — stale beats nothing.
+                stale[symbol]?.let { out[symbol] = it }
+            }
+        }
+        return out
     }
 
     suspend fun getDailyCandles(
@@ -219,6 +273,7 @@ class MarketRepository(
         if (q.fiftyTwoWeekHigh != null) put("w52High", q.fiftyTwoWeekHigh)
         if (q.fiftyTwoWeekLow != null) put("w52Low", q.fiftyTwoWeekLow)
         if (q.volume != null) put("volume", q.volume)
+        if (q.lite) put("lite", true)
     }
 
     private fun quoteFromJson(s: String): Quote? =
@@ -236,7 +291,8 @@ class MarketRepository(
                 dayLow = if (o.has("dayLow")) o.getDouble("dayLow") else null,
                 fiftyTwoWeekHigh = if (o.has("w52High")) o.getDouble("w52High") else null,
                 fiftyTwoWeekLow = if (o.has("w52Low")) o.getDouble("w52Low") else null,
-                volume = if (o.has("volume")) o.getLong("volume") else null
+                volume = if (o.has("volume")) o.getLong("volume") else null,
+                lite = o.optBoolean("lite", false)
             )
         } catch (_: Exception) {
             null
@@ -360,5 +416,8 @@ class MarketRepository(
 
     companion object {
         const val GOLD_SYMBOL = "GLD"
+
+        /** Symbols per spark request. Yahoo handles this comfortably in one call. */
+        private const val BATCH_SIZE = 40
     }
 }
