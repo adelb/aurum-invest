@@ -305,6 +305,8 @@ class MarketRepository(
         if (e.preMarketPct != null) put("preMarketPct", e.preMarketPct)
         if (e.postMarketPct != null) put("postMarketPct", e.postMarketPct)
         put("marketState", e.marketState)
+        if (e.preMarketPrice != null) put("preMarketPrice", e.preMarketPrice)
+        if (e.postMarketPrice != null) put("postMarketPrice", e.postMarketPrice)
     }
 
     private fun extendedFromJson(s: String): ExtendedHours? =
@@ -316,7 +318,9 @@ class MarketRepository(
                 regularPrice = o.getDouble("regularPrice"),
                 preMarketPct = if (o.has("preMarketPct")) o.getDouble("preMarketPct") else null,
                 postMarketPct = if (o.has("postMarketPct")) o.getDouble("postMarketPct") else null,
-                marketState = o.optString("marketState", "")
+                marketState = o.optString("marketState", ""),
+                preMarketPrice = if (o.has("preMarketPrice")) o.getDouble("preMarketPrice") else null,
+                postMarketPrice = if (o.has("postMarketPrice")) o.getDouble("postMarketPrice") else null
             )
         } catch (_: Exception) {
             null

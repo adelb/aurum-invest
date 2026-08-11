@@ -183,6 +183,8 @@ class YahooClient {
             val candles = parseCandles(root)
             var preMarketPct: Double? = null
             var postMarketPct: Double? = null
+            var preMarketPrice: Double? = null
+            var postMarketPrice: Double? = null
             // Pre-market = bars inside the current session's pre window
             // (04:00-09:30 ET), and only while that session is still live.
             // Without both bounds, an overnight or weekend request matches the
@@ -201,6 +203,7 @@ class YahooClient {
             if (preStart in 1 until regStart && preBase > 0.0 && sessionLive) {
                 candles.lastOrNull { it.ts in preStart until regStart }?.let { pre ->
                     preMarketPct = (pre.close - preBase) / preBase * 100.0
+                    preMarketPrice = pre.close
                 }
             }
             if (regEnd > 0L) {
@@ -211,6 +214,7 @@ class YahooClient {
                     ?: regularPrice
                 if (lastPost != null && regClose > 0.0) {
                     postMarketPct = (lastPost.close - regClose) / regClose * 100.0
+                    postMarketPrice = lastPost.close
                 }
             }
             // Yahoo no longer sends marketState in chart meta; derive it from
@@ -229,7 +233,9 @@ class YahooClient {
                 regularPrice = regularPrice,
                 preMarketPct = preMarketPct,
                 postMarketPct = postMarketPct,
-                marketState = marketState
+                marketState = marketState,
+                preMarketPrice = preMarketPrice,
+                postMarketPrice = postMarketPrice
             )
         } catch (_: Exception) {
             null

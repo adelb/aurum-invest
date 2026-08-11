@@ -2,6 +2,7 @@ package com.aurum.invest.analytics
 
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.model.Candle
+import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.ScreenerQuote
 import com.aurum.invest.data.repo.MarketRepository
 import java.time.Instant
@@ -53,7 +54,16 @@ data class PreMarketPick(
      */
     val timingNote: String,
     val reason: String,
-    val caution: String              // "" when nothing needs flagging
+    val caution: String,             // "" when nothing needs flagging
+    /**
+     * True when [price] and [preMarketPct] come from an actual pre-market
+     * print. False means the pre-market session has no trades yet (evening,
+     * weekend) and the figures describe the last regular session instead —
+     * the screen says which, rather than passing one off as the other.
+     */
+    val livePreMarket: Boolean = true,
+    /** When the underlying prints were read. */
+    val asOf: Long = 0L
 )
 
 /**
@@ -88,6 +98,9 @@ class PreMarketPicker(private val market: MarketRepository) {
         private const val HISTORY_DAYS = 90
         private val ET: ZoneId = ZoneId.of("America/New_York")
 
+        /** Pre-market prints move constantly — never serve them more than a minute stale. */
+        private const val LIVE_MAX_AGE_MS = 60_000L
+
         fun toJson(picks: List<PreMarketPick>): String {
             val arr = JSONArray()
             picks.forEach { p ->
@@ -115,6 +128,8 @@ class PreMarketPicker(private val market: MarketRepository) {
                     put("timingNote", p.timingNote)
                     put("reason", p.reason)
                     put("caution", p.caution)
+                    put("livePreMarket", p.livePreMarket)
+                    put("asOf", p.asOf)
                 })
             }
             return arr.toString()
@@ -150,7 +165,9 @@ class PreMarketPicker(private val market: MarketRepository) {
                         timingSessions = o.optInt("timingSessions", 0),
                         timingNote = o.optString("timingNote", ""),
                         reason = o.optString("reason", ""),
-                        caution = o.optString("caution", "")
+                        caution = o.optString("caution", ""),
+                        livePreMarket = o.optBoolean("livePreMarket", true),
+                        asOf = o.optLong("asOf", 0L)
                     )
                 )
             }
@@ -206,37 +223,60 @@ class PreMarketPicker(private val market: MarketRepository) {
             }.sortedByDescending { it.avgVolume3M }.take(SHORTLIST)
             if (tradeable.isEmpty()) return emptyList()
 
-            // 3 — the actual pre-market prints.
-            val movers = ArrayList<Pair<ScreenerQuote, Double>>()
-            for (chunk in tradeable.chunked(DEEP_CHUNK)) {
-                val results = coroutineScope {
-                    chunk.map { q ->
-                        async {
-                            val ext = try {
-                                market.getExtendedHours(q.symbol)
-                            } catch (_: Exception) {
-                                null
+            // Which session is running decides both what to rank on and which
+            // price is the live one. Pre-market prints are only meaningful for
+            // TODAY during the pre-market window and the session that follows
+            // it; in the evening they describe a morning that has already been
+            // traded, so the list falls back to the last regular session.
+            val session = Dates.marketSessionNow()
+            val usePreMarket = session == Dates.MarketSession.PRE ||
+                session == Dates.MarketSession.REGULAR
+
+            // 3 — the actual pre-market prints. Fetched fresh (60s) because
+            // these move continuously while the pre-market session is open.
+            val movers = ArrayList<Triple<ScreenerQuote, Double, ExtendedHours?>>()
+            if (usePreMarket) {
+                for (chunk in tradeable.chunked(DEEP_CHUNK)) {
+                    val results = coroutineScope {
+                        chunk.map { q ->
+                            async {
+                                val ext = try {
+                                    market.getExtendedHours(q.symbol, maxAgeMs = LIVE_MAX_AGE_MS)
+                                } catch (_: Exception) {
+                                    null
+                                }
+                                val pre = ext?.preMarketPct
+                                if (pre != null && pre > 0.0) Triple(q, pre, ext) else null
                             }
-                            val pre = ext?.preMarketPct
-                            if (pre != null && pre > 0.0) q to pre else null
-                        }
-                    }.awaitAll()
+                        }.awaitAll()
+                    }
+                    results.filterNotNull().forEach { movers.add(it) }
                 }
-                results.filterNotNull().forEach { movers.add(it) }
             }
             // Before the pre-market session has prints (evening, weekend), fall
             // back to the last session's movers so the list is never empty —
-            // the copy on screen says which of the two it is showing.
-            val ranked = movers.ifEmpty {
-                tradeable.filter { it.dayChangePct > 0.0 }.map { it to it.dayChangePct }
-            }.sortedByDescending { it.second }.take(count * 2)
+            // the copy on screen says which of the two it is showing. The flag
+            // records where the PERCENTAGE came from; how fresh that is comes
+            // from the session, which the screen shows separately.
+            val live = movers.isNotEmpty()
+            val ranked: List<Triple<ScreenerQuote, Double, ExtendedHours?>> =
+                if (movers.isNotEmpty()) {
+                    movers.sortedByDescending { it.second }.take(count * 2)
+                } else {
+                    tradeable.filter { it.dayChangePct > 0.0 }
+                        .sortedByDescending { it.dayChangePct }
+                        .take(count * 2)
+                        .map { Triple(it, it.dayChangePct, null) }
+                }
             if (ranked.isEmpty()) return emptyList()
 
             // 4 — measure each candidate against the goal.
             val measured = ArrayList<Pair<PreMarketPick, Double>>()
             for (chunk in ranked.chunked(DEEP_CHUNK)) {
                 val results = coroutineScope {
-                    chunk.map { (q, pre) -> async { measure(q, pre, target, dateIso) } }.awaitAll()
+                    chunk.map { (q, pre, ext) ->
+                        async { measure(q, pre, ext, live, session, target, dateIso) }
+                    }.awaitAll()
                 }
                 results.filterNotNull().forEach { measured.add(it) }
             }
@@ -255,6 +295,9 @@ class PreMarketPicker(private val market: MarketRepository) {
     private suspend fun measure(
         q: ScreenerQuote,
         preMarketPct: Double,
+        ext: ExtendedHours?,
+        live: Boolean,
+        session: Dates.MarketSession,
         target: Double,
         dateIso: String
     ): Pair<PreMarketPick, Double>? {
@@ -305,10 +348,31 @@ class PreMarketPicker(private val market: MarketRepository) {
             // Timing from five sessions of 5-minute bars.
             val timing = timingFor(q.symbol)
 
-            // Entry: the pre-market print is where it currently trades, but the
-            // open is where it can actually be bought — use the pre-market
-            // price and let the stop absorb the difference.
-            val entry = q.price.takeIf { it > 0.0 } ?: lastClose
+            // Entry must be whatever the stock ACTUALLY trades at right now,
+            // chosen by session. Before the open the screener's
+            // regularMarketPrice still holds yesterday's close, and the gap to
+            // the pre-market print is routinely wider than the target itself —
+            // pricing off it would make every level on the card wrong. During
+            // the regular session the reverse applies: this morning's
+            // pre-market print is stale and the regular price is live.
+            val entry = when (session) {
+                Dates.MarketSession.PRE ->
+                    ext?.preMarketPrice?.takeIf { it > 0.0 }
+                        ?: q.price.takeIf { it > 0.0 }
+                        ?: lastClose
+                Dates.MarketSession.REGULAR ->
+                    ext?.regularPrice?.takeIf { it > 0.0 }
+                        ?: q.price.takeIf { it > 0.0 }
+                        ?: lastClose
+                Dates.MarketSession.POST ->
+                    ext?.postMarketPrice?.takeIf { it > 0.0 }
+                        ?: ext?.regularPrice?.takeIf { it > 0.0 }
+                        ?: q.price.takeIf { it > 0.0 }
+                        ?: lastClose
+                else ->
+                    q.price.takeIf { it > 0.0 } ?: lastClose
+            }
+            val priorClose = ext?.prevClose?.takeIf { it > 0.0 } ?: lastClose
             val targetPrice = entry * (1.0 + target / 100.0)
             val stop = entry - atr * 0.6
 
@@ -360,7 +424,7 @@ class PreMarketPicker(private val market: MarketRepository) {
                 symbol = q.symbol,
                 name = q.name.ifEmpty { q.symbol },
                 price = round2(entry),
-                prevClose = round2(lastClose),
+                prevClose = round2(priorClose),
                 preMarketPct = round2(preMarketPct),
                 targetPct = target,
                 targetPrice = round2(targetPrice),
@@ -377,7 +441,9 @@ class PreMarketPicker(private val market: MarketRepository) {
                 timingSessions = timing.sessions,
                 timingNote = timing.note,
                 reason = reason,
-                caution = caution
+                caution = caution,
+                livePreMarket = live,
+                asOf = System.currentTimeMillis()
             )
             pick to score
         } catch (_: Exception) {

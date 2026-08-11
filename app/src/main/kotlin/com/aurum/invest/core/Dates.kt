@@ -66,6 +66,40 @@ object Dates {
         return !nowEt.toLocalTime().isBefore(java.time.LocalTime.of(9, 30))
     }
 
+    /** Which US market session is running right now, in ET. */
+    enum class MarketSession { WEEKEND, OVERNIGHT, PRE, REGULAR, POST }
+
+    /**
+     * The live US session for "now": pre-market runs 4:00-9:30 AM ET, the
+     * regular session 9:30 AM-4:00 PM, after-hours to 8:00 PM. Screens use
+     * this to say which prints they are showing instead of implying the
+     * numbers are always live. Holidays are not modeled — those days simply
+     * have no prints.
+     */
+    fun marketSessionNow(): MarketSession {
+        val nowEt = java.time.ZonedDateTime.now(ZoneId.of("America/New_York"))
+        if (nowEt.dayOfWeek == DayOfWeek.SATURDAY || nowEt.dayOfWeek == DayOfWeek.SUNDAY) {
+            return MarketSession.WEEKEND
+        }
+        val t = nowEt.toLocalTime()
+        return when {
+            t.isBefore(java.time.LocalTime.of(4, 0)) -> MarketSession.OVERNIGHT
+            t.isBefore(java.time.LocalTime.of(9, 30)) -> MarketSession.PRE
+            t.isBefore(java.time.LocalTime.of(16, 0)) -> MarketSession.REGULAR
+            t.isBefore(java.time.LocalTime.of(20, 0)) -> MarketSession.POST
+            else -> MarketSession.OVERNIGHT
+        }
+    }
+
+    /** Minutes until the US regular session opens; 0 once it has. */
+    fun minutesToUsOpen(): Long {
+        val et = ZoneId.of("America/New_York")
+        val nowEt = java.time.ZonedDateTime.now(et)
+        val open = nowEt.toLocalDate().atTime(9, 30).atZone(et)
+        val diff = java.time.Duration.between(nowEt, open).toMinutes()
+        return if (diff > 0) diff else 0
+    }
+
     /** State of the power-hour buy window (last 90 min of the US regular session). */
     enum class PowerWindow { WEEKEND, BEFORE, OPEN, CLOSED }
 

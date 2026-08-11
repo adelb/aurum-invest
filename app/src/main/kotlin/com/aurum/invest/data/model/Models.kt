@@ -119,8 +119,21 @@ data class ExtendedHours(
     val preMarketPct: Double?,
     /** Last post-market print vs the regular close, percent; null when no post-market trades. */
     val postMarketPct: Double?,
-    val marketState: String
-)
+    val marketState: String,
+    /**
+     * The actual last pre-market PRICE. This is what a stock trades at before
+     * the open — the screener's regularMarketPrice is still yesterday's close
+     * during that window, so anything priced off it (entries, targets) would
+     * be wrong by the size of the gap.
+     */
+    val preMarketPrice: Double? = null,
+    /** The actual last post-market price, same reasoning. */
+    val postMarketPrice: Double? = null
+) {
+    /** The live price right now: extended-hours print when there is one, else regular. */
+    val livePrice: Double
+        get() = preMarketPrice ?: postMarketPrice ?: regularPrice
+}
 
 /** One same-day pick: a stock the engine reads as capable of a 3-10%+ up-move today. */
 data class DailyPick(

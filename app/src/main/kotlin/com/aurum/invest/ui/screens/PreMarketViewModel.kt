@@ -19,9 +19,15 @@ data class PreMarketState(
     val loading: Boolean = true,
     val refreshing: Boolean = false,
     val dateLabel: String = Dates.todayLabel(),
-    /** Where in the trading day the user currently is, for the header note. */
-    val session: Dates.PowerWindow = Dates.PowerWindow.BEFORE
-)
+    /** Which US session is live right now — drives the header's honesty line. */
+    val session: Dates.MarketSession = Dates.marketSessionNow(),
+    val minutesToOpen: Long = Dates.minutesToUsOpen(),
+    /** When the shown prints were read. */
+    val asOf: Long = 0L
+) {
+    /** True when the rows describe actual pre-market prints. */
+    val livePreMarket: Boolean get() = rows.isNotEmpty() && rows.first().livePreMarket
+}
 
 /**
  * Drives the pre-market list. The profit target is user-owned: changing it
@@ -37,12 +43,38 @@ class PreMarketViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<PreMarketState> = _state.asStateFlow()
 
     init {
+        load()
+    }
+
+    /**
+     * Refreshes whenever the screen is shown. Pre-market prices move minute
+     * to minute, so opening the app at 9:00 AM ET must not serve a list
+     * computed at 5:00 AM — [PicksRepository.ensurePreMarket] recomputes once
+     * the stored set ages past two minutes.
+     */
+    fun onShown() = load()
+
+    private fun load() {
+        if (_state.value.refreshing) return
         viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    session = Dates.marketSessionNow(),
+                    minutesToOpen = Dates.minutesToUsOpen(),
+                    dateLabel = Dates.todayLabel()
+                )
+            }
             val saved = targets.getTarget(DAILY_TARGET_KEY)
                 ?: PreMarketPicker.DEFAULT_TARGET_PCT
             _state.update { it.copy(targetPct = saved) }
-            val stored = picks.ensurePreMarket(saved)
-            _state.update { it.copy(rows = stored, loading = false) }
+            val rows = picks.ensurePreMarket(saved)
+            _state.update {
+                it.copy(
+                    rows = rows,
+                    loading = false,
+                    asOf = rows.firstOrNull()?.asOf ?: it.asOf
+                )
+            }
         }
     }
 
@@ -50,10 +82,22 @@ class PreMarketViewModel(app: Application) : AndroidViewModel(app) {
     fun refresh() {
         if (_state.value.refreshing) return
         viewModelScope.launch {
-            _state.update { it.copy(refreshing = true) }
+            _state.update {
+                it.copy(
+                    refreshing = true,
+                    session = Dates.marketSessionNow(),
+                    minutesToOpen = Dates.minutesToUsOpen()
+                )
+            }
             try {
                 val rows = picks.recomputePreMarket(_state.value.targetPct)
-                _state.update { it.copy(rows = rows, loading = false) }
+                _state.update {
+                    it.copy(
+                        rows = rows.ifEmpty { it.rows },
+                        loading = false,
+                        asOf = rows.firstOrNull()?.asOf ?: it.asOf
+                    )
+                }
             } finally {
                 _state.update { it.copy(refreshing = false) }
             }
@@ -67,7 +111,13 @@ class PreMarketViewModel(app: Application) : AndroidViewModel(app) {
             targets.setTarget(DAILY_TARGET_KEY, pct)
             _state.update { it.copy(targetPct = pct, loading = true, rows = emptyList()) }
             val rows = picks.ensurePreMarket(pct)
-            _state.update { it.copy(rows = rows, loading = false) }
+            _state.update {
+                it.copy(
+                    rows = rows,
+                    loading = false,
+                    asOf = rows.firstOrNull()?.asOf ?: it.asOf
+                )
+            }
         }
     }
 

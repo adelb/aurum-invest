@@ -45,10 +45,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurum.invest.analytics.PreMarketPick
 import com.aurum.invest.analytics.TargetOdds
+import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
@@ -69,6 +71,13 @@ fun PreMarketScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
     val vm: PreMarketViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
     var editingTarget by remember { mutableStateOf(false) }
+
+    // Re-read on every visit: opening the app mid-pre-market must show that
+    // moment's prints, not whatever was computed hours earlier.
+    LifecycleResumeEffect(Unit) {
+        vm.onShown()
+        onPauseOrDispose { }
+    }
 
     if (editingTarget) {
         TargetDialog(
@@ -93,9 +102,10 @@ fun PreMarketScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
                     color = AurumColors.text
                 )
                 Text(
-                    text = state.dateLabel,
+                    text = sessionLine(state),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = AurumColors.textDim
+                    color = if (state.session == Dates.MarketSession.PRE) AurumColors.gold
+                    else AurumColors.textDim
                 )
             }
             Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
@@ -130,6 +140,10 @@ fun PreMarketScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 item { TargetCard(state = state, onEdit = { editingTarget = true }) }
+
+                if (state.rows.isNotEmpty() && !state.livePreMarket) {
+                    item { LastSessionNotice() }
+                }
 
                 when {
                     state.rows.isEmpty() && state.loading -> item {
@@ -173,6 +187,30 @@ fun PreMarketScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
     }
 }
 
+/**
+ * States plainly which prints are on screen. During the pre-market window it
+ * counts down to the open; outside it, it says the figures describe the last
+ * session rather than letting them read as live.
+ */
+private fun sessionLine(state: PreMarketState): String = when (state.session) {
+    Dates.MarketSession.PRE -> {
+        val mins = state.minutesToOpen
+        val countdown = when {
+            mins <= 0L -> "opening now"
+            mins < 60L -> "opens in ${mins}m"
+            else -> "opens in ${mins / 60}h ${mins % 60}m"
+        }
+        if (state.livePreMarket) "Live pre-market · $countdown"
+        else "Pre-market open · no prints yet · $countdown"
+    }
+    Dates.MarketSession.REGULAR ->
+        if (state.livePreMarket) "Market open · pre-market prints from this morning"
+        else "Market open · showing today's session"
+    Dates.MarketSession.POST -> "After hours · pre-market reopens 4:00 AM ET"
+    Dates.MarketSession.OVERNIGHT -> "Market closed · showing the last session"
+    Dates.MarketSession.WEEKEND -> "Weekend · showing Friday's session"
+}
+
 /** The goal itself: editable, and the headline count of names that clear it. */
 @Composable
 private fun TargetCard(state: PreMarketState, onEdit: () -> Unit) {
@@ -196,7 +234,8 @@ private fun TargetCard(state: PreMarketState, onEdit: () -> Unit) {
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    text = "Tap to change",
+                    text = if (state.asOf > 0L) "Prices ${Fmt.timeAgo(state.asOf)}"
+                    else "Tap to change",
                     style = MaterialTheme.typography.labelSmall,
                     color = AurumColors.textDim
                 )
@@ -214,6 +253,27 @@ private fun TargetCard(state: PreMarketState, onEdit: () -> Unit) {
                     )
                 }
             }
+        }
+    }
+}
+
+/** Shown when the pre-market session has no prints, so nothing reads as live. */
+@Composable
+private fun LastSessionNotice() {
+    AurumCard {
+        Row(verticalAlignment = Alignment.Top) {
+            Text(
+                text = "!  ",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AurumColors.gold
+            )
+            Text(
+                text = "The pre-market session has no trades right now, so these are ranked " +
+                    "on the last regular session. Pre-market volume starts building from " +
+                    "4:00 AM ET — reopen or pull to refresh then for live prints.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
         }
     }
 }
@@ -257,13 +317,18 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "Pre-market ",
+                        text = if (pick.livePreMarket) "Pre-market " else "Last session ",
                         style = MaterialTheme.typography.labelMedium,
                         color = AurumColors.textDim
                     )
                     DeltaPct(
                         value = pick.preMarketPct,
                         style = MaterialTheme.typography.labelMedium
+                    )
+                    Text(
+                        text = " · prev ${Fmt.money(pick.prevClose)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
                     )
                 }
             }
@@ -274,7 +339,7 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
                     color = AurumColors.text
                 )
                 Text(
-                    text = "now",
+                    text = if (pick.livePreMarket) "pre-market" else "last close",
                     style = MaterialTheme.typography.labelSmall,
                     color = AurumColors.textDim
                 )

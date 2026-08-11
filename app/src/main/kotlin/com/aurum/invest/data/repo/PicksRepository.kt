@@ -104,11 +104,27 @@ class PicksRepository(
         emptyList()
     }
 
-    /** Today's pre-market picks, computing them when none are stored yet. */
-    suspend fun ensurePreMarket(targetPct: Double): List<PreMarketPick> {
-        val existing = getPreMarket(targetPct)
-        if (existing.isNotEmpty()) return existing
-        return recomputePreMarket(targetPct)
+    /**
+     * Today's pre-market picks, recomputed when the stored set is older than
+     * [maxAgeMs]. Unlike the other lists, this one is time-critical: prices
+     * move throughout the pre-market window, so a set computed at 5 AM is not
+     * an answer to what is happening at 9 AM. Two minutes by default.
+     */
+    suspend fun ensurePreMarket(
+        targetPct: Double,
+        maxAgeMs: Long = 120_000L
+    ): List<PreMarketPick> {
+        val entry = try {
+            cacheDao.get(preMarketKey(targetPct))
+        } catch (_: Exception) {
+            null
+        }
+        val stored = entry?.let { PreMarketPicker.fromJson(it.json) }.orEmpty()
+        val fresh = entry != null &&
+            System.currentTimeMillis() - entry.updatedAt <= maxAgeMs
+        if (stored.isNotEmpty() && fresh) return stored
+        val recomputed = recomputePreMarket(targetPct)
+        return recomputed.ifEmpty { stored }
     }
 
     /**
