@@ -54,6 +54,31 @@ class PortfolioRepository(private val txDao: TransactionDao) {
 
     suspend fun deleteTransaction(tx: TransactionEntity) = txDao.delete(tx)
 
+    /** Every ledger row for one symbol, newest first — the edit screen's source. */
+    fun observeTransactionsFor(symbol: String): Flow<List<TransactionEntity>> =
+        txDao.observeForSymbol(symbol.trim().uppercase())
+
+    /**
+     * Corrects an existing trade in place. Positions, P/L and reports all
+     * recompute from the ledger, so fixing a row here fixes them everywhere.
+     */
+    suspend fun updateTransaction(
+        tx: TransactionEntity,
+        side: TradeSide,
+        shares: Double,
+        price: Double,
+        fees: Double,
+        ts: Long
+    ) = txDao.update(
+        tx.copy(
+            side = side.name,
+            shares = shares,
+            price = price,
+            fees = fees,
+            ts = ts
+        )
+    )
+
     /**
      * Deletes every transaction recorded for [symbol] — removes that position
      * (e.g. a test entry) from the ledger while leaving all other symbols

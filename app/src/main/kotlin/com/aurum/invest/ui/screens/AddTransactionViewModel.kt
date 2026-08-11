@@ -34,7 +34,12 @@ data class AddTxState(
     val saving: Boolean = false,
     val held: Position? = null,
     val sellAll: Boolean = false,
-    val lastEdited: AddTxLastEdited = AddTxLastEdited.SHARES
+    val lastEdited: AddTxLastEdited = AddTxLastEdited.SHARES,
+    /**
+     * Money already invested across all open positions. Lets the amount be
+     * sized as a percentage of the book instead of typed in dollars.
+     */
+    val investedTotal: Double = 0.0
 ) {
     val sharesVal: Double? get() = shares.trim().toDoubleOrNull()
     val priceVal: Double? get() = price.trim().toDoubleOrNull()
@@ -71,6 +76,19 @@ class AddTransactionViewModel(app: Application) : AndroidViewModel(app) {
     private var searchJob: Job? = null
     private var heldJob: Job? = null
     private var prefillApplied = false
+
+    init {
+        // The invested base backs the percentage sizing, so it must be known
+        // before a symbol is typed.
+        viewModelScope.launch {
+            val invested = runCatching {
+                portfolio.positionsNow()
+                    .filter { PortfolioRepository.isOpen(it) }
+                    .sumOf { it.investedCost }
+            }.getOrDefault(0.0)
+            _state.update { it.copy(investedTotal = invested) }
+        }
+    }
 
     // Plain (comma-free) formatters so field text stays round-trippable through toDoubleOrNull.
     private val shares4 = DecimalFormat("0.####", DecimalFormatSymbols(Locale.US))
@@ -140,6 +158,39 @@ class AddTransactionViewModel(app: Application) : AndroidViewModel(app) {
         if (_state.value.sellAll) return
         _state.update {
             syncFromAmount(it.copy(amount = sanitizeDecimal(value), lastEdited = AddTxLastEdited.AMOUNT))
+        }
+    }
+
+    /**
+     * Sizes this trade at [pct]% of the money already invested, filling the
+     * amount field (shares follow from the price). On a sell of a held
+     * symbol, the percentage applies to that position instead — "sell 25%"
+     * means a quarter of those shares, which is what the number should mean
+     * on that side of the trade.
+     */
+    fun applyPercent(pct: Double) {
+        if (pct <= 0.0) return
+        _state.update { st ->
+            if (st.sellAll) return@update st
+            val held = st.held
+            if (st.side == TradeSide.SELL && held != null && held.shares > 0.0) {
+                val shares = held.shares * pct / 100.0
+                syncFromShares(
+                    st.copy(
+                        shares = shares8.format(shares),
+                        lastEdited = AddTxLastEdited.SHARES
+                    )
+                )
+            } else {
+                val base = st.investedTotal
+                if (base <= 0.0) return@update st
+                syncFromAmount(
+                    st.copy(
+                        amount = amount2.format(base * pct / 100.0),
+                        lastEdited = AddTxLastEdited.AMOUNT
+                    )
+                )
+            }
         }
     }
 
@@ -214,9 +265,10 @@ class AddTransactionViewModel(app: Application) : AndroidViewModel(app) {
         val sym = symbol.trim().uppercase()
         if (sym.isBlank()) return
         heldJob = viewModelScope.launch {
-            val match = portfolio.positionsNow()
-                .filter { PortfolioRepository.isOpen(it) }
-                .firstOrNull { it.symbol == sym }
+            val open = portfolio.positionsNow().filter { PortfolioRepository.isOpen(it) }
+            val invested = open.sumOf { it.investedCost }
+            _state.update { it.copy(investedTotal = invested) }
+            val match = open.firstOrNull { it.symbol == sym }
             _state.update { st ->
                 if (st.symbol.trim().uppercase() != sym) st
                 else if (match == null) st.copy(held = null, sellAll = false)

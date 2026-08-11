@@ -204,6 +204,34 @@ fun AddTransactionScreen(prefillSymbol: String?, prefillSide: String?, onDone: (
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
         )
 
+        // Percentage sizing: on a buy, a share of the money already invested;
+        // on a sell of a held name, a share of that position.
+        val sellingHeld = state.side == TradeSide.SELL && state.held != null
+        val percentBase = if (sellingHeld) 1.0 else state.investedTotal
+        AnimatedVisibility(visible = !state.sellAll && percentBase > 0.0) {
+            Column(modifier = Modifier.padding(top = 12.dp)) {
+                Text(
+                    text = if (sellingHeld) {
+                        "Or sell a share of this position"
+                    } else {
+                        "Or size it against your invested ${Fmt.money(state.investedTotal)}"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(5.0, 10.0, 25.0, 50.0, 100.0).forEach { pct ->
+                        PercentChip(
+                            label = "${pct.toInt()}%",
+                            onClick = { vm.applyPercent(pct) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        }
+
         AnimatedVisibility(visible = state.side == TradeSide.SELL && state.held != null) {
             Row(
                 modifier = Modifier
@@ -294,6 +322,27 @@ fun AddTransactionScreen(prefillSymbol: String?, prefillSide: String?, onDone: (
             }
         }
         Spacer(modifier = Modifier.height(28.dp))
+    }
+}
+
+/** Quick percentage sizing button. */
+@Composable
+private fun PercentChip(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(50)
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(AurumColors.surfaceHigh)
+            .border(1.dp, AurumColors.hairline, shape)
+            .clickable { onClick() }
+            .padding(vertical = 9.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = AurumColors.gold
+        )
     }
 }
 

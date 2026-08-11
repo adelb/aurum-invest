@@ -31,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
@@ -66,6 +67,7 @@ import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.EmptyState
 import com.aurum.invest.ui.components.ExtHoursChips
 import com.aurum.invest.ui.components.GoldGradientText
+import com.aurum.invest.ui.components.PillTag
 import com.aurum.invest.ui.components.SectionHeader
 import com.aurum.invest.ui.components.Sparkline
 import com.aurum.invest.ui.components.StatTile
@@ -76,7 +78,8 @@ fun DashboardScreen(
     onOpenDetail: (String) -> Unit,
     onAdd: () -> Unit,
     onSettings: () -> Unit,
-    onReports: () -> Unit
+    onReports: () -> Unit,
+    onEditPosition: (String) -> Unit
 ) {
     val vm: DashboardViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
@@ -186,10 +189,13 @@ fun DashboardScreen(
                         )
                     }
                 } else {
+                    val investedTotal = state.holdings.sumOf { it.view.position.investedCost }
                     items(state.holdings, key = { it.view.position.symbol }) { row ->
                         HoldingCard(
                             row = row,
+                            investedTotal = investedTotal,
                             onClick = { onOpenDetail(row.view.position.symbol) },
+                            onEdit = { onEditPosition(row.view.position.symbol) },
                             onRemove = { confirmRemove = row.view.position.symbol }
                         )
                         Spacer(Modifier.height(14.dp))
@@ -504,20 +510,38 @@ private fun SummaryTiles(summary: PortfolioSummary?) {
 }
 
 @Composable
-private fun HoldingCard(row: HoldingRow, onClick: () -> Unit, onRemove: () -> Unit) {
+private fun HoldingCard(
+    row: HoldingRow,
+    investedTotal: Double,
+    onClick: () -> Unit,
+    onEdit: () -> Unit,
+    onRemove: () -> Unit
+) {
     val view = row.view
     val position = view.position
     val quote = view.quote
     val price = quote?.price ?: position.avgCost
+    // Share of the money actually put to work, from this position's cost basis.
+    val investedPct =
+        if (investedTotal > 0.0) position.investedCost / investedTotal * 100.0 else null
 
     AurumCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = position.symbol,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = AurumColors.text
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = position.symbol,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AurumColors.text
+                    )
+                    if (investedPct != null) {
+                        Spacer(Modifier.width(8.dp))
+                        PillTag(
+                            text = "${Fmt.pct(investedPct)} of invested",
+                            color = AurumColors.gold
+                        )
+                    }
+                }
                 Text(
                     text = "${Fmt.qty(position.shares)} shares · ${Fmt.money(view.marketValue)}",
                     style = MaterialTheme.typography.bodySmall,
@@ -562,6 +586,14 @@ private fun HoldingCard(row: HoldingRow, onClick: () -> Unit, onRemove: () -> Un
             Spacer(Modifier.weight(1f))
             row.advice?.let { ActionBadge(action = it.action) }
             Spacer(Modifier.width(6.dp))
+            IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    Icons.Rounded.Edit,
+                    contentDescription = "Edit ${position.symbol} trades",
+                    tint = AurumColors.textDim,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
             IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
                 Icon(
                     Icons.Rounded.Close,

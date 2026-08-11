@@ -5,6 +5,7 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -15,8 +16,16 @@ interface TransactionDao {
     @Delete
     suspend fun delete(tx: TransactionEntity)
 
+    /** Edits an existing ledger row in place (same id). */
+    @Update
+    suspend fun update(tx: TransactionEntity)
+
     @Query("SELECT * FROM transactions ORDER BY ts DESC")
     fun observeAll(): Flow<List<TransactionEntity>>
+
+    /** Every ledger row for one symbol, newest first. */
+    @Query("SELECT * FROM transactions WHERE symbol = :symbol ORDER BY ts DESC, id DESC")
+    fun observeForSymbol(symbol: String): Flow<List<TransactionEntity>>
 
     @Query("SELECT * FROM transactions ORDER BY ts ASC, id ASC")
     suspend fun getAllOrdered(): List<TransactionEntity>

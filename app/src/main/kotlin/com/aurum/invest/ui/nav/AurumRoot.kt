@@ -45,6 +45,7 @@ import com.aurum.invest.ui.screens.AddTransactionScreen
 import com.aurum.invest.ui.screens.AnalysisScreen
 import com.aurum.invest.ui.screens.BankFeedScreen
 import com.aurum.invest.ui.screens.DashboardScreen
+import com.aurum.invest.ui.screens.EditPositionScreen
 import com.aurum.invest.ui.screens.PicksScreen
 import com.aurum.invest.ui.screens.PositionDetailScreen
 import com.aurum.invest.ui.screens.ReportsScreen
@@ -62,8 +63,10 @@ object Routes {
     const val FEED = "feed"; const val SETTINGS = "settings"
     const val ADD = "add?symbol={symbol}&side={side}"; const val DETAIL = "detail/{symbol}"
     const val ANALYSIS = "analysis/{symbol}"; const val REPORTS = "reports"
+    const val EDIT_POSITION = "edit/{symbol}"
     fun detail(symbol: String) = "detail/$symbol"
     fun analysis(symbol: String) = "analysis/$symbol"
+    fun editPosition(symbol: String) = "edit/$symbol"
     fun add(symbol: String? = null, side: String? = null): String {
         val params = mutableListOf<String>()
         if (symbol != null) params += "symbol=$symbol"
@@ -162,7 +165,18 @@ fun AurumRoot() {
                     onOpenDetail = { nav.navigate(Routes.detail(it)) },
                     onAdd = { nav.navigate(Routes.add()) },
                     onSettings = { nav.navigate(Routes.SETTINGS) },
-                    onReports = { nav.navigate(Routes.REPORTS) }
+                    onReports = { nav.navigate(Routes.REPORTS) },
+                    onEditPosition = { nav.navigate(Routes.editPosition(it)) }
+                )
+            }
+            composable(
+                route = Routes.EDIT_POSITION,
+                arguments = listOf(navArgument("symbol") { type = NavType.StringType })
+            ) { entry ->
+                EditPositionScreen(
+                    symbol = entry.arguments?.getString("symbol").orEmpty(),
+                    onBack = { nav.popBackStack() },
+                    onAddTrade = { nav.navigate(Routes.add(it)) }
                 )
             }
             composable(Routes.WATCHLIST) {
