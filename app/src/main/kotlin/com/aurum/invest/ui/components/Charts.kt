@@ -6,7 +6,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -23,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.ui.theme.AurumColors
+import com.aurum.invest.ui.theme.PlexMono
 import kotlin.math.roundToInt
 
 private fun buildSmoothPath(points: List<Offset>): Path {
@@ -69,14 +69,8 @@ private fun DrawScope.drawLineWithFill(
             lineTo(points.first().x, size.height)
             close()
         }
-        drawPath(
-            fillPath,
-            brush = Brush.verticalGradient(
-                colors = listOf(color.copy(alpha = 0.22f), color.copy(alpha = 0f)),
-                startY = 0f,
-                endY = size.height
-            )
-        )
+        // Flat translucent wash — the ledger looks prints in flat ink.
+        drawPath(fillPath, color = color.copy(alpha = 0.08f))
     }
     drawPath(path, color = color, style = Stroke(width = strokeWidthPx, cap = StrokeCap.Round))
 }
@@ -88,7 +82,7 @@ fun Sparkline(
     modifier: Modifier = Modifier,
     color: Color? = null,
     fill: Boolean = true,
-    strokeWidth: Dp = 2.dp
+    strokeWidth: Dp = 1.5.dp
 ) {
     Canvas(modifier = modifier) {
         if (data.size < 2) return@Canvas
@@ -112,15 +106,16 @@ fun PriceChart(
     val textMeasurer = rememberTextMeasurer()
     val labelStyle = TextStyle(
         color = AurumColors.textDim,
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Medium
+        fontSize = 9.sp,
+        fontFamily = PlexMono,
+        fontWeight = FontWeight.Normal
     )
     Canvas(modifier = modifier) {
         if (closes.size < 2) return@Canvas
         val c = color ?: if (closes.last() >= closes.first()) AurumColors.gain else AurumColors.loss
         val padY = 26f
         val points = normalize(closes, size.width, size.height, padY)
-        drawLineWithFill(points, c, 4f, fill = true)
+        drawLineWithFill(points, c, 2.5f, fill = true)
 
         // dashed baseline, only when it falls inside the visible range
         val min = closes.min()
@@ -137,10 +132,9 @@ fun PriceChart(
             )
         }
 
-        // last-price dot with a soft glow
+        // last-price marker — a quiet tick, no glow
         val last = points.last()
-        drawCircle(color = c.copy(alpha = 0.25f), radius = 14f, center = last)
-        drawCircle(color = c, radius = 6f, center = last)
+        drawCircle(color = c, radius = 4f, center = last)
 
         // min / max labels
         val maxText = AnnotatedString(Fmt.money(max))
@@ -182,13 +176,15 @@ fun ZoomablePriceChart(
     val textMeasurer = rememberTextMeasurer()
     val labelStyle = TextStyle(
         color = AurumColors.textDim,
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Medium
+        fontSize = 9.sp,
+        fontFamily = PlexMono,
+        fontWeight = FontWeight.Normal
     )
     val bubbleStyle = TextStyle(
         color = AurumColors.text,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.SemiBold
+        fontSize = 10.sp,
+        fontFamily = PlexMono,
+        fontWeight = FontWeight.Medium
     )
     Canvas(modifier = modifier.diagramGestures(viewport)) {
         if (closes.size < 2) return@Canvas
@@ -230,8 +226,8 @@ fun ZoomablePriceChart(
             lineTo(points.first().x, chartH)
             close()
         }
-        drawPath(fillPath, color = c.copy(alpha = 0.10f))
-        drawPath(linePath, color = c, style = Stroke(width = 4f, cap = StrokeCap.Round))
+        drawPath(fillPath, color = c.copy(alpha = 0.08f))
+        drawPath(linePath, color = c, style = Stroke(width = 2.5f, cap = StrokeCap.Round))
 
         // Dashed baseline (previous close / avg cost) when inside the window.
         if (baseline != null && baseline in min..max) {
@@ -245,11 +241,9 @@ fun ZoomablePriceChart(
             )
         }
 
-        // Last-price dot only when the window reaches the newest bar.
+        // Last-price marker only when the window reaches the newest bar.
         if (start + count == closes.size) {
-            val last = points.last()
-            drawCircle(color = c.copy(alpha = 0.25f), radius = 14f, center = last)
-            drawCircle(color = c, radius = 6f, center = last)
+            drawCircle(color = c, radius = 4f, center = points.last())
         }
 
         // Visible min / max labels, right-aligned.
@@ -314,13 +308,13 @@ fun ZoomablePriceChart(
                 color = AurumColors.surfaceHigh,
                 topLeft = Offset(bx - 8f, 0f),
                 size = Size(bSize.width + 16f, bSize.height + 10f),
-                cornerRadius = CornerRadius(8f, 8f)
+                cornerRadius = CornerRadius(3f, 3f)
             )
             drawRoundRect(
                 color = AurumColors.hairline,
                 topLeft = Offset(bx - 8f, 0f),
                 size = Size(bSize.width + 16f, bSize.height + 10f),
-                cornerRadius = CornerRadius(8f, 8f),
+                cornerRadius = CornerRadius(3f, 3f),
                 style = Stroke(width = 1f)
             )
             drawText(

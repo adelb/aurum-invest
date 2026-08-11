@@ -2,11 +2,20 @@ package com.aurum.invest.ui.nav
 
 import android.app.Application
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
@@ -15,18 +24,16 @@ import androidx.compose.material.icons.rounded.Savings
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
@@ -109,22 +116,35 @@ fun AurumRoot() {
                 enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
                 exit = fadeOut() + slideOutVertically(targetOffsetY = { it })
             ) {
-                NavigationBar(
-                    containerColor = AurumColors.surface,
-                    contentColor = AurumColors.textDim,
-                    tonalElevation = 0.dp
-                ) {
-                    topDests.forEach { dest ->
-                        NavigationBarItem(
-                            selected = currentRoute == dest.route,
-                            onClick = {
-                                nav.navigate(dest.route) {
-                                    popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
-                            icon = {
+                // Ledger bar: a hairline rule over the ink ground, brass marks
+                // the live tab — no Material indicator chrome.
+                Column(modifier = Modifier.background(AurumColors.bg)) {
+                    HorizontalDivider(color = AurumColors.hairline, thickness = 1.dp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .height(60.dp)
+                    ) {
+                        topDests.forEach { dest ->
+                            val selected = currentRoute == dest.route
+                            val tint by animateColorAsState(
+                                targetValue = if (selected) AurumColors.gold else AurumColors.textDim,
+                                label = "navTint"
+                            )
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable {
+                                        nav.navigate(dest.route) {
+                                            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                                            launchSingleTop = true
+                                            restoreState = true
+                                        }
+                                    }
+                                    .padding(top = 10.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
                                 if (dest.route == Routes.FEED && pending > 0) {
                                     BadgedBox(badge = {
                                         Badge(
@@ -132,21 +152,29 @@ fun AurumRoot() {
                                             contentColor = AurumColors.bg
                                         ) { Text("$pending") }
                                     }) {
-                                        Icon(dest.icon, contentDescription = dest.label)
+                                        Icon(
+                                            dest.icon,
+                                            contentDescription = dest.label,
+                                            tint = tint,
+                                            modifier = Modifier.size(20.dp)
+                                        )
                                     }
                                 } else {
-                                    Icon(dest.icon, contentDescription = dest.label)
+                                    Icon(
+                                        dest.icon,
+                                        contentDescription = dest.label,
+                                        tint = tint,
+                                        modifier = Modifier.size(20.dp)
+                                    )
                                 }
-                            },
-                            label = { Text(dest.label, style = MaterialTheme.typography.labelMedium) },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = AurumColors.gold,
-                                selectedTextColor = AurumColors.gold,
-                                unselectedIconColor = AurumColors.textDim,
-                                unselectedTextColor = AurumColors.textDim,
-                                indicatorColor = Color.Transparent
-                            )
-                        )
+                                Text(
+                                    text = dest.label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = tint,
+                                    modifier = Modifier.padding(top = 5.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }

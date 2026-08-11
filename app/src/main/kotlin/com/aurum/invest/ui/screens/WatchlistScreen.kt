@@ -82,7 +82,7 @@ fun WatchlistScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
                 onValueChange = vm::onQueryChange,
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(4.dp),
                 colors = watchFieldColors(),
                 placeholder = {
                     Text(

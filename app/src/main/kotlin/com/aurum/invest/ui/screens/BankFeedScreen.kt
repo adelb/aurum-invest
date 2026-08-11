@@ -136,7 +136,7 @@ fun BankFeedScreen() {
                             Spacer(Modifier.height(12.dp))
                             Button(
                                 onClick = { BankNotificationListener.openSettings(context) },
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(3.dp),
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = AurumColors.gold,
                                     contentColor = AurumColors.bg
@@ -198,7 +198,7 @@ fun BankFeedScreen() {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(50))
+                                    .clip(RoundedCornerShape(3.dp))
                                     .clickable { historyExpanded = !historyExpanded }
                                     .padding(horizontal = 8.dp, vertical = 2.dp)
                             ) {
@@ -372,7 +372,7 @@ private fun PendingEventCard(
                             }
                         },
                         enabled = valid,
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(3.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = AurumColors.gold,
                             contentColor = AurumColors.bg,
@@ -412,7 +412,7 @@ private fun SideToggle(side: TradeSide, onChange: (TradeSide) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(3.dp))
             .background(AurumColors.surfaceHigh)
             .padding(4.dp)
     ) {
@@ -427,7 +427,7 @@ private fun SideToggle(side: TradeSide, onChange: (TradeSide) -> Unit) {
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(3.dp))
                     .background(bgColor)
                     .clickable { onChange(s) }
                     .padding(vertical = 8.dp),

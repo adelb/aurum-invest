@@ -14,10 +14,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -31,13 +31,15 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.AdviceAction
 import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.ui.theme.AurumColors
 
-/** Flat segmented toggle — gold fill marks the selected option. */
+/**
+ * Ledger tab row: quiet labels over a shared hairline rule; the selected
+ * option is marked by a brass underline, not a filled pill.
+ */
 @Composable
 fun SegmentedToggle(
     options: List<String>,
@@ -46,39 +48,45 @@ fun SegmentedToggle(
     modifier: Modifier = Modifier,
     compact: Boolean = false
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(AurumColors.surface)
-            .padding(4.dp)
-    ) {
-        options.forEachIndexed { i, label ->
-            val sel = i == selected
-            val fill by animateColorAsState(
-                targetValue = if (sel) AurumColors.gold else Color.Transparent,
-                label = "segmentFill"
-            )
-            val textColor by animateColorAsState(
-                targetValue = if (sel) AurumColors.bg else AurumColors.textDim,
-                label = "segmentText"
-            )
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(fill)
-                    .clickable { onSelect(i) }
-                    .padding(vertical = if (compact) 6.dp else 9.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = textColor
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            options.forEachIndexed { i, label ->
+                val sel = i == selected
+                val textColor by animateColorAsState(
+                    targetValue = if (sel) AurumColors.goldBright else AurumColors.textDim,
+                    label = "tabText"
                 )
+                val lineColor by animateColorAsState(
+                    targetValue = if (sel) AurumColors.gold else Color.Transparent,
+                    label = "tabLine"
+                )
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { onSelect(i) }
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = if (compact) 8.dp else 11.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = textColor
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(2.dp)
+                            .background(lineColor)
+                    )
+                }
             }
         }
+        HorizontalDivider(color = AurumColors.hairline, thickness = 1.dp)
     }
 }
 
@@ -99,12 +107,14 @@ fun ExtHoursChips(ext: ExtendedHours?, modifier: Modifier = Modifier) {
 
 @Composable
 private fun ExtHoursChip(label: String, value: Double) {
+    val shape = RoundedCornerShape(2.dp)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .clip(RoundedCornerShape(50))
+            .clip(shape)
             .background(AurumColors.surfaceHigh)
-            .padding(horizontal = 10.dp, vertical = 4.dp)
+            .border(width = 1.dp, color = AurumColors.hairline, shape = shape)
+            .padding(horizontal = 8.dp, vertical = 3.dp)
     ) {
         Text(
             text = label,
@@ -119,7 +129,7 @@ private fun ExtHoursChip(label: String, value: Double) {
     }
 }
 
-/** The standard Aurum surface: flat fill, quiet radius, no chrome. */
+/** The standard Aurum surface: a ruled panel — hairline border, near-sharp corners. */
 @Composable
 fun AurumCard(
     modifier: Modifier = Modifier,
@@ -127,15 +137,16 @@ fun AurumCard(
     contentPadding: PaddingValues = PaddingValues(16.dp),
     content: @Composable ColumnScope.() -> Unit
 ) {
-    val shape = RoundedCornerShape(16.dp)
+    val shape = RoundedCornerShape(3.dp)
     var m = modifier
         .clip(shape)
         .background(AurumColors.surface)
+        .border(width = 1.dp, color = AurumColors.hairline, shape = shape)
     if (onClick != null) m = m.clickable { onClick() }
     Column(modifier = m.padding(contentPadding), content = content)
 }
 
-/** Quiet section label with optional trailing action. */
+/** Ledger section header: the title runs into a hairline rule. */
 @Composable
 fun SectionHeader(
     title: String,
@@ -144,13 +155,19 @@ fun SectionHeader(
 ) {
     Row(
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             text = title,
             style = MaterialTheme.typography.titleSmall,
             color = AurumColors.textDim
+        )
+        HorizontalDivider(
+            color = AurumColors.hairline,
+            thickness = 1.dp,
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 12.dp, end = if (trailing != null) 12.dp else 0.dp)
         )
         trailing?.invoke()
     }
@@ -221,47 +238,46 @@ fun ActionBadge(action: AdviceAction, modifier: Modifier = Modifier) {
     PillTag(text = adviceLabel(action), color = color, modifier = modifier)
 }
 
-/** Generic colored pill tag. */
+/** Stamped tag: hairline outline, near-sharp corners, mono caption. */
 @Composable
 fun PillTag(text: String, color: Color, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(2.dp)
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(50))
-            .background(color.copy(alpha = 0.14f))
-            .padding(horizontal = 10.dp, vertical = 4.dp)
+            .clip(shape)
+            .background(color.copy(alpha = 0.08f))
+            .border(width = 1.dp, color = color.copy(alpha = 0.38f), shape = shape)
+            .padding(horizontal = 8.dp, vertical = 3.dp)
     ) {
         Text(
             text = text,
             style = MaterialTheme.typography.labelSmall.copy(
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 0.2.sp
+                fontWeight = FontWeight.Medium
             ),
             color = color
         )
     }
 }
 
-/** 0..100 score as a thin gold bar. */
+/** 0..100 score as a thin square-ended brass rule. */
 @Composable
 fun ScoreBar(score: Double, modifier: Modifier = Modifier) {
     val fraction = (score / 100.0).coerceIn(0.0, 1.0).toFloat()
     Box(
         modifier = modifier
-            .height(6.dp)
-            .clip(RoundedCornerShape(50))
+            .height(3.dp)
             .background(AurumColors.hairline)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth(fraction)
-                .height(6.dp)
-                .clip(RoundedCornerShape(50))
+                .height(3.dp)
                 .background(AurumColors.gold)
         )
     }
 }
 
-/** Sentiment indicator dot: green positive, red negative, dim neutral. */
+/** Sentiment tick: a small square — green positive, red negative, dim neutral. */
 @Composable
 fun SentimentDot(sentiment: Int, modifier: Modifier = Modifier) {
     val color = when {
@@ -272,8 +288,8 @@ fun SentimentDot(sentiment: Int, modifier: Modifier = Modifier) {
     val alpha = if (kotlin.math.abs(sentiment) >= 2) 1f else 0.7f
     Box(
         modifier = modifier
-            .size(8.dp)
-            .clip(CircleShape)
+            .size(7.dp)
+            .clip(RoundedCornerShape(1.dp))
             .background(color.copy(alpha = alpha))
     )
 }
@@ -306,7 +322,7 @@ fun EmptyState(
         if (actionLabel != null && onAction != null) {
             Button(
                 onClick = onAction,
-                shape = RoundedCornerShape(50),
+                shape = RoundedCornerShape(3.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = AurumColors.gold,
                     contentColor = AurumColors.bg

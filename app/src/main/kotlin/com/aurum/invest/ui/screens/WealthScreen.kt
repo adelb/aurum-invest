@@ -182,6 +182,7 @@ fun WealthScreen(onOpenAnalysis: (String) -> Unit, onOpenDetail: (String) -> Uni
                         Spacer(Modifier.height(14.dp))
                         Button(
                             onClick = vm::refresh,
+                            shape = RoundedCornerShape(3.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = AurumColors.gold,
                                 contentColor = AurumColors.bg
@@ -294,6 +295,7 @@ private fun SetupForm(
                 Button(
                     onClick = { if (valid) onSave(base!!, target!!) },
                     enabled = valid,
+                    shape = RoundedCornerShape(3.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = AurumColors.gold,
                         contentColor = AurumColors.bg,
@@ -775,7 +777,7 @@ private fun SectorRow(s: SectorTrend, onOpenStock: (String) -> Unit) {
                 watch.forEach { (symbol, _) ->
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(50))
+                            .clip(RoundedCornerShape(2.dp))
                             .background(AurumColors.surfaceHigh)
                             .clickable { onOpenStock(symbol) }
                             .padding(horizontal = 10.dp, vertical = 4.dp)
