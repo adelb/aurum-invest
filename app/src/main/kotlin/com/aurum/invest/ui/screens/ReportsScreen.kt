@@ -3,6 +3,7 @@ package com.aurum.invest.ui.screens
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,30 +14,39 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurum.invest.analytics.PeriodReport
 import com.aurum.invest.analytics.TradeLine
 import com.aurum.invest.core.Fmt
+import com.aurum.invest.data.db.TransactionEntity
 import com.aurum.invest.data.model.TradeSide
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.DeltaMoney
@@ -51,6 +61,48 @@ fun ReportsScreen(onBack: () -> Unit) {
     val vm: ReportsViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
     var period by rememberSaveable { mutableStateOf("WEEK") }
+    var editing by remember { mutableStateOf<TransactionEntity?>(null) }
+    var confirmDelete by remember { mutableStateOf<TransactionEntity?>(null) }
+
+    editing?.let { tx ->
+        EditTradeDialog(
+            tx = tx,
+            onDismiss = { editing = null },
+            onSave = { side, shares, price, fees, ts ->
+                vm.updateTrade(tx, side, shares, price, fees, ts)
+                editing = null
+            }
+        )
+    }
+
+    confirmDelete?.let { tx ->
+        AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            containerColor = AurumColors.surface,
+            titleContentColor = AurumColors.text,
+            textContentColor = AurumColors.textDim,
+            title = { Text("Delete this trade?") },
+            text = {
+                Text(
+                    "${tx.side.lowercase().replaceFirstChar { it.uppercase() }} " +
+                        "${Fmt.qty(tx.shares)} ${tx.symbol} at ${Fmt.money(tx.price)} " +
+                        "on ${Fmt.dateShort(tx.ts)} will be removed from the ledger. " +
+                        "Your position, P/L, and every report recompute without it."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deleteTrade(tx)
+                    confirmDelete = null
+                }) { Text("Delete", color = AurumColors.loss) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = null }) {
+                    Text("Cancel", color = AurumColors.textDim)
+                }
+            }
+        )
+    }
 
     Column(modifier = Modifier.fillMaxSize().background(AurumColors.bg)) {
 
@@ -112,7 +164,15 @@ fun ReportsScreen(onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 items(reports, key = { it.periodKey }) { report ->
-                    ReportCard(report = report)
+                    ReportCard(
+                        report = report,
+                        onEditTrade = { line ->
+                            vm.transaction(line.txId)?.let { editing = it }
+                        },
+                        onDeleteTrade = { line ->
+                            vm.transaction(line.txId)?.let { confirmDelete = it }
+                        }
+                    )
                 }
             }
         }
@@ -120,7 +180,11 @@ fun ReportsScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun ReportCard(report: PeriodReport) {
+private fun ReportCard(
+    report: PeriodReport,
+    onEditTrade: (TradeLine) -> Unit,
+    onDeleteTrade: (TradeLine) -> Unit
+) {
     var expanded by rememberSaveable(report.periodKey) { mutableStateOf(false) }
 
     AurumCard(
@@ -199,8 +263,18 @@ private fun ReportCard(report: PeriodReport) {
                 Spacer(Modifier.height(12.dp))
                 HorizontalDivider(color = AurumColors.hairline, thickness = 1.dp)
                 report.trades.forEach { trade ->
-                    TradeRow(trade = trade)
+                    TradeRow(
+                        trade = trade,
+                        onEdit = { onEditTrade(trade) },
+                        onDelete = { onDeleteTrade(trade) }
+                    )
                 }
+                Text(
+                    text = "Tap a trade to correct it — position, P/L, and every report " +
+                        "recompute from the fixed ledger.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
             }
         }
         Spacer(Modifier.height(6.dp))
@@ -213,9 +287,13 @@ private fun ReportCard(report: PeriodReport) {
 }
 
 @Composable
-private fun TradeRow(trade: TradeLine) {
+private fun TradeRow(trade: TradeLine, onEdit: () -> Unit, onDelete: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable { onEdit() }
+            .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         PillTag(
@@ -237,6 +315,23 @@ private fun TradeRow(trade: TradeLine) {
         }
         trade.realizedPl?.let {
             DeltaMoney(value = it, style = MaterialTheme.typography.labelMedium)
+        }
+        Spacer(Modifier.width(4.dp))
+        IconButton(onClick = onEdit, modifier = Modifier.size(34.dp)) {
+            Icon(
+                Icons.Rounded.Edit,
+                contentDescription = "Edit ${trade.symbol} trade",
+                tint = AurumColors.textDim,
+                modifier = Modifier.size(15.dp)
+            )
+        }
+        IconButton(onClick = onDelete, modifier = Modifier.size(34.dp)) {
+            Icon(
+                Icons.Rounded.Delete,
+                contentDescription = "Delete ${trade.symbol} trade",
+                tint = AurumColors.textDim,
+                modifier = Modifier.size(15.dp)
+            )
         }
     }
 }

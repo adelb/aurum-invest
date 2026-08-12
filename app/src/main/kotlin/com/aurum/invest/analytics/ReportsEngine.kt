@@ -21,7 +21,9 @@ data class TradeLine(
     val shares: Double,
     val price: Double,
     val ts: Long,
-    val realizedPl: Double?   // non-null for SELL rows only
+    val realizedPl: Double?,  // non-null for SELL rows only
+    /** The ledger row behind this line — lets the report edit it in place. */
+    val txId: Long = 0L
 )
 
 /** Aggregated trade activity for one day, one week, or one month. */
@@ -115,7 +117,8 @@ object ReportsEngine {
                 shares = tx.shares,
                 price = tx.price,
                 ts = tx.ts,
-                realizedPl = realized
+                realizedPl = realized,
+                txId = tx.id
             )
             if (tx.side == TradeSide.BUY.name) {
                 bucket.buysCount += 1

@@ -2,7 +2,6 @@ package com.aurum.invest.ui.screens
 
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,20 +16,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -41,14 +35,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.db.TransactionEntity
-import com.aurum.invest.data.model.TradeSide
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.EmptyState
 import com.aurum.invest.ui.components.PillTag
@@ -76,8 +67,8 @@ fun EditPositionScreen(
         EditTradeDialog(
             tx = tx,
             onDismiss = { editing = null },
-            onSave = { side, shares, price, fees ->
-                vm.updateTrade(tx, side, shares, price, fees, tx.ts)
+            onSave = { side, shares, price, fees, ts ->
+                vm.updateTrade(tx, side, shares, price, fees, ts)
                 editing = null
             }
         )
@@ -254,142 +245,5 @@ private fun TradeRow(tx: TransactionEntity, onEdit: () -> Unit, onDelete: () -> 
     }
 }
 
-/** Correct one trade: side, shares, price and fees. */
-@Composable
-private fun EditTradeDialog(
-    tx: TransactionEntity,
-    onDismiss: () -> Unit,
-    onSave: (TradeSide, Double, Double, Double) -> Unit
-) {
-    var side by remember {
-        mutableStateOf(
-            if (tx.side.equals("SELL", ignoreCase = true)) TradeSide.SELL else TradeSide.BUY
-        )
-    }
-    var sharesText by remember { mutableStateOf(Fmt.qty(tx.shares)) }
-    var priceText by remember { mutableStateOf(trimZeros(tx.price)) }
-    var feesText by remember { mutableStateOf(if (tx.fees > 0.0) trimZeros(tx.fees) else "") }
-
-    val shares = sharesText.replace(",", "").toDoubleOrNull()
-    val price = priceText.replace(",", "").toDoubleOrNull()
-    val fees = feesText.replace(",", "").toDoubleOrNull() ?: 0.0
-    val valid = shares != null && shares > 0.0 && price != null && price > 0.0
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = AurumColors.surface,
-        titleContentColor = AurumColors.text,
-        textContentColor = AurumColors.textDim,
-        title = { Text("Edit ${tx.symbol} trade") },
-        text = {
-            Column {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SideOption("Buy", side == TradeSide.BUY, Modifier.weight(1f)) {
-                        side = TradeSide.BUY
-                    }
-                    SideOption("Sell", side == TradeSide.SELL, Modifier.weight(1f)) {
-                        side = TradeSide.SELL
-                    }
-                }
-                Spacer(Modifier.height(14.dp))
-                OutlinedTextField(
-                    value = sharesText,
-                    onValueChange = { sharesText = it },
-                    label = { Text("Shares") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(16.dp),
-                    colors = editFieldColors(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = priceText,
-                    onValueChange = { priceText = it },
-                    label = { Text("Price per share ($)") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(16.dp),
-                    colors = editFieldColors(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = feesText,
-                    onValueChange = { feesText = it },
-                    label = { Text("Fees ($, optional)") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(16.dp),
-                    colors = editFieldColors(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                if (valid) {
-                    Spacer(Modifier.height(10.dp))
-                    val total = shares!! * price!! + if (side == TradeSide.BUY) fees else -fees
-                    Text(
-                        text = if (side == TradeSide.BUY) "Total cost ${Fmt.money(total)}"
-                        else "Net proceeds ${Fmt.money(total)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AurumColors.textDim
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { if (valid) onSave(side, shares!!, price!!, fees) },
-                enabled = valid,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AurumColors.gold,
-                    contentColor = AurumColors.bg,
-                    disabledContainerColor = AurumColors.surfaceHigh,
-                    disabledContentColor = AurumColors.textDim
-                )
-            ) { Text("Save") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel", color = AurumColors.textDim) }
-        }
-    )
-}
-
-@Composable
-private fun SideOption(
-    label: String,
-    selected: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(50))
-            .background(if (selected) AurumColors.gold else AurumColors.surfaceHigh)
-            .clickable { onClick() }
-            .padding(vertical = 9.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelLarge,
-            color = if (selected) AurumColors.bg else AurumColors.textDim
-        )
-    }
-}
-
-@Composable
-private fun editFieldColors() = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-    focusedTextColor = AurumColors.text,
-    unfocusedTextColor = AurumColors.text,
-    focusedBorderColor = AurumColors.gold,
-    unfocusedBorderColor = AurumColors.hairline,
-    focusedLabelColor = AurumColors.gold,
-    unfocusedLabelColor = AurumColors.textDim,
-    cursorColor = AurumColors.gold
-)
-
-/** "150.25" not "150.2500" — keeps the edit fields clean. */
-private fun trimZeros(v: Double): String {
-    val s = java.math.BigDecimal.valueOf(v).stripTrailingZeros().toPlainString()
-    return s
-}
+// The trade-edit dialog itself is shared with the Reports screen — see
+// TradeEditDialog.kt in this package.
