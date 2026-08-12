@@ -38,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.aurum.invest.analytics.IntradayPick
 import com.aurum.invest.analytics.PreMarketPick
 import com.aurum.invest.analytics.TargetOdds
 import com.aurum.invest.core.Dates
@@ -58,24 +60,40 @@ import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.EmptyState
 import com.aurum.invest.ui.components.PillTag
 import com.aurum.invest.ui.components.ScoreBar
+import com.aurum.invest.ui.components.SegmentedToggle
 import com.aurum.invest.ui.components.StatTile
 import com.aurum.invest.ui.theme.AurumColors
 
+/** The two halves of the 2% desk. */
+private enum class DeskTab { PRE, OPEN }
+
 /**
- * The pre-market desk: the strongest early movers, each measured against the
- * user's own daily profit goal, with the times of day its low and high have
- * actually printed recently.
+ * The 2% desk: one editable daily profit goal, answered two ways. Before the
+ * bell, the strongest pre-market movers measured against the goal; once the
+ * market is trading, a live scan for names still positioned to add the goal
+ * from their current price — volume-backed and technique-confirmed.
  */
 @Composable
 fun PreMarketScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit) {
     val vm: PreMarketViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
     var editingTarget by remember { mutableStateOf(false) }
+    // Land on the half that matches the live session: the open-market scan
+    // while the market trades, the pre-market desk otherwise.
+    var tab by rememberSaveable {
+        mutableStateOf(
+            if (Dates.marketSessionNow() == Dates.MarketSession.REGULAR) DeskTab.OPEN
+            else DeskTab.PRE
+        )
+    }
 
-    // Re-read on every visit: opening the app mid-pre-market must show that
+    // Re-read on every visit: opening the app mid-session must show that
     // moment's prints, not whatever was computed hours earlier.
-    LifecycleResumeEffect(Unit) {
-        vm.onShown()
+    LifecycleResumeEffect(tab) {
+        when (tab) {
+            DeskTab.PRE -> vm.onShown()
+            DeskTab.OPEN -> vm.ensureIntraday()
+        }
         onPauseOrDispose { }
     }
 
@@ -97,29 +115,48 @@ fun PreMarketScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Pre-market",
+                    text = "2%",
                     style = MaterialTheme.typography.headlineMedium,
                     color = AurumColors.text
                 )
                 Text(
-                    text = sessionLine(state),
+                    text = when (tab) {
+                        DeskTab.PRE -> sessionLine(state)
+                        DeskTab.OPEN -> intradaySessionLine(state)
+                    },
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (state.session == Dates.MarketSession.PRE) AurumColors.gold
-                    else AurumColors.textDim
+                    color = when {
+                        tab == DeskTab.PRE && state.session == Dates.MarketSession.PRE ->
+                            AurumColors.gold
+                        tab == DeskTab.OPEN && state.session == Dates.MarketSession.REGULAR ->
+                            AurumColors.gold
+                        else -> AurumColors.textDim
+                    }
                 )
             }
+            val busy = when (tab) {
+                DeskTab.PRE -> state.refreshing
+                DeskTab.OPEN -> state.intradayRefreshing
+            }
             Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                if (state.refreshing) {
+                if (busy) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(22.dp),
                         color = AurumColors.gold,
                         strokeWidth = 2.dp
                     )
                 } else {
-                    IconButton(onClick = vm::refresh) {
+                    IconButton(
+                        onClick = {
+                            when (tab) {
+                                DeskTab.PRE -> vm.refresh()
+                                DeskTab.OPEN -> vm.refreshIntraday()
+                            }
+                        }
+                    ) {
                         Icon(
                             Icons.Rounded.Refresh,
-                            contentDescription = "Rescan pre-market",
+                            contentDescription = "Rescan",
                             tint = AurumColors.gold
                         )
                     }
@@ -127,9 +164,25 @@ fun PreMarketScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
             }
         }
 
+        SegmentedToggle(
+            options = listOf("Pre-market", "Market open"),
+            selected = if (tab == DeskTab.PRE) 0 else 1,
+            onSelect = { tab = if (it == 0) DeskTab.PRE else DeskTab.OPEN },
+            compact = true,
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp)
+        )
+
         AurumRefreshBox(
-            refreshing = state.refreshing,
-            onRefresh = vm::refresh,
+            refreshing = when (tab) {
+                DeskTab.PRE -> state.refreshing
+                DeskTab.OPEN -> state.intradayRefreshing
+            },
+            onRefresh = {
+                when (tab) {
+                    DeskTab.PRE -> vm.refresh()
+                    DeskTab.OPEN -> vm.refreshIntraday()
+                }
+            },
             modifier = Modifier.fillMaxSize()
         ) {
             LazyColumn(
@@ -139,50 +192,126 @@ fun PreMarketScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
                 ),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                item { TargetCard(state = state, onEdit = { editingTarget = true }) }
-
-                if (state.rows.isNotEmpty() && !state.livePreMarket) {
-                    item { LastSessionNotice() }
-                }
-
-                when {
-                    state.rows.isEmpty() && state.loading -> item {
-                        Box(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 56.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                CircularProgressIndicator(color = AurumColors.gold)
-                                Spacer(Modifier.height(14.dp))
-                                Text(
-                                    text = "Reading pre-market prints and session history…",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = AurumColors.textDim
-                                )
-                            }
-                        }
-                    }
-                    state.rows.isEmpty() -> item {
-                        EmptyState(
-                            title = "Nothing moving pre-market",
-                            message = "No liquid name shows a pre-market gain right now. " +
-                                "Rescan closer to the open — pre-market volume builds from 4:00 AM ET.",
-                            actionLabel = "Rescan",
-                            onAction = vm::refresh
-                        )
-                    }
-                    else -> {
-                        items(state.rows, key = { "pm-${it.symbol}" }) { pick ->
-                            PreMarketCard(
-                                pick = pick,
-                                onOpen = { onOpenDetail(pick.symbol) },
-                                onAnalyze = { onOpenAnalysis(pick.symbol) }
-                            )
-                        }
-                        item { MethodCard(targetPct = state.targetPct) }
-                    }
+                item { TargetCard(state = state, tab = tab, onEdit = { editingTarget = true }) }
+                when (tab) {
+                    DeskTab.PRE -> preMarketItems(state, vm, onOpenDetail, onOpenAnalysis)
+                    DeskTab.OPEN -> intradayItems(state, vm, onOpenDetail, onOpenAnalysis)
                 }
             }
+        }
+    }
+}
+
+// ------------------------------------------------------------ pre-market tab
+
+private fun androidx.compose.foundation.lazy.LazyListScope.preMarketItems(
+    state: PreMarketState,
+    vm: PreMarketViewModel,
+    onOpenDetail: (String) -> Unit,
+    onOpenAnalysis: (String) -> Unit
+) {
+    if (state.rows.isNotEmpty() && !state.livePreMarket) {
+        item { LastSessionNotice() }
+    }
+
+    when {
+        state.rows.isEmpty() && state.loading -> item {
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 56.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = AurumColors.gold)
+                    Spacer(Modifier.height(14.dp))
+                    Text(
+                        text = "Reading pre-market prints and session history…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
+        }
+        state.rows.isEmpty() -> item {
+            EmptyState(
+                title = "Nothing moving pre-market",
+                message = "No liquid name shows a pre-market gain right now. " +
+                    "Rescan closer to the open — pre-market volume builds from 4:00 AM ET.",
+                actionLabel = "Rescan",
+                onAction = vm::refresh
+            )
+        }
+        else -> {
+            items(state.rows, key = { "pm-${it.symbol}" }) { pick ->
+                PreMarketCard(
+                    pick = pick,
+                    onOpen = { onOpenDetail(pick.symbol) },
+                    onAnalyze = { onOpenAnalysis(pick.symbol) }
+                )
+            }
+            item { MethodCard(targetPct = state.targetPct) }
+        }
+    }
+}
+
+// ------------------------------------------------------------ open-market tab
+
+private fun androidx.compose.foundation.lazy.LazyListScope.intradayItems(
+    state: PreMarketState,
+    vm: PreMarketViewModel,
+    onOpenDetail: (String) -> Unit,
+    onOpenAnalysis: (String) -> Unit
+) {
+    val marketOpen = state.session == Dates.MarketSession.REGULAR
+    if (!marketOpen && state.intradayRows.isNotEmpty()) {
+        item { StaleScanNotice(asOf = state.intradayAsOf) }
+    }
+
+    when {
+        state.intradayRows.isEmpty() && !marketOpen -> item {
+            EmptyState(
+                title = "The market is not open",
+                message = "This scan reads the live session: stocks trading above their open " +
+                    "on real volume, with the technique board bullish and your target still " +
+                    "reachable from the current price. It runs 9:30 AM–4:00 PM ET, " +
+                    "Monday to Friday."
+            )
+        }
+        state.intradayRows.isEmpty() && (state.intradayLoading || state.intradayRefreshing) -> item {
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 56.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = AurumColors.gold)
+                    Spacer(Modifier.height(14.dp))
+                    Text(
+                        text = "Scanning the open session…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
+        }
+        state.intradayRows.isEmpty() -> item {
+            EmptyState(
+                title = "No qualified names right now",
+                message = "Nothing currently clears all four gates: trading above its open, " +
+                    "volume at or above its normal pace, a bullish technique board, and your " +
+                    "target still historically reachable from the current price. Rescan in a " +
+                    "little while — the picture changes through the session.",
+                actionLabel = "Rescan",
+                onAction = vm::refreshIntraday
+            )
+        }
+        else -> {
+            items(state.intradayRows, key = { "id-${it.symbol}" }) { pick ->
+                IntradayCard(
+                    pick = pick,
+                    onOpen = { onOpenDetail(pick.symbol) },
+                    onAnalyze = { onOpenAnalysis(pick.symbol) }
+                )
+            }
+            item { IntradayMethodCard(targetPct = state.targetPct) }
         }
     }
 }
@@ -213,9 +342,20 @@ private fun sessionLine(state: PreMarketState): String = when (state.session) {
 
 /** The goal itself: editable, and the headline count of names that clear it. */
 @Composable
-private fun TargetCard(state: PreMarketState, onEdit: () -> Unit) {
-    val reliable = state.rows.count {
-        it.odds == TargetOdds.RELIABLE || it.odds == TargetOdds.FREQUENT
+private fun TargetCard(state: PreMarketState, tab: DeskTab, onEdit: () -> Unit) {
+    val rowsShown = when (tab) {
+        DeskTab.PRE -> state.rows.size
+        DeskTab.OPEN -> state.intradayRows.size
+    }
+    val reliable = when (tab) {
+        DeskTab.PRE -> state.rows.count {
+            it.odds == TargetOdds.RELIABLE || it.odds == TargetOdds.FREQUENT
+        }
+        DeskTab.OPEN -> state.intradayRows.count { it.hitRatePct >= 55.0 }
+    }
+    val asOf = when (tab) {
+        DeskTab.PRE -> state.asOf
+        DeskTab.OPEN -> state.intradayAsOf
     }
     AurumCard(onClick = onEdit) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -234,25 +374,69 @@ private fun TargetCard(state: PreMarketState, onEdit: () -> Unit) {
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    text = if (state.asOf > 0L) "Prices ${Fmt.timeAgo(state.asOf)}"
+                    text = if (asOf > 0L) "Prices ${Fmt.timeAgo(asOf)}"
                     else "Tap to change",
                     style = MaterialTheme.typography.labelSmall,
                     color = AurumColors.textDim
                 )
-                if (state.rows.isNotEmpty()) {
+                if (rowsShown > 0) {
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        text = "$reliable of ${state.rows.size}",
+                        text = "$reliable of $rowsShown",
                         style = MaterialTheme.typography.titleMedium,
                         color = if (reliable > 0) AurumColors.gain else AurumColors.loss
                     )
                     Text(
-                        text = "reach it most days",
+                        text = when (tab) {
+                            DeskTab.PRE -> "reach it most days"
+                            DeskTab.OPEN -> "reach it from here most days"
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = AurumColors.textDim
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * The open-market subtitle: live during the regular session, honest about
+ * staleness outside it.
+ */
+private fun intradaySessionLine(state: PreMarketState): String = when (state.session) {
+    Dates.MarketSession.REGULAR -> "Live session scan · what can still add your target today"
+    Dates.MarketSession.PRE -> {
+        val mins = state.minutesToOpen
+        val countdown = when {
+            mins <= 0L -> "opening now"
+            mins < 60L -> "scan starts in ${mins}m"
+            else -> "scan starts in ${mins / 60}h ${mins % 60}m"
+        }
+        "Runs once the market opens · $countdown"
+    }
+    Dates.MarketSession.POST -> "Session closed · scan resumes 9:30 AM ET"
+    Dates.MarketSession.OVERNIGHT -> "Market closed · scan runs 9:30 AM–4:00 PM ET"
+    Dates.MarketSession.WEEKEND -> "Weekend · scan returns Monday 9:30 AM ET"
+}
+
+/** Shown when a stored scan is displayed after the session it read has closed. */
+@Composable
+private fun StaleScanNotice(asOf: Long) {
+    AurumCard {
+        Row(verticalAlignment = Alignment.Top) {
+            Text(
+                text = "!  ",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AurumColors.gold
+            )
+            Text(
+                text = "The market is closed — this is the last scan of the open session" +
+                    (if (asOf > 0L) ", read ${Fmt.timeAgo(asOf)}" else "") +
+                    ". Prices have moved on; treat it as a record, not a live signal.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
         }
     }
 }
@@ -454,6 +638,223 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
                 style = MaterialTheme.typography.labelMedium,
                 color = AurumColors.gold
             )
+        }
+    }
+}
+
+/** One open-session candidate, with the evidence for and against the target. */
+@Composable
+private fun IntradayCard(pick: IntradayPick, onOpen: () -> Unit, onAnalyze: () -> Unit) {
+    val oddsColor = when {
+        pick.hitRatePct >= 55.0 -> AurumColors.gain
+        pick.hitRatePct >= 40.0 -> AurumColors.gold
+        else -> AurumColors.loss
+    }
+
+    AurumCard(onClick = onOpen, modifier = Modifier.fillMaxWidth().animateContentSize()) {
+        Row(verticalAlignment = Alignment.Top) {
+            Text(
+                text = pick.rank.toString().padStart(2, '0'),
+                style = MaterialTheme.typography.headlineMedium,
+                color = AurumColors.gold
+            )
+            Spacer(Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        text = pick.symbol,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AurumColors.text
+                    )
+                    if (pick.name.isNotBlank()) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = pick.name,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AurumColors.textDim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Off the open ",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = AurumColors.textDim
+                    )
+                    DeltaPct(
+                        value = pick.sinceOpenPct,
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    Text(
+                        text = " · open ${Fmt.money(pick.openPrice)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = Fmt.money(pick.price),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text
+                )
+                Text(
+                    text = "now",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+
+        // Live confirmation: volume pace and the technique board.
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            PillTag(
+                text = String.format(java.util.Locale.US, "%.1fx volume", pick.relativeVolume),
+                color = AurumColors.info
+            )
+            Spacer(Modifier.width(8.dp))
+            PillTag(
+                text = "${pick.techBullish}/${pick.techTotal} bullish",
+                color = AurumColors.gain
+            )
+            if (pick.momentum30Pct > 0.0) {
+                Spacer(Modifier.width(8.dp))
+                PillTag(
+                    text = String.format(
+                        java.util.Locale.US, "+%.1f%% last 30m", pick.momentum30Pct
+                    ),
+                    color = AurumColors.gain
+                )
+            }
+        }
+
+        // The plan: buy here, sell there, stop below.
+        Spacer(Modifier.height(12.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            StatTile(
+                label = "Buy near",
+                value = Fmt.money(pick.price),
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                label = "Sell at ${Fmt.pct(pick.targetPct)}",
+                value = Fmt.money(pick.targetPrice),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.gain
+            )
+            StatTile(
+                label = "Stop",
+                value = Fmt.money(pick.stop),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.loss
+            )
+        }
+
+        // The odds of the remaining move, stated plainly.
+        Spacer(Modifier.height(14.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            PillTag(
+                text = when {
+                    pick.hitRatePct >= 70.0 -> "Reaches it most days"
+                    pick.hitRatePct >= 55.0 -> "Reaches it often"
+                    pick.hitRatePct >= 40.0 -> "Roughly even odds"
+                    else -> "Needs an unusual day"
+                },
+                color = oddsColor
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = "${Fmt.pct(pick.hitRatePct)} of ${pick.sessionsAnalyzed} sessions",
+                style = MaterialTheme.typography.labelMedium,
+                color = oddsColor
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        ScoreBar(score = pick.hitRatePct, modifier = Modifier.fillMaxWidth())
+
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = pick.reason,
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+        if (pick.caution.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Row {
+                Text(
+                    text = "!  ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.loss
+                )
+                Text(
+                    text = pick.caution,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.loss
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.heightIn(min = 40.dp).clickable { onAnalyze() }
+        ) {
+            Icon(
+                Icons.Rounded.QueryStats,
+                contentDescription = null,
+                tint = AurumColors.gold,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "Full analysis",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.gold
+            )
+        }
+    }
+}
+
+/** What the open-session numbers mean, and the gates every name had to pass. */
+@Composable
+private fun IntradayMethodCard(targetPct: Double) {
+    AurumCard {
+        Text(
+            text = "How this scan qualifies a stock",
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(8.dp))
+        listOf(
+            "Trading above its open — a stock falling on the session is never proposed " +
+                "for a further gain.",
+            "Volume at or above its normal pace: today's traded volume, scaled by how much " +
+                "of the session has elapsed, against the 3-month average.",
+            "The 15-technique board must read BULLISH — a hot screener line with a bearish " +
+                "board is dropped.",
+            "The +${Fmt.pct(targetPct)} from the current price is tested against history: " +
+                "how often the day's high ultimately stretched far enough above the open to " +
+                "cover it. That hit rate leads the ranking.",
+            "No stock can be guaranteed to deliver a set profit on a given day. These are " +
+                "measured frequencies from past sessions; size positions and honor stops " +
+                "accordingly."
+        ).forEach { line ->
+            Row(modifier = Modifier.padding(vertical = 3.dp)) {
+                Text(
+                    text = "•  ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.gold
+                )
+                Text(
+                    text = line,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+            }
         }
     }
 }

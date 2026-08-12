@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
+import com.aurum.invest.analytics.IntradayPick
 import com.aurum.invest.analytics.PreMarketPick
 import com.aurum.invest.analytics.PreMarketPicker
 import com.aurum.invest.core.Dates
@@ -23,7 +24,13 @@ data class PreMarketState(
     val session: Dates.MarketSession = Dates.marketSessionNow(),
     val minutesToOpen: Long = Dates.minutesToUsOpen(),
     /** When the shown prints were read. */
-    val asOf: Long = 0L
+    val asOf: Long = 0L,
+    // Open-session (intraday 2%) scan — loaded when its toggle is first shown.
+    val intradayRows: List<IntradayPick> = emptyList(),
+    val intradayLoading: Boolean = false,
+    val intradayRefreshing: Boolean = false,
+    /** When the intraday prints were read. */
+    val intradayAsOf: Long = 0L
 ) {
     /** True when the rows describe actual pre-market prints. */
     val livePreMarket: Boolean get() = rows.isNotEmpty() && rows.first().livePreMarket
@@ -104,18 +111,86 @@ class PreMarketViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Sets the daily profit goal and re-runs the scan against it. */
+    /**
+     * Loads (or freshens) the open-session scan. Called when its toggle is
+     * shown — like the pre-market list, a set older than two minutes is
+     * recomputed, because the question is what can still move from NOW.
+     */
+    fun ensureIntraday() {
+        if (_state.value.intradayRefreshing) return
+        viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    intradayLoading = it.intradayRows.isEmpty(),
+                    session = Dates.marketSessionNow(),
+                    minutesToOpen = Dates.minutesToUsOpen()
+                )
+            }
+            val rows = picks.ensureIntraday(_state.value.targetPct)
+            _state.update {
+                it.copy(
+                    intradayRows = rows,
+                    intradayLoading = false,
+                    intradayAsOf = rows.firstOrNull()?.asOf ?: it.intradayAsOf
+                )
+            }
+        }
+    }
+
+    /** Rescan the open session from fresh prints. */
+    fun refreshIntraday() {
+        if (_state.value.intradayRefreshing) return
+        viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    intradayRefreshing = true,
+                    session = Dates.marketSessionNow(),
+                    minutesToOpen = Dates.minutesToUsOpen()
+                )
+            }
+            try {
+                val rows = picks.recomputeIntraday(_state.value.targetPct)
+                _state.update {
+                    it.copy(
+                        intradayRows = rows.ifEmpty { it.intradayRows },
+                        intradayLoading = false,
+                        intradayAsOf = rows.firstOrNull()?.asOf ?: it.intradayAsOf
+                    )
+                }
+            } finally {
+                _state.update { it.copy(intradayRefreshing = false) }
+            }
+        }
+    }
+
+    /** Sets the daily profit goal and re-runs BOTH scans against it. */
     fun setTarget(pct: Double) {
         if (pct <= 0.0 || pct == _state.value.targetPct) return
         viewModelScope.launch {
             targets.setTarget(DAILY_TARGET_KEY, pct)
-            _state.update { it.copy(targetPct = pct, loading = true, rows = emptyList()) }
+            _state.update {
+                it.copy(
+                    targetPct = pct,
+                    loading = true,
+                    rows = emptyList(),
+                    intradayRows = emptyList(),
+                    intradayLoading = true
+                )
+            }
             val rows = picks.ensurePreMarket(pct)
             _state.update {
                 it.copy(
                     rows = rows,
                     loading = false,
                     asOf = rows.firstOrNull()?.asOf ?: it.asOf
+                )
+            }
+            val intraday = picks.ensureIntraday(pct)
+            _state.update {
+                it.copy(
+                    intradayRows = intraday,
+                    intradayLoading = false,
+                    intradayAsOf = intraday.firstOrNull()?.asOf ?: it.intradayAsOf
                 )
             }
         }

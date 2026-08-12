@@ -42,6 +42,7 @@ import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.DailyPick
 import com.aurum.invest.data.model.EntryPick
+import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.PowerPick
 import com.aurum.invest.analytics.NoteKind
 import com.aurum.invest.analytics.PickNote
@@ -50,6 +51,7 @@ import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.EmptyState
+import com.aurum.invest.ui.components.ExtHoursChips
 import com.aurum.invest.ui.components.PillTag
 import com.aurum.invest.ui.components.ScoreBar
 import com.aurum.invest.ui.components.SectionHeader
@@ -255,7 +257,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.dailyItems(
                     pick = pick,
                     onOpen = { onOpenDetail(pick.symbol) },
                     onAnalyze = { onOpenAnalysis(pick.symbol) },
-                    note = noteFor(state, pick.symbol)
+                    note = noteFor(state, pick.symbol),
+                    ext = state.extHours[pick.symbol]
                 )
             }
             item {
@@ -323,7 +326,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.powerItems(
                     pick = pick,
                     onOpen = { onOpenDetail(pick.symbol) },
                     onAnalyze = { onOpenAnalysis(pick.symbol) },
-                    note = noteFor(state, pick.symbol)
+                    note = noteFor(state, pick.symbol),
+                    ext = state.extHours[pick.symbol]
                 )
             }
             item {
@@ -371,7 +375,8 @@ private fun PowerPickCard(
     pick: PowerPick,
     onOpen: () -> Unit,
     onAnalyze: () -> Unit,
-    note: PickNote? = null
+    note: PickNote? = null,
+    ext: ExtendedHours? = null
 ) {
     AurumCard(
         modifier = Modifier
@@ -464,6 +469,10 @@ private fun PowerPickCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
+                if (ext?.preMarketPct != null || ext?.postMarketPct != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ExtHoursChips(ext = ext)
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -553,7 +562,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
                     pick = pick,
                     onOpen = { onOpenDetail(pick.symbol) },
                     onAnalyze = { onOpenAnalysis(pick.symbol) },
-                    note = noteFor(state, pick.symbol)
+                    note = noteFor(state, pick.symbol),
+                    ext = state.extHours[pick.symbol]
                 )
             }
             item {
@@ -574,7 +584,8 @@ private fun EntryPickCard(
     pick: EntryPick,
     onOpen: () -> Unit,
     onAnalyze: () -> Unit,
-    note: PickNote? = null
+    note: PickNote? = null,
+    ext: ExtendedHours? = null
 ) {
     AurumCard(
         modifier = Modifier
@@ -672,6 +683,10 @@ private fun EntryPickCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
+                if (ext?.preMarketPct != null || ext?.postMarketPct != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ExtHoursChips(ext = ext)
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -715,7 +730,8 @@ private fun DailyPickCard(
     pick: DailyPick,
     onOpen: () -> Unit,
     onAnalyze: () -> Unit,
-    note: PickNote? = null
+    note: PickNote? = null,
+    ext: ExtendedHours? = null
 ) {
     AurumCard(
         modifier = Modifier
@@ -781,7 +797,7 @@ private fun DailyPickCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
-                ExtendedHoursRow(pick)
+                ExtendedHoursRow(pick, ext)
                 if (pick.headline.isNotBlank()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -841,11 +857,15 @@ private fun DailyPickCard(
     }
 }
 
-/** "Pre-market +2.1% · After hours -0.3%" line; hidden when neither print exists. */
+/**
+ * "Pre-market +2.1% · After hours -0.3%" line; hidden when neither print
+ * exists. The LIVE extended-hours read wins over the values stored with the
+ * pick, which age as the session moves on.
+ */
 @Composable
-private fun ExtendedHoursRow(pick: DailyPick) {
-    val pre = pick.preMarketPct
-    val post = pick.postMarketPct
+private fun ExtendedHoursRow(pick: DailyPick, ext: ExtendedHours? = null) {
+    val pre = ext?.preMarketPct ?: pick.preMarketPct
+    val post = ext?.postMarketPct ?: pick.postMarketPct
     if (pre == null && post == null) return
     Spacer(modifier = Modifier.height(6.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -925,7 +945,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.weeklyItems(
                 row = row,
                 onOpen = { onOpenDetail(row.pick.symbol) },
                 onAnalyze = { onOpenAnalysis(row.pick.symbol) },
-                note = noteFor(state, row.pick.symbol)
+                note = noteFor(state, row.pick.symbol),
+                ext = state.extHours[row.pick.symbol]
             )
         }
     }
@@ -940,7 +961,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.weeklyItems(
                 row = row,
                 onOpen = { onOpenDetail(row.pick.symbol) },
                 onAnalyze = { onOpenAnalysis(row.pick.symbol) },
-                note = noteFor(state, row.pick.symbol)
+                note = noteFor(state, row.pick.symbol),
+                ext = state.extHours[row.pick.symbol]
             )
         }
     }
@@ -951,7 +973,8 @@ private fun PickCard(
     row: PickRow,
     onOpen: () -> Unit,
     onAnalyze: () -> Unit,
-    note: PickNote? = null
+    note: PickNote? = null,
+    ext: ExtendedHours? = null
 ) {
     val pick = row.pick
     AurumCard(
@@ -1001,6 +1024,10 @@ private fun PickCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
+                if (ext?.preMarketPct != null || ext?.postMarketPct != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ExtHoursChips(ext = ext)
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,

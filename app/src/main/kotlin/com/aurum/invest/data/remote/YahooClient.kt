@@ -148,10 +148,12 @@ class YahooClient {
     }
 
     /**
-     * v8 chart API, range=1d interval=5m with includePrePost — the CURRENT
+     * v8 chart API, range=1d interval=5m with includePrePost — the latest
      * session's pre-market and post-market moves, bounded to the pre/post
-     * windows from meta.currentTradingPeriod. Null when the session has no
-     * prints in that window yet (overnight, weekends).
+     * windows of the day the candles belong to (meta.tradingPeriods). The
+     * pre-market read lives only while its session runs; the after-hours read
+     * survives overnight and weekends, because the last extended print stays
+     * the freshest information until the next session starts.
      */
     suspend fun fetchExtendedHours(symbol: String): ExtendedHours? = withContext(Dispatchers.IO) {
         try {
@@ -171,41 +173,66 @@ class YahooClient {
                 ?: metaDouble(meta, "previousClose")
                 ?: regularPrice
 
-            val periods = meta.optJSONObject("currentTradingPeriod")
-            val regular = periods?.optJSONObject("regular")
-            val prePeriod = periods?.optJSONObject("pre")
-            val postPeriod = periods?.optJSONObject("post")
-            val regStart = (regular?.optLong("start", 0L) ?: 0L) * 1000L
-            val regEnd = (regular?.optLong("end", 0L) ?: 0L) * 1000L
-            val preStart = (prePeriod?.optLong("start", 0L) ?: 0L) * 1000L
-            val postEnd = (postPeriod?.optLong("end", 0L) ?: 0L) * 1000L
+            // Two distinct sets of session windows live in the meta:
+            //  - currentTradingPeriod: the CURRENT (or next) session. Overnight
+            //    and on weekends this points at a session that has not traded
+            //    yet, so its windows match NONE of the returned bars.
+            //  - tradingPeriods: the windows of the day the candles actually
+            //    belong to. This is the one the bars must be bounded by —
+            //    keying off currentTradingPeriod made every pre/post read
+            //    disappear overnight (the returned bars are yesterday's, the
+            //    windows were tomorrow's).
+            val current = meta.optJSONObject("currentTradingPeriod")
+            fun windowOf(container: JSONObject?, key: String): Pair<Long, Long> {
+                val direct = container?.optJSONObject(key)
+                if (direct != null) {
+                    return direct.optLong("start", 0L) * 1000L to
+                        direct.optLong("end", 0L) * 1000L
+                }
+                // tradingPeriods nests each window as [[{start, end}]].
+                val nested = container?.optJSONArray(key)
+                    ?.optJSONArray(0)
+                    ?.optJSONObject(0)
+                    ?: return 0L to 0L
+                return nested.optLong("start", 0L) * 1000L to
+                    nested.optLong("end", 0L) * 1000L
+            }
+
+            val candleDay = meta.optJSONObject("tradingPeriods") ?: current
+            val (preStart, preEnd) = windowOf(candleDay, "pre")
+            val (regStart, regEnd) = windowOf(candleDay, "regular")
+            val (_, postEnd) = windowOf(candleDay, "post")
 
             val candles = parseCandles(root)
             var preMarketPct: Double? = null
             var postMarketPct: Double? = null
             var preMarketPrice: Double? = null
             var postMarketPrice: Double? = null
-            // Pre-market = bars inside the current session's pre window
-            // (04:00-09:30 ET), and only while that session is still live.
-            // Without both bounds, an overnight or weekend request matches the
-            // previous session's bars and reports yesterday's move as pre-market.
-            //
-            // Baseline: before today's open Yahoo anchors this chart's meta to
-            // the LAST regular session, so chartPreviousClose is one day too
-            // old and the true "yesterday's close" is regularMarketPrice.
-            // Once today's regular session has traded, chartPreviousClose is
-            // the correct baseline again (regularMarketPrice went live).
-            val regularTime = meta.optLong("regularMarketTime", 0L) * 1000L
             val now = System.currentTimeMillis()
+
+            // Pre-market = bars inside the candle day's pre window, shown only
+            // while that day's session is still running (pre through post).
+            // Once the day is over the morning gap is stale news — the
+            // after-hours read below is the one that still matters.
+            //
+            // Baseline: before the open Yahoo anchors this chart's meta to the
+            // LAST regular session, so chartPreviousClose is one day too old
+            // and the true "yesterday's close" is regularMarketPrice. Once the
+            // day's regular session has traded, chartPreviousClose is correct.
+            val regularTime = meta.optLong("regularMarketTime", 0L) * 1000L
             val sessionLive = postEnd <= 0L || now <= postEnd
             val preBase =
                 if (regularTime in 1 until regStart) regularPrice else prevClose
-            if (preStart in 1 until regStart && preBase > 0.0 && sessionLive) {
-                candles.lastOrNull { it.ts in preStart until regStart }?.let { pre ->
+            if (preStart in 1 until preEnd && preBase > 0.0 && sessionLive) {
+                candles.lastOrNull { it.ts in preStart until preEnd }?.let { pre ->
                     preMarketPct = (pre.close - preBase) / preBase * 100.0
                     preMarketPrice = pre.close
                 }
             }
+            // After-hours = bars past the candle day's regular close. These
+            // stay visible overnight and across the weekend — the last
+            // extended print IS the freshest information until the next
+            // session starts (a new day's chart replaces the bars naturally).
             if (regEnd > 0L) {
                 val lastPost = candles.lastOrNull {
                     it.ts >= regEnd && (postEnd <= 0L || it.ts <= postEnd)
@@ -218,18 +245,27 @@ class YahooClient {
                 }
             }
             // Yahoo no longer sends marketState in chart meta; derive it from
-            // the session windows so callers can label prints honestly.
+            // the CURRENT session's windows so callers can label prints honestly.
+            val (curPreStart, _) = windowOf(current, "pre")
+            val (curRegStart, curRegEnd) = windowOf(current, "regular")
+            val (_, curPostEnd) = windowOf(current, "post")
             val metaState = meta.optString("marketState", "")
             val marketState = when {
                 metaState.isNotEmpty() -> metaState
-                preStart > 0L && now in preStart until regStart -> "PRE"
-                regStart > 0L && now in regStart until regEnd -> "REGULAR"
-                regEnd > 0L && postEnd > regEnd && now in regEnd until postEnd -> "POST"
+                curPreStart > 0L && now in curPreStart until curRegStart -> "PRE"
+                curRegStart > 0L && now in curRegStart until curRegEnd -> "REGULAR"
+                curRegEnd > 0L && curPostEnd > curRegEnd &&
+                    now in curRegEnd until curPostEnd -> "POST"
                 else -> "CLOSED"
             }
             ExtendedHours(
                 symbol = symbol,
-                prevClose = prevClose,
+                // The candle day's true prior close — preBase, not the raw
+                // chartPreviousClose. During pre-market Yahoo anchors the
+                // chart to the LAST regular session, so chartPreviousClose is
+                // one day too old; passing it through made every "prev $X"
+                // line disagree with the percentage printed beside it.
+                prevClose = if (preBase > 0.0) preBase else prevClose,
                 regularPrice = regularPrice,
                 preMarketPct = preMarketPct,
                 postMarketPct = postMarketPct,

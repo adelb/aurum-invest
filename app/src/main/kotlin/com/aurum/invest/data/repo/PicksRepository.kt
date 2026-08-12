@@ -2,6 +2,8 @@ package com.aurum.invest.data.repo
 
 import com.aurum.invest.analytics.DailyPicker
 import com.aurum.invest.analytics.EntryPicker
+import com.aurum.invest.analytics.IntradayPick
+import com.aurum.invest.analytics.IntradayPicker
 import com.aurum.invest.analytics.PowerPicker
 import com.aurum.invest.analytics.PreMarketPick
 import com.aurum.invest.analytics.PreMarketPicker
@@ -42,6 +44,9 @@ class PicksRepository(
 
         /** Pre-market picks: one entry per local date and profit target. */
         private const val PREMARKET_KEY_PREFIX = "premarket:"
+
+        /** Open-session (intraday 2%) picks: one entry per local date and target. */
+        private const val INTRADAY_KEY_PREFIX = "intraday:"
 
         /** Market-wide best-entry picks, one cached set per local date. */
         private const val ENTRY_KEY_PREFIX = "entrypicks:"
@@ -146,6 +151,64 @@ class PicksRepository(
             picks
         } catch (_: Exception) {
             getPreMarket(targetPct)
+        }
+    }
+
+    // ---- open-session (intraday 2%) picks (cache-backed; keyed by day AND target) --
+
+    private fun intradayKey(targetPct: Double): String =
+        INTRADAY_KEY_PREFIX + Dates.todayIso() + ":" + String.format(
+            java.util.Locale.US, "%.2f", targetPct
+        )
+
+    /** Today's stored open-session picks for [targetPct] (no computation). */
+    suspend fun getIntraday(targetPct: Double): List<IntradayPick> = try {
+        cacheDao.get(intradayKey(targetPct))
+            ?.let { IntradayPicker.fromJson(it.json) } ?: emptyList()
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    /**
+     * Today's open-session picks, recomputed when the stored set is older
+     * than [maxAgeMs]. Time-critical like the pre-market list: the whole
+     * point is what can still move from NOW, so two minutes by default.
+     * Outside the regular session the engine returns empty and whatever was
+     * stored (today's last scan) is served instead.
+     */
+    suspend fun ensureIntraday(
+        targetPct: Double,
+        maxAgeMs: Long = 120_000L
+    ): List<IntradayPick> {
+        val entry = try {
+            cacheDao.get(intradayKey(targetPct))
+        } catch (_: Exception) {
+            null
+        }
+        val stored = entry?.let { IntradayPicker.fromJson(it.json) }.orEmpty()
+        val fresh = entry != null &&
+            System.currentTimeMillis() - entry.updatedAt <= maxAgeMs
+        if (stored.isNotEmpty() && fresh) return stored
+        val recomputed = recomputeIntraday(targetPct)
+        return recomputed.ifEmpty { stored }
+    }
+
+    /** Re-runs the open-session scan for [targetPct] from fresh prints. */
+    suspend fun recomputeIntraday(targetPct: Double): List<IntradayPick> {
+        return try {
+            val picks = IntradayPicker(market).computePicks(Dates.todayIso(), targetPct)
+            if (picks.isNotEmpty()) {
+                cacheDao.put(
+                    CacheEntity(
+                        key = intradayKey(targetPct),
+                        json = IntradayPicker.toJson(picks),
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+            }
+            picks
+        } catch (_: Exception) {
+            getIntraday(targetPct)
         }
     }
 

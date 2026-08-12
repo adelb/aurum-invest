@@ -9,10 +9,14 @@ import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.model.DailyPick
 import com.aurum.invest.data.model.EntryPick
+import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.PowerPick
 import com.aurum.invest.data.model.Quote
 import com.aurum.invest.data.model.WeeklyPick
 import com.aurum.invest.data.repo.PortfolioRepository
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -52,7 +56,10 @@ data class PicksState(
     // The user's book + sector classification of visible picks, so every
     // suggestion can be read against what is actually held.
     val book: BookContext = BookContext.EMPTY,
-    val pickSectors: Map<String, String> = emptyMap()
+    val pickSectors: Map<String, String> = emptyMap(),
+    // Live pre/post-market read per visible symbol, so every pick card can
+    // carry the same extended-hours chips the portfolio shows.
+    val extHours: Map<String, ExtendedHours> = emptyMap()
 )
 
 class PicksViewModel(app: Application) : AndroidViewModel(app) {
@@ -169,6 +176,9 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 .distinctUntilChanged()
                 .collect { symbols ->
+                    // Pre/post-market prints for every visible pick — repo
+                    // caching (5 min) keeps repeat visits cheap.
+                    launch { loadExtHours(symbols) }
                     val missing = symbols - _state.value.pickSectors.keys
                     if (missing.isEmpty()) return@collect
                     val fetched = market.getSectors(missing.toList())
@@ -176,6 +186,31 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
                         _state.update { it.copy(pickSectors = it.pickSectors + fetched) }
                     }
                 }
+        }
+    }
+
+    /**
+     * Extended-hours reads for [symbols], chunked so a full board (~45 names)
+     * never bursts Yahoo. Failures are simply absent; entries refresh through
+     * the repo's short cache.
+     */
+    private suspend fun loadExtHours(symbols: Collection<String>, maxAgeMs: Long = 300_000L) {
+        val wanted = symbols.toSet()
+        if (wanted.isEmpty()) return
+        for (chunk in wanted.chunked(8)) {
+            val fetched = coroutineScope {
+                chunk.map { sym ->
+                    async {
+                        val ext = runCatching {
+                            market.getExtendedHours(sym, maxAgeMs = maxAgeMs)
+                        }.getOrNull()
+                        ext?.let { sym to it }
+                    }
+                }.awaitAll()
+            }.filterNotNull()
+            if (fetched.isNotEmpty()) {
+                _state.update { it.copy(extHours = it.extHours + fetched) }
+            }
         }
     }
 
@@ -218,6 +253,7 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val power = picks.recomputePower()
                 _state.update { it.copy(powerRows = power, powerLoading = false) }
+                loadExtHours(power.map { it.symbol }, maxAgeMs = 60_000L)
             } finally {
                 _state.update { it.copy(powerRefreshing = false) }
             }
@@ -232,6 +268,7 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val entries = picks.recomputeEntries()
                 _state.update { it.copy(entryRows = entries, entryLoading = false) }
+                loadExtHours(entries.map { it.symbol }, maxAgeMs = 60_000L)
             } finally {
                 _state.update { it.copy(entryRefreshing = false) }
             }
@@ -246,6 +283,7 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val daily = picks.recomputeDaily()
                 _state.update { it.copy(dailyRows = daily, dailyLoading = false) }
+                loadExtHours(daily.map { it.symbol }, maxAgeMs = 60_000L)
             } finally {
                 _state.update { it.copy(dailyRefreshing = false) }
             }
@@ -260,6 +298,10 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 picks.recompute()
                 picks.recomputeBudget()
+                loadExtHours(
+                    (_state.value.rows + _state.value.budgetRows).map { it.pick.symbol },
+                    maxAgeMs = 60_000L
+                )
             } finally {
                 _state.update { it.copy(refreshing = false) }
             }

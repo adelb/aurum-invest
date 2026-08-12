@@ -132,7 +132,7 @@ class WealthRepository(
     suspend fun getStrategy(book: BookContext, investable: Double): WeeklyStrategy? =
         try {
             val trends = SectorTrends(market, news).compute()
-            SectorStrategy(market).build(trends, book, investable)
+            SectorStrategy(market, news).build(trends, book, investable)
         } catch (_: Exception) {
             null
         }

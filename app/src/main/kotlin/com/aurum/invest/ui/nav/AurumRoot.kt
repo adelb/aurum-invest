@@ -99,9 +99,10 @@ fun AurumRoot() {
             TopDest(Routes.WATCHLIST, "Watchlist", Icons.Rounded.Visibility),
             TopDest(Routes.PICKS, "Picks", Icons.AutoMirrored.Rounded.TrendingUp),
             TopDest(Routes.WEALTH, "Wealth", Icons.Rounded.Savings),
-            // The pre-market desk replaces the bank Feed in the bar; the feed
-            // itself stays reachable from Settings.
-            TopDest(Routes.PREMARKET, "Pre-market", Icons.Rounded.Bolt)
+            // The 2% desk (pre-market + open-session scans against the daily
+            // target) replaces the bank Feed in the bar; the feed itself
+            // stays reachable from Settings.
+            TopDest(Routes.PREMARKET, "2%", Icons.Rounded.Bolt)
         )
     }
 

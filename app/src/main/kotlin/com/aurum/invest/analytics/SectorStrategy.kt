@@ -1,6 +1,7 @@
 package com.aurum.invest.analytics
 
 import com.aurum.invest.data.repo.MarketRepository
+import com.aurum.invest.data.repo.NewsRepository
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.round
@@ -23,7 +24,15 @@ data class SectorPick(
     val techBullish: Int,
     val techTotal: Int,
     val entry: Double,
-    val reason: String
+    val reason: String,
+    /** Move over the last 3 trading days, percent. */
+    val r3Pct: Double = 0.0,
+    /** Latest completed session's volume vs its 20-day average. */
+    val volumeRatio: Double = 0.0,
+    /** Summed headline sentiment over the last 5 days, clamped -3..3. */
+    val newsScore: Int = 0,
+    /** The freshest report/insider headline ("" when none matched). */
+    val newsNote: String = ""
 )
 
 /** A trending theme measured against what the portfolio already holds. */
@@ -48,7 +57,9 @@ data class AllocationSlice(
     val amount: Double,         // money to put in this week
     val sharePct: Double,       // share of this week's money
     val heldPct: Double,
-    val lead: SectorPick?       // the stock to use, when one qualified
+    val lead: SectorPick?,      // the strongest stock, when one qualified
+    /** The runner-up picks (2nd and 3rd strongest) that also passed the board. */
+    val alternates: List<SectorPick> = emptyList()
 )
 
 /** The whole weekly answer: where the book is thin, and what to buy this week. */
@@ -77,12 +88,26 @@ data class WeeklyStrategy(
  *    allocation line; it is reported as a gap without a pick rather than
  *    filled with a name the engine does not actually like.
  */
-class SectorStrategy(private val market: MarketRepository) {
+class SectorStrategy(
+    private val market: MarketRepository,
+    private val news: NewsRepository? = null
+) {
 
     companion object {
         private const val TOP_THEMES = 4
         private const val MIN_COVERAGE_PCT = 2.0
         private const val CANDLE_CHUNK = 8
+
+        /** How many stocks each theme proposes — the 3 strongest that pass. */
+        private const val PICKS_PER_THEME = 3
+
+        /** Headlines that read as a report, analyst action, or insider move. */
+        private val REPORT_KEYWORDS = listOf(
+            "insider", "upgrade", "downgrade", "price target", "earnings",
+            "beats", "misses", "guidance", "stake", "buyback", "acquire",
+            "acquisition", "analyst", "rating", "initiates", "outlook",
+            "quarterly", "results", "revenue", "10% owner", "ceo buys", "sec filing"
+        )
 
         fun toJson(s: WeeklyStrategy): String = JSONObject().apply {
             put("computedAt", s.computedAt)
@@ -114,6 +139,11 @@ class SectorStrategy(private val market: MarketRepository) {
                         put("share", a.sharePct)
                         put("held", a.heldPct)
                         a.lead?.let { put("lead", pickJson(it)) }
+                        if (a.alternates.isNotEmpty()) {
+                            put("alts", JSONArray().apply {
+                                a.alternates.forEach { put(pickJson(it)) }
+                            })
+                        }
                     })
                 }
             })
@@ -129,6 +159,10 @@ class SectorStrategy(private val market: MarketRepository) {
             put("tt", p.techTotal)
             put("entry", p.entry)
             put("reason", p.reason)
+            put("r3", p.r3Pct)
+            put("vol", p.volumeRatio)
+            put("news", p.newsScore)
+            put("note", p.newsNote)
         }
 
         private fun pickFrom(o: JSONObject): SectorPick = SectorPick(
@@ -140,7 +174,11 @@ class SectorStrategy(private val market: MarketRepository) {
             techBullish = o.optInt("tb", 0),
             techTotal = o.optInt("tt", 0),
             entry = o.optDouble("entry", 0.0),
-            reason = o.optString("reason", "")
+            reason = o.optString("reason", ""),
+            r3Pct = o.optDouble("r3", 0.0),
+            volumeRatio = o.optDouble("vol", 0.0),
+            newsScore = o.optInt("news", 0),
+            newsNote = o.optString("note", "")
         )
 
         fun fromJson(s: String): WeeklyStrategy? = try {
@@ -179,6 +217,12 @@ class SectorStrategy(private val market: MarketRepository) {
             o.optJSONArray("allocations")?.let { arr ->
                 for (i in 0 until arr.length()) {
                     val a = arr.optJSONObject(i) ?: continue
+                    val alts = ArrayList<SectorPick>()
+                    a.optJSONArray("alts")?.let { aa ->
+                        for (j in 0 until aa.length()) {
+                            aa.optJSONObject(j)?.let { alts.add(pickFrom(it)) }
+                        }
+                    }
                     allocations.add(
                         AllocationSlice(
                             themeKey = a.getString("key"),
@@ -186,7 +230,8 @@ class SectorStrategy(private val market: MarketRepository) {
                             amount = a.optDouble("amount", 0.0),
                             sharePct = a.optDouble("share", 0.0),
                             heldPct = a.optDouble("held", 0.0),
-                            lead = a.optJSONObject("lead")?.let { pickFrom(it) }
+                            lead = a.optJSONObject("lead")?.let { pickFrom(it) },
+                            alternates = alts
                         )
                     )
                 }
@@ -281,7 +326,8 @@ class SectorStrategy(private val market: MarketRepository) {
                         amount = round2(investable * share),
                         sharePct = round1(share * 100.0),
                         heldPct = gap.heldPct,
-                        lead = lead
+                        lead = lead,
+                        alternates = gap.picks.drop(1)
                     )
                 }.sortedByDescending { it.amount }
 
@@ -316,7 +362,14 @@ class SectorStrategy(private val market: MarketRepository) {
 
     // ------------------------------------------------------------ stock picks
 
-    /** The theme's representative names, ranked; only technique-approved ones survive. */
+    /**
+     * The theme's representative names, ranked; only technique-approved ones
+     * survive, and the [PICKS_PER_THEME] strongest are proposed. "Strongest"
+     * is measured, not guessed: the last 3 trading days' move, the latest
+     * session's volume against its 20-day average, the 15-technique board,
+     * RSI, and the last 5 days of headlines (reports, analyst actions,
+     * insider flow) all feed the score.
+     */
     private suspend fun bestPicks(themeKey: String): List<SectorPick> {
         val watch = SectorTrends.WATCH[themeKey].orEmpty()
         if (watch.isEmpty()) return emptyList()
@@ -327,7 +380,7 @@ class SectorStrategy(private val market: MarketRepository) {
             }
             results.filterNotNull().forEach { scored.add(it) }
         }
-        return scored.sortedByDescending { it.second }.take(2).map { it.first }
+        return scored.sortedByDescending { it.second }.take(PICKS_PER_THEME).map { it.first }
     }
 
     private suspend fun scorePick(symbol: String, name: String): Pair<SectorPick, Double>? {
@@ -343,6 +396,23 @@ class SectorStrategy(private val market: MarketRepository) {
             val r20 = if (n > 21 && closes[n - 21] > 0.0) {
                 (price / closes[n - 21] - 1.0) * 100.0
             } else 0.0
+            // The last 3 trading days — how the stock is performing right now.
+            val r3 = if (n > 4 && closes[n - 4] > 0.0) {
+                (price / closes[n - 4] - 1.0) * 100.0
+            } else 0.0
+
+            // Latest completed session's volume vs its 20-day average. The
+            // newest bar can be a partial live session with almost no volume
+            // yet — fall back to the bar before it when that happens.
+            val volumes = candles.map { it.volume }
+            var volIdx = n - 1
+            if (volIdx > 0 && volumes[volIdx] <= 0L) volIdx--
+            val volBase = volumes.subList((volIdx - 20).coerceAtLeast(0), volIdx)
+                .filter { it > 0L }
+            val volumeRatio =
+                if (volBase.isNotEmpty() && volumes[volIdx] > 0L) {
+                    volumes[volIdx].toDouble() / volBase.average()
+                } else 0.0
 
             val analysis = Techniques.analyze(symbol, candles)
             val direction = analysis?.outlook?.direction ?: TechniqueVerdict.NEUTRAL
@@ -352,16 +422,43 @@ class SectorStrategy(private val market: MarketRepository) {
             val total = analysis?.results?.size ?: 0
             val confidence = analysis?.outlook?.confidence ?: 0
 
+            // Reports, analyst actions, and insider flow from the last 5 days
+            // of headlines. Sentiment is summed and clamped; the freshest
+            // report-like headline is carried for the card.
+            var newsScore = 0
+            var newsNote = ""
+            val items = news?.let { repo ->
+                runCatching { repo.getNews(symbol, candles) }.getOrDefault(emptyList())
+            }.orEmpty()
+            if (items.isNotEmpty()) {
+                newsScore = items.sumOf { it.sentiment }.coerceIn(-3, 3)
+                newsNote = items.firstOrNull { item ->
+                    val t = item.title.lowercase(Locale.US)
+                    REPORT_KEYWORDS.any { t.contains(it) }
+                }?.title.orEmpty()
+            }
+
             // Overbought names get a pullback entry rather than a chase.
             val entry = if (rsi >= 68.0) price - atr * 0.5 else price
-            val score = (r20 * 0.6).coerceIn(-15.0, 20.0) +
+            val score = (r20 * 0.4).coerceIn(-12.0, 14.0) +
+                (r3 * 1.2).coerceIn(-8.0, 10.0) +
+                ((volumeRatio - 1.0) * 5.0).coerceIn(-3.0, 8.0) +
                 (12.0 - abs(rsi - 58.0) / 2.0).coerceIn(0.0, 12.0) +
-                (if (direction == TechniqueVerdict.BULLISH) confidence * 0.14 else 2.0)
+                (if (direction == TechniqueVerdict.BULLISH) confidence * 0.14 else 2.0) +
+                newsScore * 2.0 +
+                (if (newsNote.isNotBlank() && newsScore > 0) 3.0 else 0.0)
 
             val reason = buildString {
-                append(String.format(Locale.US, "%+.1f%% over 20 days", r20))
+                append(String.format(Locale.US, "%+.1f%% in 3 days", r3))
+                if (volumeRatio > 0.0) {
+                    append(String.format(Locale.US, " on %.1fx volume", volumeRatio))
+                }
+                append(String.format(Locale.US, ", %+.1f%% over 20 days", r20))
                 if (total > 0) append(", $bullish of $total techniques bullish")
                 append(String.format(Locale.US, ", RSI %.0f", rsi))
+                if (newsScore != 0) {
+                    append(if (newsScore > 0) ", positive news" else ", negative news")
+                }
                 if (entry < price) {
                     append(String.format(Locale.US, " — extended, wait for $%.2f", entry))
                 }
@@ -375,7 +472,11 @@ class SectorStrategy(private val market: MarketRepository) {
                 techBullish = bullish,
                 techTotal = total,
                 entry = round2(entry),
-                reason = reason
+                reason = reason,
+                r3Pct = round1(r3),
+                volumeRatio = round1(volumeRatio),
+                newsScore = newsScore,
+                newsNote = newsNote
             ) to score
         } catch (_: Exception) {
             null
