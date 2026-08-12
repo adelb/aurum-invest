@@ -44,21 +44,23 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 
 /**
- * Correct one ledger trade: side, shares, price, fees, and the trade date.
- * Shared by the Edit-position screen and the Reports screen — both edit the
- * SAME ledger rows, so a fix in either place fixes positions, P/L, and
- * reports everywhere.
+ * Correct one ledger trade: side, shares, price, fees, the trade date, and —
+ * on a sell — the realized outcome itself. Shared by the Edit-position
+ * screen and the Reports screen — both edit the SAME ledger rows, so a fix
+ * in either place fixes positions, P/L, and reports everywhere.
  *
- * [onSave] receives (side, shares, price, fees, ts). The timestamp keeps the
- * trade's original wall-clock time; only the calendar day moves when the
- * user picks a new date, so same-day ordering is preserved.
+ * [onSave] receives (side, shares, price, fees, ts, plOverride). The
+ * timestamp keeps the trade's original wall-clock time; only the calendar
+ * day moves when the user picks a new date, so same-day ordering is
+ * preserved. plOverride is the pinned +/- outcome in dollars for a sell —
+ * null means "compute it from the ledger as usual".
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun EditTradeDialog(
     tx: TransactionEntity,
     onDismiss: () -> Unit,
-    onSave: (TradeSide, Double, Double, Double, Long) -> Unit
+    onSave: (TradeSide, Double, Double, Double, Long, Double?) -> Unit
 ) {
     var side by remember {
         mutableStateOf(
@@ -70,11 +72,23 @@ internal fun EditTradeDialog(
     var feesText by remember { mutableStateOf(if (tx.fees > 0.0) trimZeros(tx.fees) else "") }
     var ts by remember { mutableStateOf(tx.ts) }
     var showDatePicker by remember { mutableStateOf(false) }
+    // The pinned +/- outcome: a sign toggle plus an absolute amount, so the
+    // keyboard never needs a minus key. Empty amount = automatic.
+    var outcomeLoss by remember { mutableStateOf((tx.plOverride ?: 0.0) < 0.0) }
+    var outcomeText by remember {
+        mutableStateOf(tx.plOverride?.let { trimZeros(kotlin.math.abs(it)) } ?: "")
+    }
 
     val shares = sharesText.replace(",", "").toDoubleOrNull()
     val price = priceText.replace(",", "").toDoubleOrNull()
     val fees = feesText.replace(",", "").toDoubleOrNull() ?: 0.0
-    val valid = shares != null && shares > 0.0 && price != null && price > 0.0
+    val outcomeAbs = outcomeText.replace(",", "").trim().toDoubleOrNull()
+    val plOverride: Double? =
+        if (side == TradeSide.SELL && outcomeAbs != null) {
+            if (outcomeLoss) -outcomeAbs else outcomeAbs
+        } else null
+    val valid = shares != null && shares > 0.0 && price != null && price > 0.0 &&
+        (outcomeText.isBlank() || outcomeAbs != null)
 
     if (showDatePicker) {
         val pickerState = rememberDatePickerState(initialSelectedDateMillis = ts)
@@ -189,6 +203,47 @@ internal fun EditTradeDialog(
                         color = AurumColors.textDim
                     )
                 }
+                if (side == TradeSide.SELL) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = "Outcome (+/-)",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = AurumColors.textDim
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        TradeSideOption("Profit", !outcomeLoss, Modifier.weight(1f)) {
+                            outcomeLoss = false
+                        }
+                        TradeSideOption("Loss", outcomeLoss, Modifier.weight(1f)) {
+                            outcomeLoss = true
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = outcomeText,
+                        onValueChange = { outcomeText = it },
+                        label = { Text("Realized P/L ($, empty = automatic)") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
+                        colors = tradeFieldColors(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = if (plOverride != null) {
+                            "This sell's outcome is pinned to " +
+                                "${Fmt.signedMoney(plOverride)} — the position, summary, " +
+                                "and reports all use it instead of the computed number."
+                        } else {
+                            "Leave empty and the outcome is computed from your average " +
+                                "cost, as usual. Enter the broker's real number to pin it."
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                }
                 if (valid) {
                     Spacer(Modifier.height(10.dp))
                     val total = shares!! * price!! + if (side == TradeSide.BUY) fees else -fees
@@ -203,7 +258,7 @@ internal fun EditTradeDialog(
         },
         confirmButton = {
             Button(
-                onClick = { if (valid) onSave(side, shares!!, price!!, fees, ts) },
+                onClick = { if (valid) onSave(side, shares!!, price!!, fees, ts, plOverride) },
                 enabled = valid,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = AurumColors.gold,

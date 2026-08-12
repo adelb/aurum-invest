@@ -23,7 +23,9 @@ data class TradeLine(
     val ts: Long,
     val realizedPl: Double?,  // non-null for SELL rows only
     /** The ledger row behind this line — lets the report edit it in place. */
-    val txId: Long = 0L
+    val txId: Long = 0L,
+    /** True when [realizedPl] is the user's pinned outcome, not the computed one. */
+    val plOverridden: Boolean = false
 )
 
 /** Aggregated trade activity for one day, one week, or one month. */
@@ -88,7 +90,7 @@ object ReportsEngine {
             } else {
                 // never sell more than held; ignore the excess
                 val qty = minOf(tx.shares, acc.shares)
-                realized = if (qty > 0) {
+                val computed = if (qty > 0) {
                     val r = qty * (tx.price - acc.avg) - tx.fees
                     acc.shares -= qty
                     if (acc.shares < 1e-9) {
@@ -99,6 +101,9 @@ object ReportsEngine {
                 } else {
                     0.0
                 }
+                // The user's pinned outcome wins over the replayed number —
+                // same rule as PortfolioRepository.computePositions.
+                realized = tx.plOverride ?: computed
             }
 
             val day = Instant.ofEpochMilli(tx.ts).atZone(zone).toLocalDate()
@@ -118,7 +123,8 @@ object ReportsEngine {
                 price = tx.price,
                 ts = tx.ts,
                 realizedPl = realized,
-                txId = tx.id
+                txId = tx.id,
+                plOverridden = tx.side == TradeSide.SELL.name && tx.plOverride != null
             )
             if (tx.side == TradeSide.BUY.name) {
                 bucket.buysCount += 1

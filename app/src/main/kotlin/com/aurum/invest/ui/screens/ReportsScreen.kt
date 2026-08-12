@@ -68,8 +68,8 @@ fun ReportsScreen(onBack: () -> Unit) {
         EditTradeDialog(
             tx = tx,
             onDismiss = { editing = null },
-            onSave = { side, shares, price, fees, ts ->
-                vm.updateTrade(tx, side, shares, price, fees, ts)
+            onSave = { side, shares, price, fees, ts, plOverride ->
+                vm.updateTrade(tx, side, shares, price, fees, ts, plOverride)
                 editing = null
             }
         )
@@ -314,7 +314,16 @@ private fun TradeRow(trade: TradeLine, onEdit: () -> Unit, onDelete: () -> Unit)
             )
         }
         trade.realizedPl?.let {
-            DeltaMoney(value = it, style = MaterialTheme.typography.labelMedium)
+            Column(horizontalAlignment = Alignment.End) {
+                DeltaMoney(value = it, style = MaterialTheme.typography.labelMedium)
+                if (trade.plOverridden) {
+                    Text(
+                        text = "pinned",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.gold
+                    )
+                }
+            }
         }
         Spacer(Modifier.width(4.dp))
         IconButton(onClick = onEdit, modifier = Modifier.size(34.dp)) {

@@ -67,8 +67,8 @@ fun EditPositionScreen(
         EditTradeDialog(
             tx = tx,
             onDismiss = { editing = null },
-            onSave = { side, shares, price, fees, ts ->
-                vm.updateTrade(tx, side, shares, price, fees, ts)
+            onSave = { side, shares, price, fees, ts, plOverride ->
+                vm.updateTrade(tx, side, shares, price, fees, ts, plOverride)
                 editing = null
             }
         )
@@ -223,7 +223,10 @@ private fun TradeRow(tx: TransactionEntity, onEdit: () -> Unit, onDelete: () -> 
                 Text(
                     text = Fmt.dateShort(tx.ts) +
                         (if (tx.fees > 0.0) " · fees ${Fmt.money(tx.fees)}" else "") +
-                        (if (tx.source == "BANK") " · from bank" else ""),
+                        (if (tx.source == "BANK") " · from bank" else "") +
+                        (tx.plOverride?.let {
+                            " · outcome pinned ${Fmt.signedMoney(it)}"
+                        } ?: ""),
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )

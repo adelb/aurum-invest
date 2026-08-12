@@ -13,7 +13,15 @@ data class TransactionEntity(
     val fees: Double = 0.0,
     val ts: Long,               // epoch millis
     val source: String = "MANUAL",  // MANUAL / BANK
-    val note: String = ""
+    val note: String = "",
+    /**
+     * User-corrected realized outcome for a SELL, in dollars (signed).
+     * Null means the outcome is computed from the ledger as usual
+     * (qty * (price - avg cost) - fees). Set when the broker's real number
+     * differs from the replay — wrong basis history, transfer fees, and so
+     * on — and honored by positions, summaries, and reports alike.
+     */
+    val plOverride: Double? = null
 )
 
 @Entity(tableName = "watchlist")

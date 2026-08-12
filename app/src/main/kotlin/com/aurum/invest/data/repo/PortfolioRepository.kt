@@ -61,6 +61,8 @@ class PortfolioRepository(private val txDao: TransactionDao) {
     /**
      * Corrects an existing trade in place. Positions, P/L and reports all
      * recompute from the ledger, so fixing a row here fixes them everywhere.
+     * [plOverride] pins a SELL's realized outcome to the broker's real
+     * number; null returns it to the computed value.
      */
     suspend fun updateTransaction(
         tx: TransactionEntity,
@@ -68,14 +70,17 @@ class PortfolioRepository(private val txDao: TransactionDao) {
         shares: Double,
         price: Double,
         fees: Double,
-        ts: Long
+        ts: Long,
+        plOverride: Double? = tx.plOverride
     ) = txDao.update(
         tx.copy(
             side = side.name,
             shares = shares,
             price = price,
             fees = fees,
-            ts = ts
+            ts = ts,
+            // An outcome override only means anything on a sell.
+            plOverride = if (side == TradeSide.SELL) plOverride else null
         )
     )
 
@@ -110,8 +115,11 @@ class PortfolioRepository(private val txDao: TransactionDao) {
                 } else {
                     // never sell more than held; ignore the excess
                     val qty = minOf(tx.shares, acc.shares)
+                    // A user-pinned outcome replaces the computed one; the
+                    // share count and cost basis still replay identically.
+                    acc.realized += tx.plOverride
+                        ?: if (qty > 0) qty * (tx.price - acc.avg) - tx.fees else 0.0
                     if (qty > 0) {
-                        acc.realized += qty * (tx.price - acc.avg) - tx.fees
                         acc.shares -= qty
                         if (acc.shares < 1e-9) {
                             acc.shares = 0.0

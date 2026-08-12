@@ -62,11 +62,14 @@ class EditPositionViewModel(app: Application) : AndroidViewModel(app) {
         shares: Double,
         price: Double,
         fees: Double,
-        ts: Long
+        ts: Long,
+        plOverride: Double? = tx.plOverride
     ) {
         if (shares <= 0.0 || price <= 0.0) return
         viewModelScope.launch {
-            runCatching { portfolio.updateTransaction(tx, side, shares, price, fees, ts) }
+            runCatching {
+                portfolio.updateTransaction(tx, side, shares, price, fees, ts, plOverride)
+            }
         }
     }
 
