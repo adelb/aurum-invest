@@ -478,6 +478,15 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
         TargetOdds.COINFLIP -> "Roughly even odds" to AurumColors.gold
         TargetOdds.RARE -> "Rarely reaches it" to AurumColors.loss
     }
+    // Captions must match the live session: during the regular session the
+    // price on the card is the live regular print, not a pre-market one.
+    val session = Dates.marketSessionNow()
+    val (pctCaption, priceCaption) = when {
+        !pick.livePreMarket -> "Last session " to "last close"
+        session == Dates.MarketSession.PRE -> "Pre-market " to "pre-market"
+        session == Dates.MarketSession.REGULAR -> "Live " to "live"
+        else -> "Last session " to "last close"
+    }
 
     AurumCard(onClick = onOpen, modifier = Modifier.fillMaxWidth().animateContentSize()) {
         Row(verticalAlignment = Alignment.Top) {
@@ -508,7 +517,7 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = if (pick.livePreMarket) "Pre-market " else "Last session ",
+                        text = pctCaption,
                         style = MaterialTheme.typography.labelMedium,
                         color = AurumColors.textDim
                     )
@@ -530,7 +539,7 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
                     color = AurumColors.text
                 )
                 Text(
-                    text = if (pick.livePreMarket) "pre-market" else "last close",
+                    text = priceCaption,
                     style = MaterialTheme.typography.labelSmall,
                     color = AurumColors.textDim
                 )
@@ -556,6 +565,19 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
                 value = Fmt.money(pick.stop),
                 modifier = Modifier.weight(1f),
                 valueColor = AurumColors.loss
+            )
+        }
+        // A buyer here needs the day to stretch further than the target alone.
+        if (pick.neededPct > pick.targetPct + 0.05) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = String.format(
+                    java.util.Locale.US,
+                    "Needs +%.1f%% from the open to pay +%.1f%% from here.",
+                    pick.neededPct, pick.targetPct
+                ),
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
             )
         }
 
@@ -596,6 +618,15 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
         Spacer(Modifier.height(14.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             PillTag(text = oddsLabel, color = oddsColor)
+            if (pick.sectorNote.isNotBlank()) {
+                Spacer(Modifier.width(8.dp))
+                PillTag(
+                    text = pick.sectorLabel,
+                    color = if (pick.sectorNote.contains("#1")) AurumColors.gold
+                    else AurumColors.info,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+            }
             Spacer(Modifier.weight(1f))
             Text(
                 text = "${Fmt.pct(pick.hitRatePct)} of ${pick.sessionsAnalyzed} sessions",
@@ -612,6 +643,26 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
             style = MaterialTheme.typography.bodySmall,
             color = AurumColors.textDim
         )
+        if (pick.sectorNote.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "${pick.sectorNote}.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
+        if (pick.headline.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            TimingLine(
+                label = "News (5d)",
+                value = newsLineValue(pick.headline, pick.headlineSource),
+                color = when {
+                    pick.headlineSentiment > 0 -> AurumColors.gain
+                    pick.headlineSentiment < 0 -> AurumColors.loss
+                    else -> AurumColors.textDim
+                }
+            )
+        }
         if (pick.caution.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
             Row {
@@ -716,7 +767,8 @@ private fun IntradayCard(pick: IntradayPick, onOpen: () -> Unit, onAnalyze: () -
             }
         }
 
-        // Live confirmation: volume pace and the technique board.
+        // Live confirmation: volume pace, the technique board, and either the
+        // trending theme or the last half hour — max 3 pills at 360dp.
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             PillTag(
@@ -728,7 +780,15 @@ private fun IntradayCard(pick: IntradayPick, onOpen: () -> Unit, onAnalyze: () -
                 text = "${pick.techBullish}/${pick.techTotal} bullish",
                 color = AurumColors.gain
             )
-            if (pick.momentum30Pct > 0.0) {
+            if (pick.sectorNote.isNotBlank()) {
+                Spacer(Modifier.width(8.dp))
+                PillTag(
+                    text = pick.sectorLabel,
+                    color = if (pick.sectorNote.contains("#1")) AurumColors.gold
+                    else AurumColors.info,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+            } else if (pick.momentum30Pct > 0.0) {
                 Spacer(Modifier.width(8.dp))
                 PillTag(
                     text = String.format(
@@ -789,6 +849,26 @@ private fun IntradayCard(pick: IntradayPick, onOpen: () -> Unit, onAnalyze: () -
             style = MaterialTheme.typography.bodySmall,
             color = AurumColors.textDim
         )
+        if (pick.sectorNote.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "${pick.sectorNote}.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
+        if (pick.headline.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            TimingLine(
+                label = "News (5d)",
+                value = newsLineValue(pick.headline, pick.headlineSource),
+                color = when {
+                    pick.headlineSentiment > 0 -> AurumColors.gain
+                    pick.headlineSentiment < 0 -> AurumColors.loss
+                    else -> AurumColors.textDim
+                }
+            )
+        }
         if (pick.caution.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
             Row {
@@ -846,6 +926,9 @@ private fun IntradayMethodCard(targetPct: Double) {
             "The +${Fmt.pct(targetPct)} from the current price is tested against history: " +
                 "how often the day's high ultimately stretched far enough above the open to " +
                 "cover it. That hit rate leads the ranking.",
+            "News tone over the last five days feeds the score; a negative tone is flagged " +
+                "on the card.",
+            "Names in this week's top three trending themes get a small ranking boost.",
             "No stock can be guaranteed to deliver a set profit on a given day. These are " +
                 "measured frequencies from past sessions; size positions and honor stops " +
                 "accordingly."
@@ -864,6 +947,12 @@ private fun IntradayMethodCard(targetPct: Double) {
             }
         }
     }
+}
+
+/** Headline trimmed so the row stays readable, with its source appended. */
+private fun newsLineValue(headline: String, source: String): String {
+    val trimmed = if (headline.length > 56) headline.take(55).trimEnd() + "…" else headline
+    return if (source.isBlank()) trimmed else "$trimmed · $source"
 }
 
 @Composable
@@ -894,12 +983,18 @@ private fun MethodCard(targetPct: Double) {
         )
         Spacer(Modifier.height(8.dp))
         listOf(
-            "Hit rate counts the sessions where the intraday high rose at least " +
-                "${Fmt.pct(targetPct)} above that session's open — the direct historical " +
-                "answer to buying at the open and selling at your target.",
+            "Hit rate is entry-adjusted: it counts the sessions whose open-to-high reach " +
+                "covered the move a buyer at the suggested entry needs for " +
+                "${Fmt.pct(targetPct)} — not just the target from the open.",
+            "On gap-up mornings the odds are measured on gap-up days only — the sessions " +
+                "that look like today.",
+            "The scan covers the 44 most liquid names from the market-wide screens.",
             "Median day shows what an ordinary session actually delivers. When it sits " +
                 "below your target, the target needs a better-than-usual day.",
             "ATR is the volatility budget: how much room the name normally has to move.",
+            "News tone over the last five days feeds the score; a negative tone is flagged " +
+                "on the card.",
+            "Names in this week's top three trending themes get a small ranking boost.",
             "Buy and sell windows come from the clock times where the low and high really " +
                 "printed over recent sessions — a tendency, not a schedule.",
             "No stock can be guaranteed to deliver a set profit on a given day. These are " +

@@ -6,9 +6,11 @@ import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
 import com.aurum.invest.analytics.BookContext
 import com.aurum.invest.analytics.MarketRating
+import com.aurum.invest.analytics.NextWeekPlan
 import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.analytics.WeeklyStrategy
 import com.aurum.invest.analytics.WealthPlan
+import com.aurum.invest.core.Dates
 import com.aurum.invest.data.repo.PortfolioRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,7 +38,12 @@ data class WealthState(
     val pulseSectors: Map<String, String> = emptyMap(),
     /** This week's sector gaps + deployment plan for this book. */
     val strategy: WeeklyStrategy? = null,
-    val strategyLoading: Boolean = true
+    val strategyLoading: Boolean = true,
+    /** The Thursday→Monday next-week preview; null outside the window or before first build. */
+    val preview: NextWeekPlan? = null,
+    val previewLoading: Boolean = false,
+    /** True Thursday through Monday — the days the preview is live. */
+    val previewWindowActive: Boolean = false
 )
 
 class WealthViewModel(app: Application) : AndroidViewModel(app) {
@@ -89,6 +96,13 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
             }
             val fresh = wealth.ensurePlan()
             _state.update { it.copy(loading = false, plan = fresh ?: stored) }
+        }
+        // The Thursday→Monday next-week preview, on its own clock.
+        viewModelScope.launch {
+            val (active, _) = Dates.nextWeekPreview()
+            _state.update { it.copy(previewWindowActive = active, previewLoading = active) }
+            val preview = wealth.ensureNextWeek()
+            _state.update { it.copy(preview = preview, previewLoading = false) }
         }
     }
 
@@ -154,6 +168,14 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
             val plan = wealth.recompute()
             _state.update { it.copy(computing = false, plan = plan ?: it.plan) }
             refreshStrategy()
+        }
+        viewModelScope.launch {
+            val (active, _) = Dates.nextWeekPreview()
+            if (active) {
+                _state.update { it.copy(previewWindowActive = true, previewLoading = true) }
+                val preview = wealth.recomputeNextWeek()
+                _state.update { it.copy(preview = preview ?: it.preview, previewLoading = false) }
+            }
         }
     }
 

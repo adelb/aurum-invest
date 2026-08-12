@@ -40,6 +40,8 @@ class DailyPicker(
         private const val SCREEN_CHUNK = 10
         private const val FINALIST_CHUNK = 4
         private const val FINALISTS = 12
+        /** Fixed score denominator — the realistic max of finalScore's parts. */
+        private const val SCORE_SCALE = 110.0
 
         /** Serializes picks for the one-entry-per-day cache. */
         fun toJson(picks: List<DailyPick>): String {
@@ -125,7 +127,32 @@ class DailyPicker(
 
     suspend fun computePicks(dateIso: String, count: Int = 5): List<DailyPick> {
         return try {
-            val candidates = (WeeklyPicker.UNIVERSE + WeeklyPicker.BUDGET_EXTRA)
+            // The fixed universe plus the market-wide screens — a same-day
+            // mover scan that can only see mega-caps misses the day's movers.
+            val screenNames = LinkedHashMap<String, String>()
+            for (chunk in EntryPicker.MARKET_SCREENS.chunked(4)) {
+                coroutineScope {
+                    chunk.map { id ->
+                        async {
+                            try {
+                                market.getScreener(id)
+                            } catch (_: Exception) {
+                                emptyList()
+                            }
+                        }
+                    }.awaitAll()
+                }.forEach { list ->
+                    list.forEach { q ->
+                        val ok = q.price in 2.0..2500.0 &&
+                            q.avgVolume3M >= 1_000_000L &&
+                            q.marketCap >= 300_000_000.0 &&
+                            q.symbol.all { it.isLetterOrDigit() }
+                        if (ok) screenNames.putIfAbsent(q.symbol, q.name)
+                    }
+                }
+            }
+            val candidates = (WeeklyPicker.UNIVERSE + WeeklyPicker.BUDGET_EXTRA +
+                screenNames.entries.take(60).map { it.key to it.value })
                 .distinctBy { it.first }
 
             // Stage 1 — cheap screen over cached daily candles.
@@ -166,18 +193,17 @@ class DailyPicker(
             }
             if (deep.isEmpty()) return emptyList()
 
-            // Keep names the 15 techniques do not read as bearish.
+            // Keep names the 15 techniques do not read as bearish. When the
+            // WHOLE list is bearish, return nothing — an empty screen is an
+            // honest answer; a list of least-bad bearish names is not.
             val kept = deep.filter { it.techDirection != TechniqueVerdict.BEARISH.name }
-                .ifEmpty { deep }
 
-            val minF = kept.minOf { it.finalScore }
-            val maxF = kept.maxOf { it.finalScore }
-            val span = maxF - minF
-
+            // Fixed scale, not min/max of survivors: the score means the same
+            // thing on a hot day and a dead one.
             kept.sortedByDescending { it.finalScore }
                 .take(count)
                 .mapIndexed { index, d ->
-                    val scaled = if (span > 0.0) (d.finalScore - minF) / span * 100.0 else 60.0
+                    val scaled = (d.finalScore / SCORE_SCALE * 100.0).coerceIn(5.0, 98.0)
                     d.toPick(dateIso, index + 1, round(scaled * 10.0) / 10.0)
                 }
         } catch (_: Exception) {
@@ -205,11 +231,14 @@ class DailyPicker(
 
         // The last bar may be today's in-progress session — its partial volume
         // would distort the surge read, so the last COMPLETED bar is used.
+        // The 20-day base EXCLUDES the bar being measured, or a real surge
+        // dilutes its own denominator.
         val volumes = candles.map { it.volume.toDouble() }
-        val lastIsToday = com.aurum.invest.core.Dates.sameDay(candles.last().ts, System.currentTimeMillis())
+        val lastIsToday = com.aurum.invest.core.Dates.sameEtDay(candles.last().ts, System.currentTimeMillis())
         val volIdx = if (lastIsToday && volumes.size >= 2) volumes.size - 2 else volumes.size - 1
         val volLast = volumes[volIdx]
-        val vol20 = volumes.subList(max(0, volIdx - 19), volIdx + 1).average()
+        val volBase = volumes.subList(max(0, volIdx - 20), volIdx)
+        val vol20 = if (volBase.isNotEmpty()) volBase.average() else 0.0
         val volumeRatio = if (vol20 > 0.0) volLast / vol20 else 1.0
 
         val high20 = Indicators.recentHigh(closes, 20) ?: last
@@ -303,19 +332,36 @@ class DailyPicker(
             } catch (_: Exception) {
                 null
             }
-            val newsItems = try {
-                news.getNews(s.symbol, candles)
-            } catch (_: Exception) {
+            // One-letter tickers (F, T, M, B, V, C…) pull essentially random
+            // headlines from the news feed — skip news for them entirely.
+            val newsItems = if (s.symbol.length >= 2) {
+                try {
+                    news.getNews(s.symbol, candles)
+                } catch (_: Exception) {
+                    emptyList()
+                }
+            } else {
                 emptyList()
             }
 
             val price = quote?.price ?: candles.last().close
-            val prevClose = quote?.prevClose ?: ext?.prevClose ?: candles.last().close
+            // When the cached last candle IS today's partial bar, its close is
+            // today's price — falling back to it would make dayChange read ~0.
+            val lastIsToday = com.aurum.invest.core.Dates.sameEtDay(
+                candles.last().ts, System.currentTimeMillis()
+            )
+            val candleFallbackPrev =
+                if (lastIsToday && candles.size >= 2) candles[candles.size - 2].close
+                else candles.last().close
+            val prevClose = quote?.prevClose ?: ext?.prevClose ?: candleFallbackPrev
             if (price <= 0.0) return null
             val dayChangePct =
                 if (prevClose > 0.0) (price - prevClose) / prevClose * 100.0 else 0.0
 
-            val newsScore = newsItems.sumOf { it.sentiment }.coerceIn(-5, 5)
+            // ±3 and a 2x weight: on mega-caps the raw sum pins at the clamp
+            // every day, which turns "news" into a permanent bonus for the
+            // most-covered names rather than a signal.
+            val newsScore = newsItems.sumOf { it.sentiment }.coerceIn(-3, 3)
             val top = newsItems.firstOrNull()
 
             val direction = analysis?.outlook?.direction ?: TechniqueVerdict.NEUTRAL
@@ -332,20 +378,20 @@ class DailyPicker(
             val post = ext?.postMarketPct
             val preBonus = pre?.let { (it * 3.0).coerceIn(-12.0, 12.0) } ?: 0.0
             val postBonus = post?.let { (it * 2.0).coerceIn(-6.0, 6.0) } ?: 0.0
-            val newsBonus = newsScore * 3.0
+            val newsBonus = newsScore * 2.0
 
             val finalScore = s.raw + techBonus + preBonus + postBonus + newsBonus
 
-            // Honest expected-move range: ATR gives the base capacity, live
-            // catalysts (pre-market strength, hot news) stretch the top.
+            // Expected-move range straight from measured volatility — no
+            // manufactured floor. A stock whose ATR is 1.2% shows "1-3%",
+            // not a fabricated "3-4%"; catalysts stretch the top only.
             val catalyst = max(0.0, preBonus) * 0.25 + max(0, newsScore) * 0.7 +
                 max(0.0, (s.volumeRatio - 1.5)) * 1.2
-            var hiPct = (s.atrPct * 2.2 + catalyst).coerceIn(4.0, 15.0)
-            var loPct = (s.atrPct * 1.1).coerceIn(3.0, 10.0)
-            if (hiPct - loPct < 1.5) hiPct = min(15.0, loPct + 1.5)
-            loPct = round(loPct)
-            hiPct = round(hiPct)
-            if (hiPct <= loPct) hiPct = loPct + 1.0
+            var hiPct = (s.atrPct * 2.2 + catalyst).coerceIn(1.0, 15.0)
+            var loPct = (s.atrPct * 1.1).coerceIn(0.5, 10.0)
+            if (hiPct - loPct < 1.0) hiPct = min(15.0, loPct + 1.0)
+            loPct = round(loPct * 10.0) / 10.0
+            hiPct = round(hiPct * 10.0) / 10.0
 
             val reason =
                 buildReason(s, direction, bullishCount, techTotal, confidence, pre, post, newsScore)

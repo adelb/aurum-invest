@@ -66,17 +66,28 @@ class PicksRepository(
         emptyList()
     }
 
-    /** Today's power-hour picks, computing + storing them when none exist yet. */
-    suspend fun ensurePower(): List<PowerPick> {
-        val existing = getPower()
-        if (existing.isNotEmpty()) return existing
-        return recomputePower()
+    /**
+     * Today's power-hour picks, recomputed when the stored set is older than
+     * [maxAgeMs] (15 min). A closing-strength read from 3 AM is not an answer
+     * to what is closing strong at 3:45 PM.
+     */
+    suspend fun ensurePower(maxAgeMs: Long = 900_000L): List<PowerPick> {
+        val entry = try {
+            cacheDao.get(powerKey())
+        } catch (_: Exception) {
+            null
+        }
+        val stored = entry?.let { PowerPicker.fromJson(it.json) }.orEmpty()
+        val fresh = entry != null &&
+            System.currentTimeMillis() - entry.updatedAt <= maxAgeMs
+        if (stored.isNotEmpty() && fresh) return stored
+        return recomputePower().ifEmpty { stored }
     }
 
     /** Re-runs the power-hour scan and replaces today's stored set. */
     suspend fun recomputePower(): List<PowerPick> {
         return try {
-            val picks = PowerPicker(market).computePicks(Dates.todayIso())
+            val picks = PowerPicker(market, news).computePicks(Dates.todayIso())
             if (picks.isNotEmpty()) {
                 cacheDao.put(
                     CacheEntity(
@@ -138,7 +149,7 @@ class PicksRepository(
      */
     suspend fun recomputePreMarket(targetPct: Double): List<PreMarketPick> {
         return try {
-            val picks = PreMarketPicker(market).computePicks(Dates.todayIso(), targetPct)
+            val picks = PreMarketPicker(market, news).computePicks(Dates.todayIso(), targetPct)
             if (picks.isNotEmpty()) {
                 cacheDao.put(
                     CacheEntity(
@@ -196,7 +207,7 @@ class PicksRepository(
     /** Re-runs the open-session scan for [targetPct] from fresh prints. */
     suspend fun recomputeIntraday(targetPct: Double): List<IntradayPick> {
         return try {
-            val picks = IntradayPicker(market).computePicks(Dates.todayIso(), targetPct)
+            val picks = IntradayPicker(market, news).computePicks(Dates.todayIso(), targetPct)
             if (picks.isNotEmpty()) {
                 cacheDao.put(
                     CacheEntity(
@@ -223,17 +234,28 @@ class PicksRepository(
         emptyList()
     }
 
-    /** Today's entry picks, computing + storing them when none exist yet. */
-    suspend fun ensureEntries(): List<EntryPick> {
-        val existing = getEntries()
-        if (existing.isNotEmpty()) return existing
-        return recomputeEntries()
+    /**
+     * Today's entry picks, recomputed when the stored set is older than
+     * [maxAgeMs] (30 min) — entry limits priced off the morning are wrong by
+     * the afternoon.
+     */
+    suspend fun ensureEntries(maxAgeMs: Long = 1_800_000L): List<EntryPick> {
+        val entry = try {
+            cacheDao.get(entryKey())
+        } catch (_: Exception) {
+            null
+        }
+        val stored = entry?.let { EntryPicker.fromJson(it.json) }.orEmpty()
+        val fresh = entry != null &&
+            System.currentTimeMillis() - entry.updatedAt <= maxAgeMs
+        if (stored.isNotEmpty() && fresh) return stored
+        return recomputeEntries().ifEmpty { stored }
     }
 
     /** Re-runs the market-wide entry scan and replaces today's stored set. */
     suspend fun recomputeEntries(): List<EntryPick> {
         return try {
-            val picks = EntryPicker(market).computePicks(Dates.todayIso())
+            val picks = EntryPicker(market, news).computePicks(Dates.todayIso())
             if (picks.isNotEmpty()) {
                 cacheDao.put(
                     CacheEntity(
@@ -260,11 +282,22 @@ class PicksRepository(
         emptyList()
     }
 
-    /** Today's daily picks, computing + storing them when none exist yet. */
-    suspend fun ensureDaily(): List<DailyPick> {
-        val existing = getDaily()
-        if (existing.isNotEmpty()) return existing
-        return recomputeDaily()
+    /**
+     * Today's daily picks, recomputed when the stored set is older than
+     * [maxAgeMs] (30 min) — a same-day movers list frozen since the open
+     * stops describing the day it names.
+     */
+    suspend fun ensureDaily(maxAgeMs: Long = 1_800_000L): List<DailyPick> {
+        val entry = try {
+            cacheDao.get(dailyKey())
+        } catch (_: Exception) {
+            null
+        }
+        val stored = entry?.let { DailyPicker.fromJson(it.json) }.orEmpty()
+        val fresh = entry != null &&
+            System.currentTimeMillis() - entry.updatedAt <= maxAgeMs
+        if (stored.isNotEmpty() && fresh) return stored
+        return recomputeDaily().ifEmpty { stored }
     }
 
     /** Recomputes today's daily picks from fresh market data and replaces the stored set. */
@@ -314,7 +347,7 @@ class PicksRepository(
     suspend fun recomputeBudget(): List<WeeklyPick> {
         val key = Dates.currentWeekStartIso() + BUDGET_SUFFIX
         return try {
-            val picks = WeeklyPicker(market)
+            val picks = WeeklyPicker(market, news)
                 .computeBudgetPicks(Dates.currentWeekStartIso())
                 .map { it.copy(weekStart = key) }
             if (picks.isNotEmpty()) {
@@ -345,7 +378,7 @@ class PicksRepository(
     suspend fun recompute(): List<WeeklyPick> {
         val weekStart = Dates.currentWeekStartIso()
         return try {
-            val picks = WeeklyPicker(market).computePicks(weekStart)
+            val picks = WeeklyPicker(market, news).computePicks(weekStart)
             if (picks.isNotEmpty()) {
                 picksDao.clearWeek(weekStart)
                 picksDao.insertAll(picks.map { it.toEntity() })

@@ -111,6 +111,20 @@ class SectorTrends(
             )
         )
 
+        /**
+         * Reverse of [WATCH]: symbol -> (theme key, theme label), for engines
+         * that need to know which tracked theme a candidate belongs to
+         * without a network lookup. Covers the 64 watch names.
+         */
+        val SYMBOL_THEME: Map<String, Pair<String, String>> by lazy {
+            buildMap {
+                WATCH.forEach { (key, stocks) ->
+                    val label = SECTORS.firstOrNull { it.first == key }?.second ?: key
+                    stocks.forEach { (sym, _) -> putIfAbsent(sym, key to label) }
+                }
+            }
+        }
+
         /** News tone is fetched only for the strongest movers to keep the scan fast. */
         private const val NEWS_TOP = 6
 

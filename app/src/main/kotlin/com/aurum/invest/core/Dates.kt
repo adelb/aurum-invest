@@ -53,6 +53,20 @@ object Dates {
         return d1 == d2
     }
 
+    /**
+     * True when two epoch-millis timestamps fall on the same US-market (ET)
+     * calendar day. Use this — not [sameDay] — for "is this bar today's
+     * session?" checks: Yahoo stamps daily bars at the ET session open, and
+     * a device east of ~UTC+7 crosses local midnight while the US session
+     * is still running, making the device-local comparison lie.
+     */
+    fun sameEtDay(ts1: Long, ts2: Long): Boolean {
+        val zone = ZoneId.of("America/New_York")
+        val d1 = Instant.ofEpochMilli(ts1).atZone(zone).toLocalDate()
+        val d2 = Instant.ofEpochMilli(ts2).atZone(zone).toLocalDate()
+        return d1 == d2
+    }
+
     /** Epoch millis of today's local midnight. */
     fun todayStartMs(): Long =
         LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -111,6 +125,25 @@ object Dates {
         val open = nowEt.toLocalDate().atTime(9, 30).atZone(et)
         val diff = java.time.Duration.between(nowEt, open).toMinutes()
         return if (diff > 0) diff else 0
+    }
+
+    /**
+     * The next-week preview window. The preview is built from Thursday on —
+     * late enough in the week that the market has shown its hand — and stays
+     * up through Monday, the day the plan gets executed. Tuesday and
+     * Wednesday it rests; those days belong to the current week's plan.
+     *
+     * Returns whether the window is active now, plus the ISO Monday of the
+     * week being previewed (Thu-Sun: the coming Monday; Monday itself: today).
+     */
+    fun nextWeekPreview(): Pair<Boolean, String> {
+        val today = LocalDate.now()
+        return when (today.dayOfWeek) {
+            DayOfWeek.THURSDAY, DayOfWeek.FRIDAY, DayOfWeek.SATURDAY, DayOfWeek.SUNDAY ->
+                true to today.with(TemporalAdjusters.next(DayOfWeek.MONDAY)).toString()
+            DayOfWeek.MONDAY -> true to today.toString()
+            else -> false to today.with(TemporalAdjusters.next(DayOfWeek.MONDAY)).toString()
+        }
     }
 
     /** State of the power-hour buy window (last 90 min of the US regular session). */

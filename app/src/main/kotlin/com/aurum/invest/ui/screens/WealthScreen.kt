@@ -60,6 +60,9 @@ import com.aurum.invest.analytics.GapStatus
 import com.aurum.invest.analytics.MarketCall
 import com.aurum.invest.analytics.MarketMover
 import com.aurum.invest.analytics.MarketRating
+import com.aurum.invest.analytics.NextWeekPlan
+import com.aurum.invest.analytics.NextWeekSector
+import com.aurum.invest.analytics.NextWeekStock
 import com.aurum.invest.analytics.NoteKind
 import com.aurum.invest.analytics.PickNote
 import com.aurum.invest.analytics.PortfolioLens
@@ -69,7 +72,9 @@ import com.aurum.invest.analytics.TomorrowPick
 import com.aurum.invest.analytics.WealthAllocation
 import com.aurum.invest.analytics.WealthPlan
 import com.aurum.invest.analytics.WeeklyStrategy
+import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
+import java.util.Locale
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.AurumRefreshBox
@@ -162,7 +167,7 @@ fun WealthScreen(onOpenAnalysis: (String) -> Unit, onOpenDetail: (String) -> Uni
                         CircularProgressIndicator(color = AurumColors.gold)
                         Spacer(Modifier.height(14.dp))
                         Text(
-                            text = "Scanning sectors, techniques, news, and insider flow…",
+                            text = "Scanning sectors, techniques, news, and flow headlines…",
                             style = MaterialTheme.typography.bodyMedium,
                             color = AurumColors.textDim
                         )
@@ -214,6 +219,9 @@ fun WealthScreen(onOpenAnalysis: (String) -> Unit, onOpenDetail: (String) -> Uni
                         pulseSectors = state.pulseSectors,
                         strategy = state.strategy,
                         strategyLoading = state.strategyLoading,
+                        preview = state.preview,
+                        previewLoading = state.previewLoading,
+                        previewWindowActive = state.previewWindowActive,
                         onOpenAnalysis = onOpenAnalysis,
                         onOpenDetail = onOpenDetail
                     )
@@ -269,8 +277,8 @@ private fun SetupForm(
                     text = "Tell Aurum how much you want to put to work and what profit you " +
                         "aim for over the next 4 months. Every week the plan re-reads the " +
                         "market — trending sectors, the 15-technique board on every candidate, " +
-                        "news, and insider flow — and tells you what to buy, for how much, " +
-                        "and when to sell.",
+                        "news, and flow headlines — and tells you what to buy, for how much, " +
+                        "when to sell, and exactly what you lose if every stop hits.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = AurumColors.textDim
                 )
@@ -340,13 +348,23 @@ private fun PlanContent(
     pulseSectors: Map<String, String>,
     strategy: WeeklyStrategy?,
     strategyLoading: Boolean,
+    preview: NextWeekPlan?,
+    previewLoading: Boolean,
+    previewWindowActive: Boolean,
     onOpenAnalysis: (String) -> Unit,
     onOpenDetail: (String) -> Unit
 ) {
     val context = LocalContext.current
     // Which sections the user has folded away. Survives rotation and tab
-    // switches, so the tab stays arranged the way they left it.
-    var collapsed by rememberSaveable { mutableStateOf(HashSet<String>()) }
+    // switches. The screen OPENS on the goal and the plan — everything else
+    // starts folded so a first look reads in seconds, not scrolls.
+    var collapsed by rememberSaveable {
+        mutableStateOf(
+            HashSet(
+                setOf("pulse", "trend", "book", "gaps", "weekmoney", "movers", "tomorrow", "insider")
+            )
+        )
+    }
     fun open(key: String) = key !in collapsed
     fun toggle(key: String) {
         collapsed = HashSet(collapsed).apply { if (!add(key)) remove(key) }
@@ -357,12 +375,98 @@ private fun PlanContent(
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 28.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // 1 — the user's goal. Their money, their target, the honest verdict.
         item {
-            WealthSectionHeader("Market pulse", open("pulse")) { toggle("pulse") }
+            WealthSectionHeader(
+                title = "The goal",
+                expanded = open("goal"),
+                trailing = plan.feasibility.lowercase(Locale.US)
+                    .replaceFirstChar { it.uppercase(Locale.US) }
+            ) { toggle("goal") }
+        }
+        if (open("goal")) {
+            item { GoalCard(plan) }
+        }
+
+        // 2 — the ONE money section: this week's plan.
+        item {
+            WealthSectionHeader(
+                title = "This week's plan",
+                expanded = open("alloc"),
+                trailing = if (plan.allocations.isEmpty()) "holding cash"
+                else "${plan.allocations.size} buys · ${Fmt.money(plan.cashReserve)} cash"
+            ) { toggle("alloc") }
+        }
+        if (open("alloc")) {
+            if (plan.planNote.isNotEmpty()) {
+                item { PlanNoteCard(plan.planNote) }
+            }
+            items(plan.allocations.size) { i ->
+                AllocationCard(
+                    allocation = plan.allocations[i],
+                    onOpenAnalysis = onOpenAnalysis,
+                    onOpenDetail = onOpenDetail
+                )
+            }
+            item { TotalsCard(plan) }
+            item { ActionsCard(plan) }
+        }
+
+        // 3 — the next-week preview, live Thursday through Monday.
+        item {
+            WealthSectionHeader(
+                title = "Next week — stocks & sectors to watch",
+                expanded = open("nextweek"),
+                trailing = preview?.let { Dates.weekStartLabel(it.weekStart) }
+                    ?: if (previewWindowActive) "building…" else "returns Thursday"
+            ) { toggle("nextweek") }
+        }
+        if (open("nextweek")) {
+            when {
+                preview != null -> {
+                    item { NextWeekHeadlineCard(preview) }
+                    item { NextWeekSectorsCard(preview.sectors, onOpenAnalysis) }
+                    items(preview.stocks.size) { i ->
+                        NextWeekStockCard(
+                            stock = preview.stocks[i],
+                            onOpenAnalysis = onOpenAnalysis,
+                            onOpenDetail = onOpenDetail
+                        )
+                    }
+                    item { NextWeekFooterCard(preview) }
+                }
+                previewLoading -> {
+                    item { NextWeekLoadingCard() }
+                }
+                else -> {
+                    item { NextWeekDormantCard() }
+                }
+            }
+        }
+
+        // 4 — market context, folded by default.
+        item {
+            WealthSectionHeader(
+                title = "Market pulse",
+                expanded = open("pulse"),
+                trailing = pulse?.let { "${it.score}/100" }
+            ) { toggle("pulse") }
         }
         if (open("pulse")) {
             item { MarketPulseCard(pulse = pulse, loading = pulseLoading) }
         }
+        item {
+            WealthSectionHeader(
+                title = "This week's market trend",
+                expanded = open("trend"),
+                trailing = plan.topSectors.firstOrNull()?.label
+            ) { toggle("trend") }
+        }
+        if (open("trend")) {
+            item { SectorCard(plan, onOpenAnalysis) }
+        }
+
+        // 5 — the user's book and how the themes cut it, folded by default.
         if (!book.isEmpty) {
             item {
                 WealthSectionHeader(
@@ -375,8 +479,6 @@ private fun PlanContent(
                 item { BookCard(book = book, plan = plan) }
             }
         }
-
-        // Which trending themes the book is missing, and what to buy for them.
         if (strategy != null || strategyLoading) {
             item {
                 WealthSectionHeader(
@@ -392,11 +494,21 @@ private fun PlanContent(
             if (strategy != null && strategy.allocations.isNotEmpty()) {
                 item {
                     WealthSectionHeader(
-                        title = "Where to put this week's money",
+                        title = "Sector lens on the same money",
                         expanded = open("weekmoney")
                     ) { toggle("weekmoney") }
                 }
                 if (open("weekmoney")) {
+                    item {
+                        Text(
+                            text = "A second cut of the SAME base, split by theme instead of " +
+                                "by stock — context for the plan above, not extra buying. " +
+                                "Follow one, not both.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AurumColors.textDim,
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        )
+                    }
                     items(strategy.allocations.size) { i ->
                         AllocationRow(
                             slice = strategy.allocations[i],
@@ -411,6 +523,8 @@ private fun PlanContent(
                 }
             }
         }
+
+        // 6 — session extras, folded by default.
         if (pulse != null && pulse.call != MarketCall.DEFENSIVE) {
             if (pulse.bestYesterday.isNotEmpty()) {
                 item {
@@ -451,33 +565,8 @@ private fun PlanContent(
                 }
             }
         }
-        item {
-            WealthSectionHeader("The goal", open("goal")) { toggle("goal") }
-        }
-        if (open("goal")) {
-            item { GoalCard(plan) }
-        }
-        item {
-            WealthSectionHeader("This week's market trend", open("trend")) { toggle("trend") }
-        }
-        if (open("trend")) {
-            item { SectorCard(plan, onOpenAnalysis) }
-        }
 
-        item {
-            WealthSectionHeader("This week's allocation", open("alloc")) { toggle("alloc") }
-        }
-        if (open("alloc")) {
-            items(plan.allocations.size) { i ->
-                AllocationCard(
-                    allocation = plan.allocations[i],
-                    onOpenAnalysis = onOpenAnalysis,
-                    onOpenDetail = onOpenDetail
-                )
-            }
-            item { TotalsCard(plan) }
-            item { ActionsCard(plan) }
-        }
+        // 7 — flow headlines, folded by default, honestly labeled.
         if (plan.marketNotes.isNotEmpty()) {
             item {
                 WealthSectionHeader("Insider & big-money flow", open("insider")) { toggle("insider") }
@@ -541,6 +630,297 @@ private fun WealthSectionHeader(
             contentDescription = if (expanded) "Collapse $title" else "Expand $title",
             tint = AurumColors.textDim,
             modifier = Modifier.size(20.dp)
+        )
+    }
+}
+
+// ---------------------------------------------------------------- next week
+
+/** One-line note card for a plan that is deliberately holding back. */
+@Composable
+private fun PlanNoteCard(note: String) {
+    AurumCard {
+        Text(
+            text = note,
+            style = MaterialTheme.typography.bodyMedium,
+            color = AurumColors.text
+        )
+    }
+}
+
+@Composable
+private fun NextWeekHeadlineCard(preview: NextWeekPlan) {
+    AurumCard {
+        Text(
+            text = preview.headline,
+            style = MaterialTheme.typography.titleMedium,
+            color = AurumColors.text
+        )
+        if (preview.marketNote.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = preview.marketNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
+        if (preview.portfolioNote.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = preview.portfolioNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.gold
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "Built ${preview.builtOn} · previews ${Dates.weekStartLabel(preview.weekStart)} · " +
+                "re-deploys the same base, never extra money",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+    }
+}
+
+@Composable
+private fun NextWeekSectorsCard(sectors: List<NextWeekSector>, onOpenAnalysis: (String) -> Unit) {
+    if (sectors.isEmpty()) return
+    AurumCard {
+        Text(
+            text = "Sectors to look at",
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(8.dp))
+        sectors.forEachIndexed { i, s ->
+            if (i > 0) {
+                HorizontalDivider(color = AurumColors.hairline)
+                Spacer(Modifier.height(8.dp))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = s.label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AurumColors.text,
+                    modifier = Modifier.weight(1f)
+                )
+                DeltaPct(value = s.r5Pct, style = MaterialTheme.typography.bodyMedium)
+            }
+            Text(
+                text = s.note,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun NextWeekStockCard(
+    stock: NextWeekStock,
+    onOpenAnalysis: (String) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
+    AurumCard(onClick = { onOpenDetail(stock.symbol) }) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stock.symbol,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AurumColors.text
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    if (stock.sectorLabel.isNotEmpty()) {
+                        PillTag(text = stock.sectorLabel, color = AurumColors.info)
+                    }
+                }
+                Text(
+                    text = stock.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = Fmt.money(stock.amount),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AurumColors.gold
+                )
+                Text(
+                    text = String.format(Locale.US, "%.0f%% of the base", stock.allocationPct),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            StatTile(label = "Entry", value = Fmt.money(stock.entry), modifier = Modifier.weight(1f))
+            StatTile(
+                label = "Target",
+                value = Fmt.money(stock.target),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.gain
+            )
+            StatTile(
+                label = "Stop",
+                value = Fmt.money(stock.stop),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.loss
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (stock.techTotal > 0) {
+                PillTag(
+                    text = "${stock.techBullish}/${stock.techTotal} bullish",
+                    color = AurumColors.gain
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            PillTag(
+                text = String.format(Locale.US, "R:R %.1f", stock.rewardRisk),
+                color = if (stock.rewardRisk >= 1.5) AurumColors.gain else AurumColors.textDim
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = "Score ${stock.score}",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = stock.reason,
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+        if (stock.extNote.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = stock.extNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.info
+            )
+        }
+        if (stock.newsNote.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SentimentDot(sentiment = stock.newsScore)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = stock.newsNote,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        if (stock.heldNote.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = stock.heldNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.gold
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { onOpenAnalysis(stock.symbol) }
+                .padding(vertical = 4.dp, horizontal = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Rounded.QueryStats,
+                contentDescription = null,
+                tint = AurumColors.gold,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "Full analysis",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.gold
+            )
+        }
+    }
+}
+
+@Composable
+private fun NextWeekFooterCard(preview: NextWeekPlan) {
+    AurumCard {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            StatTile(
+                label = "To deploy",
+                value = Fmt.money(preview.investable - preview.cashLeft),
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                label = "Stays cash",
+                value = Fmt.money(preview.cashLeft),
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        preview.actions.forEach { action ->
+            Row {
+                Text(
+                    text = "•  ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.gold
+                )
+                Text(
+                    text = action,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.text
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+        }
+        Text(
+            text = preview.caveat,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+    }
+}
+
+@Composable
+private fun NextWeekLoadingCard() {
+    AurumCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                color = AurumColors.gold,
+                strokeWidth = 2.dp
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                text = "Reading the whole market, sectors, news, and the latest " +
+                    "pre/post-market prints…",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
+    }
+}
+
+@Composable
+private fun NextWeekDormantCard() {
+    AurumCard {
+        Text(
+            text = "The next-week preview builds Thursday through Monday, once the week " +
+                "has shown its hand. Come back Thursday.",
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
         )
     }
 }
@@ -1387,12 +1767,37 @@ private fun AllocationCard(
                 text = "Expected: ${Fmt.signedMoney(allocation.expectedProfit)} " +
                     "(${Fmt.signedPct(allocation.expectedPct)})",
                 style = MaterialTheme.typography.bodyMedium,
-                color = AurumColors.gain,
+                color = AurumColors.deltaColor(allocation.expectedProfit),
                 modifier = Modifier.weight(1f)
             )
             PillTag(
                 text = "${allocation.techBullish}/${allocation.techTotal} bullish",
                 color = AurumColors.gain
+            )
+        }
+        // Defense first: the risk sits beside the promise, never hidden.
+        if (allocation.riskDollars > 0.0) {
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "If the stop hits: −${Fmt.money(allocation.riskDollars)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.loss,
+                    modifier = Modifier.weight(1f)
+                )
+                PillTag(
+                    text = String.format(Locale.US, "R:R %.1f", allocation.rewardRisk),
+                    color = if (allocation.rewardRisk >= 1.5) AurumColors.gain
+                    else AurumColors.textDim
+                )
+            }
+        }
+        if (allocation.heldNote.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = allocation.heldNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.gold
             )
         }
         Spacer(Modifier.height(8.dp))
@@ -1408,7 +1813,8 @@ private fun AllocationCard(
         if (allocation.insiderNote.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.Top) {
-                PillTag(text = "Insider", color = AurumColors.gold)
+                // A news headline, not a filing — the pill says what it is.
+                PillTag(text = "News flow", color = AurumColors.info)
                 Spacer(Modifier.width(8.dp))
                 Text(
                     text = allocation.insiderNote,
@@ -1486,6 +1892,20 @@ private fun TotalsCard(plan: WealthPlan) {
                 valueColor = AurumColors.deltaColor(plan.expectedProfitTotal)
             )
         }
+        if (plan.riskIfAllStopsHit > 0.0) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = String.format(
+                    Locale.US,
+                    "If every stop hits: −%s (%.1f%% of the base). That is the plan's real " +
+                        "worst case — know it before placing the first buy.",
+                    Fmt.money(plan.riskIfAllStopsHit),
+                    if (plan.baseAmount > 0.0) plan.riskIfAllStopsHit / plan.baseAmount * 100.0 else 0.0
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.loss
+            )
+        }
         Spacer(Modifier.height(10.dp))
         Text(
             text = plan.gapNote,
@@ -1523,8 +1943,19 @@ private fun ActionsCard(plan: WealthPlan) {
 
 @Composable
 private fun NewsCard(plan: WealthPlan, onOpen: (String) -> Unit) {
+    val planSymbols = plan.allocations.map { it.symbol }.toSet()
     AurumCard {
         plan.marketNotes.forEach { n ->
+            // Pin each headline to a ticker where one is honestly known:
+            // per-stock items carry their symbol; global sweeps are matched
+            // against the plan's own names in the title, never guessed.
+            val symbol = when {
+                n.symbol.length in 1..5 && n.symbol.all { it.isUpperCase() || it.isDigit() } &&
+                    n.symbol != "FLOW" -> n.symbol
+                else -> planSymbols.firstOrNull { sym ->
+                    Regex("\\b$sym\\b").containsMatchIn(n.title.uppercase(Locale.US))
+                }
+            }
             Row(
                 verticalAlignment = Alignment.Top,
                 modifier = Modifier
@@ -1535,6 +1966,21 @@ private fun NewsCard(plan: WealthPlan, onOpen: (String) -> Unit) {
                 SentimentDot(sentiment = n.sentiment, modifier = Modifier.padding(top = 5.dp))
                 Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
+                    if (symbol != null) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            PillTag(text = symbol, color = AurumColors.gold)
+                            Spacer(Modifier.width(6.dp))
+                            // "Clear to buy" only when the plan itself backs the
+                            // name with entry, stop, and size — a headline alone
+                            // never clears anything.
+                            if (symbol in planSymbols) {
+                                PillTag(text = "In this week's plan — clear to buy", color = AurumColors.gain)
+                            } else {
+                                PillTag(text = "Watch only", color = AurumColors.textDim)
+                            }
+                        }
+                        Spacer(Modifier.height(4.dp))
+                    }
                     Text(
                         text = n.title,
                         style = MaterialTheme.typography.bodySmall,
@@ -1552,5 +1998,15 @@ private fun NewsCard(plan: WealthPlan, onOpen: (String) -> Unit) {
                 }
             }
         }
+        Spacer(Modifier.height(8.dp))
+        HorizontalDivider(color = AurumColors.hairline)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "These are public news headlines, not SEC filings — Aurum has no Form 4 " +
+                "or 13F feed. A name is clear to buy only when it appears in the plan above " +
+                "with an entry, a stop, and a size.",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
     }
 }

@@ -193,7 +193,7 @@ data class PowerPick(
     val dayChangePct: Double,
     val r4Pct: Double,               // move over the last 4 trading days
     val upDays: Int,                 // up closes among those 4 days (0..4)
-    val closePosPct: Double,         // where price sits in today's range, 0..100
+    val closePosPct: Double,         // where price sits in today's range, 0..100; -1 = range unknown
     val volumeRatio: Double,         // 4-day avg volume vs 20-day average
     val expectedLowPct: Double,      // honest next-day potential, low bound
     val expectedHighPct: Double,
@@ -204,7 +204,10 @@ data class PowerPick(
     val techBullish: Int,
     val techTotal: Int,
     val techConfidence: Int,
-    val reason: String
+    val reason: String,
+    val newsScore: Int = 0,          // -3..+3 summed headline tone, 5 days
+    val headline: String = "",       // "" when the week had no headline worth citing
+    val headlineSource: String = ""
 )
 
 /** A stock the market-wide scan reads as sitting at a good entry price right now. */

@@ -9,6 +9,7 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -46,7 +47,13 @@ data class WealthAllocation(
     val reason: String,
     val buyAdvice: String,
     val sellAdvice: String,
-    val insiderNote: String      // "" when no insider/institutional headline was found
+    val insiderNote: String,     // "" when no insider/institutional headline was found
+    /** (target - entry) / (entry - stop); 0 when the stop math degenerates. */
+    val rewardRisk: Double = 0.0,
+    /** Dollars lost on this position if the stop hits. */
+    val riskDollars: Double = 0.0,
+    /** "" unless the user already holds this symbol; then says how much. */
+    val heldNote: String = ""
 )
 
 data class WealthPlan(
@@ -69,7 +76,11 @@ data class WealthPlan(
     val gapNote: String,
     val weeklyActions: List<String>,
     val marketNotes: List<NewsItem>,
-    val caveat: String
+    val caveat: String,
+    /** "" normally; set when the plan deliberately holds back (bearish tape, no positive expectations). */
+    val planNote: String = "",
+    /** Total dollars lost if every position's stop hits — the Elder-style worst case. */
+    val riskIfAllStopsHit: Double = 0.0
 )
 
 class WealthPlanner(
@@ -154,6 +165,9 @@ class WealthPlanner(
                         put("buyAdvice", a.buyAdvice)
                         put("sellAdvice", a.sellAdvice)
                         put("insiderNote", a.insiderNote)
+                        put("rewardRisk", a.rewardRisk)
+                        put("riskDollars", a.riskDollars)
+                        put("heldNote", a.heldNote)
                     })
                 }
             })
@@ -161,6 +175,8 @@ class WealthPlanner(
             put("expectedProfitTotal", p.expectedProfitTotal)
             put("expectedPctTotal", p.expectedPctTotal)
             put("gapNote", p.gapNote)
+            put("planNote", p.planNote)
+            put("riskIfAllStopsHit", p.riskIfAllStopsHit)
             put("weeklyActions", JSONArray(p.weeklyActions))
             put("marketNotes", JSONArray().apply {
                 p.marketNotes.forEach { n ->
@@ -202,7 +218,10 @@ class WealthPlanner(
                         reason = a.optString("reason", ""),
                         buyAdvice = a.optString("buyAdvice", ""),
                         sellAdvice = a.optString("sellAdvice", ""),
-                        insiderNote = a.optString("insiderNote", "")
+                        insiderNote = a.optString("insiderNote", ""),
+                        rewardRisk = a.optDouble("rewardRisk", 0.0),
+                        riskDollars = a.optDouble("riskDollars", 0.0),
+                        heldNote = a.optString("heldNote", "")
                     )
                 )
             }
@@ -246,25 +265,41 @@ class WealthPlanner(
                 gapNote = o.optString("gapNote", ""),
                 weeklyActions = actions,
                 marketNotes = notes,
-                caveat = o.optString("caveat", "")
+                caveat = o.optString("caveat", ""),
+                planNote = o.optString("planNote", ""),
+                riskIfAllStopsHit = o.optDouble("riskIfAllStopsHit", 0.0)
             )
         } catch (_: Exception) {
             null
         }
     }
 
-    /** Builds this week's plan. Null only when the market is fully unreachable. */
-    suspend fun build(weekStart: String, baseAmount: Double, targetProfit: Double): WealthPlan? {
+    /**
+     * Builds this week's plan. Null only when the market is fully unreachable.
+     * [held] maps each open-position symbol to its cost value in dollars so
+     * the plan sizes around the user's real book instead of ignoring it.
+     * [sectorTrends] lets the caller share one sector scan across engines.
+     */
+    suspend fun build(
+        weekStart: String,
+        baseAmount: Double,
+        targetProfit: Double,
+        held: Map<String, Double> = emptyMap(),
+        sectorTrends: List<SectorTrend>? = null
+    ): WealthPlan? {
         return try {
             if (baseAmount <= 0.0) return null
 
             // 1 — feasibility of the user's 4-month goal, stated honestly.
+            // Compounded, not divided: +X% over 4 months needs (1+X)^(1/4)-1
+            // per month, which is more than X/4 for any real target.
             val requiredTotalPct = targetProfit / baseAmount * 100.0
-            val requiredMonthlyPct = requiredTotalPct / 4.0
+            val requiredMonthlyPct =
+                ((1.0 + requiredTotalPct / 100.0).pow(0.25) - 1.0) * 100.0
             val (feasibility, feasibilityNote) = feasibility(baseAmount, requiredTotalPct, requiredMonthlyPct)
 
             // 2 — this week's trending sectors.
-            val sectors = SectorTrends(market, news).compute()
+            val sectors = sectorTrends ?: SectorTrends(market, news).compute()
             val topSectorKeys = sectors.take(3).map { it.key }
             val sectorHeadline = sectors.firstOrNull()?.let {
                 String.format(
@@ -273,8 +308,11 @@ class WealthPlanner(
                 )
             } ?: "Sector read unavailable this week."
 
-            // 3 — screen the universe, boosted by trending-sector membership.
-            val candidates = (WeeklyPicker.UNIVERSE + WeeklyPicker.BUDGET_EXTRA)
+            // 3 — screen the universe plus the trending themes' watch names,
+            // so a leading theme (quantum, nuclear, …) can actually reach the
+            // allocation instead of merely decorating the sector card.
+            val themed = topSectorKeys.flatMap { SectorTrends.WATCH[it].orEmpty() }
+            val candidates = (WeeklyPicker.UNIVERSE + WeeklyPicker.BUDGET_EXTRA + themed)
                 .distinctBy { it.first }
             val candlesBySymbol = HashMap<String, List<Candle>>()
             for (chunk in candidates.chunked(SCREEN_CHUNK)) {
@@ -309,31 +347,73 @@ class WealthPlanner(
                 results.filterNotNull().forEach { deep.add(it) }
             }
             if (deep.isEmpty()) return null
-            val kept = deep.filter { it.direction != TechniqueVerdict.BEARISH }
-                .ifEmpty { deep }
-                .sortedByDescending { it.finalScore }
-                .take(POSITIONS)
 
-            // 5 — allocate: 90% deployed by conviction weight, 10% cash reserve.
-            val cashReserve = round2(baseAmount * CASH_FRACTION)
-            val invested = baseAmount - cashReserve
-            val scoreFloor = kept.minOf { it.finalScore } - 1.0
-            val weightsRaw = kept.map { (it.finalScore - scoreFloor).coerceAtLeast(1.0) }
-            val weightSum = weightsRaw.sum()
-            var weights = weightsRaw.map { (it / weightSum).coerceIn(0.12, 0.30) }
-            val wSum = weights.sum()
-            weights = weights.map { it / wSum }
+            // 5 — keep only names that EARN money: non-bearish board AND a
+            // positive momentum expectation. A stock with nothing left to
+            // expect gets nothing — cash is a position too.
+            var planNote = ""
+            val nonBearish = deep.filter { it.direction != TechniqueVerdict.BEARISH }
+            if (nonBearish.isEmpty()) {
+                planNote = "Every finalist's technique board reads bearish this week. " +
+                    "No stock earns the money — the plan holds cash and re-checks next Monday."
+            }
+            val kept = nonBearish
+                .map { it to expectedMove(it) }
+                .filter { it.second > 1.0 }
+                .sortedByDescending { it.first.finalScore }
+                .take(POSITIONS)
+            if (planNote.isEmpty() && kept.isEmpty()) {
+                planNote = "No finalist carries a positive momentum expectation this week — " +
+                    "the plan holds cash rather than forcing a trade."
+            }
+
+            // 6 — allocate with the cap ENFORCED: no name may take more than
+            // 30% of the base, held names are downweighted, and any dollars
+            // the caps refuse flow to cash instead of being forced in.
+            val cashFloor = round2(baseAmount * CASH_FRACTION)
+            val investable = baseAmount - cashFloor
+            val perNameCap = baseAmount * 0.30
+            val amounts: List<Double>
+            if (kept.isNotEmpty()) {
+                val scoreFloor = kept.minOf { it.first.finalScore } - 1.0
+                val weightsRaw = kept.map { (d, _) ->
+                    val w = (d.finalScore - scoreFloor).coerceAtLeast(1.0)
+                    // Already-held names add to an existing position, so they
+                    // earn a smaller add, not a second full-size buy.
+                    if (held.containsKey(d.s.symbol)) w * 0.6 else w
+                }
+                val weightSum = weightsRaw.sum()
+                val proportional = weightsRaw.map { investable * it / weightSum }
+                val capped = proportional.map { min(it, perNameCap) }.toMutableList()
+                // One redistribution pass: leftover from capped names goes to
+                // the uncapped, still respecting the cap; the rest is cash.
+                val leftover = investable - capped.sum()
+                if (leftover > 1.0) {
+                    val headroom = capped.map { perNameCap - it }
+                    val headroomSum = headroom.sum()
+                    if (headroomSum > 0.0) {
+                        for (i in capped.indices) {
+                            capped[i] += min(headroom[i], leftover * headroom[i] / headroomSum)
+                        }
+                    }
+                }
+                amounts = capped.map { round2(it) }
+            } else {
+                amounts = emptyList()
+            }
+            val cashReserve = round2(baseAmount - amounts.sum())
 
             val horizonEnd = LocalDate.now().plusMonths(4).toString()
-            val allocations = kept.mapIndexed { i, d ->
-                toAllocation(d, round2(invested * weights[i]), horizonEnd)
+            val allocations = kept.mapIndexed { i, (d, expectedPct) ->
+                toAllocation(d, amounts[i], horizonEnd, expectedPct, held[d.s.symbol])
             }
 
             val expectedProfitTotal = round2(allocations.sumOf { it.expectedProfit })
             val expectedPctTotal = round1(expectedProfitTotal / baseAmount * 100.0)
-            val gapNote = gapNote(expectedProfitTotal, targetProfit)
+            val riskIfAllStopsHit = round2(allocations.sumOf { it.riskDollars })
+            val gapNote = gapNote(expectedProfitTotal, targetProfit, feasibility)
 
-            // 6 — insider & institutional flow headlines (global + per pick).
+            // 7 — insider & institutional flow headlines (global + per pick).
             val globalNotes = try {
                 news.getTopicNews(
                     query = "insider buying OR hedge fund stake stocks",
@@ -367,11 +447,16 @@ class WealthPlanner(
                 expectedProfitTotal = expectedProfitTotal,
                 expectedPctTotal = expectedPctTotal,
                 gapNote = gapNote,
-                weeklyActions = weeklyActions(cashReserve),
+                weeklyActions = weeklyActions(
+                    cashReserve, riskIfAllStopsHit, baseAmount,
+                    allocations.filter { it.heldNote.isNotEmpty() }.map { it.symbol }
+                ),
                 marketNotes = marketNotes,
                 caveat = "Recomputed every week from live prices, the 15-technique board, sector " +
-                    "momentum, and public news. Expected profits are momentum extrapolations, " +
-                    "not promises — decision support, not financial advice."
+                    "momentum, and public news. Expected profits are dampened momentum " +
+                    "extrapolations, not promises — decision support, not financial advice.",
+                planNote = planNote,
+                riskIfAllStopsHit = riskIfAllStopsHit
             )
         } catch (_: Exception) {
             null
@@ -416,6 +501,8 @@ class WealthPlanner(
         val sectorKey: String?,
         val r20: Double,
         val r60: Double,
+        /** False when history is too short for a real 60-day read — [r60] then just echoes [r20]. */
+        val hasR60: Boolean,
         val volumeRatio: Double
     )
 
@@ -433,7 +520,8 @@ class WealthPlanner(
         val c20 = closes[n - 21]
         if (c20 <= 0.0) return null
         val r20 = (last / c20 - 1.0) * 100.0
-        val r60 = if (n >= 60 && closes[n - 60] > 0.0) (last / closes[n - 60] - 1.0) * 100.0 else r20
+        val hasR60 = n >= 60 && closes[n - 60] > 0.0
+        val r60 = if (hasR60) (last / closes[n - 60] - 1.0) * 100.0 else r20
         val rsi = Indicators.rsi(closes) ?: return null
 
         // Today's in-progress bar has partial volume — exclude it from the surge read.
@@ -448,7 +536,9 @@ class WealthPlanner(
         val high20 = Indicators.recentHigh(closes, 20) ?: last
         val distFromHigh = if (high20 > 0.0) (high20 - last) / high20 * 100.0 else 0.0
 
-        val sectorKey = SYMBOL_SECTOR[symbol]
+        // The hand-kept map first, then the SectorTrends watch-list reverse
+        // map — covers the themed candidates (quantum, nuclear, …) too.
+        val sectorKey = SYMBOL_SECTOR[symbol] ?: SectorTrends.SYMBOL_THEME[symbol]?.first
         val sectorBoost = when (topSectorKeys.indexOf(sectorKey)) {
             0 -> 8.0
             1 -> 5.0
@@ -463,7 +553,7 @@ class WealthPlanner(
             (8.0 - distFromHigh).coerceIn(0.0, 8.0) +
             sectorBoost
 
-        return Screened(symbol, name, raw, sectorKey, r20, r60, volumeRatio)
+        return Screened(symbol, name, raw, sectorKey, r20, r60, hasR60, volumeRatio)
     }
 
     private class Deep(
@@ -539,16 +629,32 @@ class WealthPlanner(
         }
     }
 
-    private fun toAllocation(d: Deep, amount: Double, horizonEnd: String): WealthAllocation {
-        val entry = round2(d.price)
-        val shares = if (entry > 0.0) round4(amount / entry) else 0.0
-
-        // Expected 4-month move: observed 20/60-day momentum extrapolated with
-        // decay, nudged by technique conviction and news tone. Clamped hard.
-        val momentum = d.s.r20 * 1.1 + d.s.r60 * 0.7
+    /**
+     * Expected 4-month move, in %: a DAMPENED continuation of observed
+     * momentum. The 60-day return (≈3 months) extrapolates at 0.85x and the
+     * 20-day adds a 0.35x kicker — deliberately projecting LESS than what was
+     * observed, because momentum decays. Nudged by the technique board and
+     * news tone. Can be negative: a falling name shows a falling expectation,
+     * and the allocator gives it nothing instead of a fabricated +3%.
+     */
+    private fun expectedMove(d: Deep): Double {
+        val momentum =
+            if (d.s.hasR60) d.s.r60 * 0.85 + d.s.r20 * 0.35
+            else d.s.r20 * 0.9   // short history: extrapolate only what exists
         val adj = (if (d.direction == TechniqueVerdict.BULLISH) (d.confidence - 50) * 0.08 else 0.0) +
             d.newsTone * 0.8
-        val expectedPct = round1((momentum + adj).coerceIn(3.0, 32.0))
+        return round1((momentum + adj).coerceIn(-15.0, 30.0))
+    }
+
+    private fun toAllocation(
+        d: Deep,
+        amount: Double,
+        horizonEnd: String,
+        expectedPct: Double,
+        heldDollars: Double?
+    ): WealthAllocation {
+        val entry = round2(d.price)
+        val shares = if (entry > 0.0) round4(amount / entry) else 0.0
         val target = round2(entry * (1.0 + expectedPct / 100.0))
         val expectedProfit = round2(amount * expectedPct / 100.0)
 
@@ -583,7 +689,10 @@ class WealthPlanner(
         } ?: ""
 
         val reasonParts = mutableListOf(
-            String.format(Locale.US, "%+.1f%% in 20 days, %+.1f%% in 60", d.s.r20, d.s.r60),
+            if (d.s.hasR60)
+                String.format(Locale.US, "%+.1f%% in 20 days, %+.1f%% in 60", d.s.r20, d.s.r60)
+            else
+                String.format(Locale.US, "%+.1f%% in 20 days (history too short for a 60-day read)", d.s.r20),
             "${d.bullishCount} of ${d.techTotal} techniques bullish (${d.confidence}%)"
         )
         if (d.s.volumeRatio >= 1.2) {
@@ -592,6 +701,20 @@ class WealthPlanner(
         if (d.newsTone != 0) {
             reasonParts += String.format(Locale.US, "news tone %+d", d.newsTone)
         }
+
+        // Defense first: what the trade risks, next to what it promises.
+        val riskPerShare = (entry - stop).coerceAtLeast(0.0)
+        val rewardRisk = if (riskPerShare > 1e-9)
+            round1((target - entry) / riskPerShare).coerceIn(0.0, 9.9) else 0.0
+        val riskDollars = round2(shares * riskPerShare)
+        val heldNote = heldDollars?.let {
+            String.format(
+                Locale.US,
+                "Already in your book (~%s at cost) — this is an add, sized down so the " +
+                    "combined position stays reasonable.",
+                money(it)
+            )
+        } ?: ""
 
         return WealthAllocation(
             symbol = d.s.symbol,
@@ -610,16 +733,26 @@ class WealthPlanner(
             reason = reasonParts.joinToString(", "),
             buyAdvice = buyAdvice,
             sellAdvice = sellAdvice,
-            insiderNote = d.insiderItems.firstOrNull()?.let { "${it.title} — ${it.source}" } ?: ""
+            insiderNote = d.insiderItems.firstOrNull()?.let { "${it.title} — ${it.source}" } ?: "",
+            rewardRisk = rewardRisk,
+            riskDollars = riskDollars,
+            heldNote = heldNote
         )
     }
 
-    private fun gapNote(expected: Double, target: Double): String = when {
+    private fun gapNote(expected: Double, target: Double, feasibility: String): String = when {
         target <= 0.0 -> "No profit target set."
+        expected >= target && feasibility == "UNREALISTIC" -> String.format(
+            Locale.US,
+            "The dampened projection reads %s against the %s target — but the feasibility check " +
+                "already called this goal unrealistic, and a projection that flatters an " +
+                "unrealistic goal deserves suspicion, not celebration. Trust the stops, not the sum.",
+            money(expected), money(target)
+        )
         expected >= target -> String.format(
             Locale.US,
             "The current allocation projects %s — covering the %s target with %s of margin. " +
-                "Momentum projections shrink fast in corrections; the weekly reviews keep it honest.",
+                "Projections are dampened momentum, not promises; corrections shrink them fast.",
             money(expected), money(target), money(expected - target)
         )
         else -> String.format(
@@ -630,15 +763,41 @@ class WealthPlanner(
         )
     }
 
-    private fun weeklyActions(cashReserve: Double): List<String> = listOf(
-        "Place the buys above and set price alerts at every stop and every target.",
-        "Re-open Wealth each Monday: the plan re-reads sectors, the 15-technique board, news, " +
-            "and insider flow, then re-ranks the allocation.",
-        "If a position closes below its stop, sell it — the next weekly scan redeploys the cash.",
-        "If a position hits half its 4-month target inside the first month, take a third off the table.",
-        "Keep the ${money(cashReserve)} cash reserve untouched — it buys the dip the weekly scan flags, " +
-            "not the one that merely feels cheap."
-    )
+    private fun weeklyActions(
+        cashReserve: Double,
+        riskIfAllStopsHit: Double,
+        base: Double,
+        heldOverlap: List<String>
+    ): List<String> = buildList {
+        add(
+            "Place each buy and its stop in the same sitting — a stop decided at entry is " +
+                "Elder's rule working for you. If every stop hits, this plan loses " +
+                "${money(riskIfAllStopsHit)} (${fmt1(if (base > 0) riskIfAllStopsHit / base * 100 else 0.0)}% " +
+                "of the base): that number is the plan's real downside, know it before buying."
+        )
+        add(
+            "Sell any position that closes below its stop, the same day. No averaging down — " +
+                "Livermore: never add to a position that is proving you wrong."
+        )
+        add(
+            "Add only to winners (O'Neil): if a name runs 3%+ above entry on volume, it has " +
+                "earned the next slice of cash reserve — losers have not."
+        )
+        if (heldOverlap.isNotEmpty()) {
+            add(
+                "You already hold ${heldOverlap.joinToString(", ")} — those allocations are ADDS " +
+                    "sized around the existing position, not fresh full-size buys."
+            )
+        }
+        add(
+            "Re-open Wealth each Monday: the plan re-reads sectors, the 15-technique board, and " +
+                "the news, then re-ranks. A plan that never changes is a plan nobody is checking."
+        )
+        add(
+            "Keep the ${money(cashReserve)} cash reserve untouched — it buys the dip the weekly " +
+                "scan flags, not the one that merely feels cheap."
+        )
+    }
 
     // ------------------------------------------------------------ helpers
 

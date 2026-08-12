@@ -78,6 +78,9 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
     /** Tabs whose scan has already been kicked off this session. */
     private val started = java.util.Collections.synchronizedSet(HashSet<String>())
 
+    /** Tabs with a scan in flight right now — guards double-fire on re-show. */
+    private val inFlight = java.util.Collections.synchronizedSet(HashSet<String>())
+
     private val _state = MutableStateFlow(
         PicksState(
             weekLabel = Dates.weekStartLabel(Dates.currentWeekStartIso()),
@@ -215,32 +218,51 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Loads the data for [tab] the first time it is shown. Each scan runs at
-     * most once per session; already-loaded tabs return immediately.
+     * Loads the data for [tab] whenever it is shown. The repos hold the
+     * freshness rule (each list has a TTL), so re-showing a tab with a fresh
+     * set returns instantly, while a set from hours ago quietly recomputes —
+     * a power-hour list built at 3 AM must not be the 3:45 PM default read.
+     * The weekly lists are Room-backed and genuinely once-per-session.
      */
     fun ensureTab(tab: String) {
-        if (!started.add(tab)) return
-        when (tab) {
-            TAB_DAILY -> viewModelScope.launch {
-                if (Dates.isSaturday()) {
-                    _state.update { it.copy(dailyLoading = false) }
-                    return@launch
-                }
-                val daily = picks.ensureDaily()
-                _state.update { it.copy(dailyRows = daily, dailyLoading = false) }
-            }
-            TAB_ENTRIES -> viewModelScope.launch {
-                val entries = picks.ensureEntries()
-                _state.update { it.copy(entryRows = entries, entryLoading = false) }
-            }
-            TAB_POWER -> viewModelScope.launch {
-                val power = picks.ensurePower()
-                _state.update { it.copy(powerRows = power, powerLoading = false) }
-            }
-            TAB_WEEKLY -> viewModelScope.launch {
+        if (tab == TAB_WEEKLY) {
+            if (!started.add(tab)) return
+            viewModelScope.launch {
                 picks.ensureCurrentWeek()
                 _state.update { it.copy(loading = false) }
                 picks.ensureBudgetWeek()
+            }
+            return
+        }
+        if (!inFlight.add(tab)) return
+        when (tab) {
+            TAB_DAILY -> viewModelScope.launch {
+                try {
+                    if (Dates.isSaturday()) {
+                        _state.update { it.copy(dailyLoading = false) }
+                        return@launch
+                    }
+                    val daily = picks.ensureDaily()
+                    _state.update { it.copy(dailyRows = daily, dailyLoading = false) }
+                } finally {
+                    inFlight.remove(tab)
+                }
+            }
+            TAB_ENTRIES -> viewModelScope.launch {
+                try {
+                    val entries = picks.ensureEntries()
+                    _state.update { it.copy(entryRows = entries, entryLoading = false) }
+                } finally {
+                    inFlight.remove(tab)
+                }
+            }
+            TAB_POWER -> viewModelScope.launch {
+                try {
+                    val power = picks.ensurePower()
+                    _state.update { it.copy(powerRows = power, powerLoading = false) }
+                } finally {
+                    inFlight.remove(tab)
+                }
             }
         }
     }

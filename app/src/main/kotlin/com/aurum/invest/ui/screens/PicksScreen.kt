@@ -246,8 +246,10 @@ private fun androidx.compose.foundation.lazy.LazyListScope.dailyItems(
         else -> {
             item {
                 Text(
-                    text = "Stocks the engine reads as capable of a 3-10%+ up-move today, " +
-                        "from momentum, volume, the 15 techniques, pre/post-market prints, and news.",
+                    text = "The stocks best positioned to move today — whole-market screens plus " +
+                        "the fixed universe, read through momentum, volume, the 15 techniques, " +
+                        "pre/post-market prints, and news. Each range is that stock's own " +
+                        "measured volatility, not a promise.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
@@ -413,7 +415,7 @@ private fun PowerPickCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     PillTag(
                         text = String.format(
-                            Locale.US, "+%.1f–%.1f%% overnight potential",
+                            Locale.US, "+%.1f–%.1f%% ATR-based range",
                             pick.expectedLowPct, pick.expectedHighPct
                         ),
                         color = AurumColors.gold
@@ -458,8 +460,8 @@ private fun PowerPickCard(
                 }
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "Sell into tomorrow morning's strength — at the target, or by " +
-                        "10:30 AM ET; exit immediately if the stop breaks.",
+                    text = "Sell into tomorrow morning's strength — at the target, or in the " +
+                        "first hour if it stalls; exit immediately if the stop breaks.",
                     style = MaterialTheme.typography.labelMedium,
                     color = AurumColors.text
                 )
@@ -469,6 +471,20 @@ private fun PowerPickCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
+                if (pick.headline.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        SentimentDot(sentiment = pick.newsScore)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "${pick.headline} — ${pick.headlineSource}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AurumColors.textDim,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
                 if (ext?.preMarketPct != null || ext?.postMarketPct != null) {
                     Spacer(modifier = Modifier.height(8.dp))
                     ExtHoursChips(ext = ext)
@@ -486,7 +502,7 @@ private fun PowerPickCard(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Full analysis & $3,000 plan",
+                        text = "Full analysis & buy plan",
                         style = MaterialTheme.typography.labelMedium,
                         color = AurumColors.gold
                     )
@@ -549,10 +565,10 @@ private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
         else -> {
             item {
                 Text(
-                    text = "The 10 best entry prices on the market right now: hundreds of names " +
-                        "from Yahoo's market-wide screens, kept only when the long trend is " +
-                        "intact, the price has pulled back toward support, and the 15-technique " +
-                        "board does not read the dip as a falling knife.",
+                    text = "The best entry setups across 8 market-wide screens: kept only when " +
+                        "the long trend is intact, the price has pulled back toward support, " +
+                        "the 15-technique board does not read the dip as a falling knife, and " +
+                        "the week's news does not explain the dip away.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
@@ -568,9 +584,10 @@ private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
             }
             item {
                 Text(
-                    text = "Rescanned on demand from live screener and price data. Entry, target, " +
-                        "and stop derive from support/resistance and volatility (ATR) — decision " +
-                        "support, not financial advice.",
+                    text = "Refreshed automatically every 30 minutes and on demand. Upside, risk, " +
+                        "and R:R are measured from the limit price shown — the price you would " +
+                        "actually pay. Entry, target, and stop derive from support/resistance " +
+                        "and ATR — decision support, not financial advice.",
                     style = MaterialTheme.typography.labelSmall,
                     color = AurumColors.textDim
                 )
@@ -671,7 +688,7 @@ private fun EntryPickCard(
                 Text(
                     text = String.format(
                         Locale.US,
-                        "+%.1f%% to target · %.1f%% risk to the stop",
+                        "+%.1f%% to target · %.1f%% risk to the stop — from the limit price",
                         pick.upsidePct, pick.riskPct
                     ),
                     style = MaterialTheme.typography.labelMedium,
@@ -911,6 +928,16 @@ private fun androidx.compose.foundation.lazy.LazyListScope.weeklyItems(
     onOpenAnalysis: (String) -> Unit,
     onRefresh: () -> Unit
 ) {
+    item {
+        Text(
+            text = "The week's strongest sustained setups — momentum, volume, and the " +
+                "15-technique board over the fixed universe plus the market-wide screens. " +
+                "Every pick now carries its stop and first target in the reason line: a " +
+                "pick without an exit is not a plan.",
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+    }
     if (state.rows.isEmpty()) {
         item {
             if (state.loading || state.refreshing) {
@@ -965,6 +992,15 @@ private fun androidx.compose.foundation.lazy.LazyListScope.weeklyItems(
                 ext = state.extHours[row.pick.symbol]
             )
         }
+    }
+    item {
+        Text(
+            text = "Computed at the week's open and held for the week; \"since pick\" tracks " +
+                "each name live. Scores sit on a fixed scale — a quiet week reads low, and " +
+                "that is the honest answer. Decision support, not financial advice.",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
     }
 }
 
