@@ -235,7 +235,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.preMarketItems(
             EmptyState(
                 title = "Nothing moving pre-market",
                 message = "No liquid name shows a pre-market gain right now. " +
-                    "Rescan closer to the open — pre-market volume builds from 4:00 AM ET.",
+                    "Rescan closer to the open — pre-market volume builds from " +
+                    "${Dates.etAsAmman(4)} Amman time.",
                 actionLabel = "Rescan",
                 onAction = vm::refresh
             )
@@ -272,7 +273,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.intradayItems(
                 title = "The market is not open",
                 message = "This scan reads the live session: stocks trading above their open " +
                     "on real volume, with the technique board bullish and your target still " +
-                    "reachable from the current price. It runs 9:30 AM–4:00 PM ET, " +
+                    "reachable from the current price. It runs " +
+                    "${Dates.etAsAmman(9, 30)}–${Dates.etAsAmman(16)} Amman time, " +
                     "Monday to Friday."
             )
         }
@@ -335,7 +337,8 @@ private fun sessionLine(state: PreMarketState): String = when (state.session) {
     Dates.MarketSession.REGULAR ->
         if (state.livePreMarket) "Market open · pre-market prints from this morning"
         else "Market open · showing today's session"
-    Dates.MarketSession.POST -> "After hours · pre-market reopens 4:00 AM ET"
+    Dates.MarketSession.POST ->
+        "After hours · pre-market reopens ${Dates.etAsAmman(4)} Amman time"
     Dates.MarketSession.OVERNIGHT -> "Market closed · showing the last session"
     Dates.MarketSession.WEEKEND -> "Weekend · showing Friday's session"
 }
@@ -415,9 +418,12 @@ private fun intradaySessionLine(state: PreMarketState): String = when (state.ses
         }
         "Runs once the market opens · $countdown"
     }
-    Dates.MarketSession.POST -> "Session closed · scan resumes 9:30 AM ET"
-    Dates.MarketSession.OVERNIGHT -> "Market closed · scan runs 9:30 AM–4:00 PM ET"
-    Dates.MarketSession.WEEKEND -> "Weekend · scan returns Monday 9:30 AM ET"
+    Dates.MarketSession.POST ->
+        "Session closed · scan resumes ${Dates.etAsAmman(9, 30)} Amman time"
+    Dates.MarketSession.OVERNIGHT ->
+        "Market closed · scan runs ${Dates.etAsAmman(9, 30)}–${Dates.etAsAmman(16)} Amman time"
+    Dates.MarketSession.WEEKEND ->
+        "Weekend · scan returns Monday ${Dates.etAsAmman(9, 30)} Amman time"
 }
 
 /** Shown when a stored scan is displayed after the session it read has closed. */
@@ -454,7 +460,8 @@ private fun LastSessionNotice() {
             Text(
                 text = "The pre-market session has no trades right now, so these are ranked " +
                     "on the last regular session. Pre-market volume starts building from " +
-                    "4:00 AM ET — reopen or pull to refresh then for live prints.",
+                    "${Dates.etAsAmman(4)} Amman time — reopen or pull to refresh then " +
+                    "for live prints.",
                 style = MaterialTheme.typography.bodySmall,
                 color = AurumColors.textDim
             )
@@ -552,19 +559,19 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
             )
         }
 
-        // Timing, from where the low and high actually printed.
-        if (pick.buyWindowEt.isNotBlank()) {
+        // Timing, from where the low and high actually printed — Amman time.
+        if (pick.buyWindow.isNotBlank()) {
             Spacer(Modifier.height(12.dp))
             Column {
                 TimingLine(
                     label = "Best time to buy",
-                    value = pick.buyWindowEt,
+                    value = pick.buyWindow,
                     color = AurumColors.gold
                 )
                 Spacer(Modifier.height(4.dp))
                 TimingLine(
                     label = "Its high usually prints",
-                    value = pick.sellWindowEt,
+                    value = pick.sellWindow,
                     color = AurumColors.gain
                 )
                 if (pick.timingNote.isNotBlank()) {

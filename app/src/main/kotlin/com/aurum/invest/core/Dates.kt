@@ -91,6 +91,19 @@ object Dates {
         }
     }
 
+    /**
+     * Today's ET wall-clock time expressed in Amman time, e.g. 9:30 ET ->
+     * "4:30 PM". Derived from the live zone rules on both sides, so New
+     * York's DST switches keep the conversion honest year-round (Amman has
+     * stayed on UTC+3 since 2022).
+     */
+    fun etAsAmman(hour: Int, minute: Int = 0): String {
+        val et = java.time.ZonedDateTime.now(ZoneId.of("America/New_York"))
+            .withHour(hour).withMinute(minute).withSecond(0).withNano(0)
+        return et.withZoneSameInstant(ZoneId.of("Asia/Amman"))
+            .format(DateTimeFormatter.ofPattern("h:mm a", Locale.US))
+    }
+
     /** Minutes until the US regular session opens; 0 once it has. */
     fun minutesToUsOpen(): Long {
         val et = ZoneId.of("America/New_York")

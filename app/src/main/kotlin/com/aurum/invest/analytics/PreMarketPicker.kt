@@ -44,8 +44,8 @@ data class PreMarketPick(
     val atrPct: Double,
     val gapHoldRatePct: Double,      // % of gap-up days that closed above the open
     val odds: TargetOdds,
-    val buyWindowEt: String,         // when the day's low typically prints
-    val sellWindowEt: String,        // when the day's high typically prints
+    val buyWindow: String,           // when the day's low typically prints (Amman time)
+    val sellWindow: String,          // when the day's high typically prints (Amman time)
     val timingSessions: Int,         // sessions behind the timing read
     /**
      * Plain-language reading of the two windows — including the case where the
@@ -97,6 +97,7 @@ class PreMarketPicker(private val market: MarketRepository) {
         private const val DEEP_CHUNK = 6
         private const val HISTORY_DAYS = 90
         private val ET: ZoneId = ZoneId.of("America/New_York")
+        private val AMMAN: ZoneId = ZoneId.of("Asia/Amman")
 
         /** Pre-market prints move constantly — never serve them more than a minute stale. */
         private const val LIVE_MAX_AGE_MS = 60_000L
@@ -122,8 +123,8 @@ class PreMarketPicker(private val market: MarketRepository) {
                     put("atrPct", p.atrPct)
                     put("gapHoldRatePct", p.gapHoldRatePct)
                     put("odds", p.odds.name)
-                    put("buyWindowEt", p.buyWindowEt)
-                    put("sellWindowEt", p.sellWindowEt)
+                    put("buyWindow", p.buyWindow)
+                    put("sellWindow", p.sellWindow)
                     put("timingSessions", p.timingSessions)
                     put("timingNote", p.timingNote)
                     put("reason", p.reason)
@@ -160,8 +161,8 @@ class PreMarketPicker(private val market: MarketRepository) {
                         gapHoldRatePct = o.optDouble("gapHoldRatePct", 0.0),
                         odds = runCatching { TargetOdds.valueOf(o.optString("odds")) }
                             .getOrDefault(TargetOdds.RARE),
-                        buyWindowEt = o.optString("buyWindowEt", ""),
-                        sellWindowEt = o.optString("sellWindowEt", ""),
+                        buyWindow = o.optString("buyWindow", ""),
+                        sellWindow = o.optString("sellWindow", ""),
                         timingSessions = o.optInt("timingSessions", 0),
                         timingNote = o.optString("timingNote", ""),
                         reason = o.optString("reason", ""),
@@ -436,8 +437,8 @@ class PreMarketPicker(private val market: MarketRepository) {
                 atrPct = round1(atrPct),
                 gapHoldRatePct = round1(gapHold),
                 odds = odds,
-                buyWindowEt = timing.buyWindow,
-                sellWindowEt = timing.sellWindow,
+                buyWindow = timing.buyWindow,
+                sellWindow = timing.sellWindow,
                 timingSessions = timing.sessions,
                 timingNote = timing.note,
                 reason = reason,
@@ -453,8 +454,10 @@ class PreMarketPicker(private val market: MarketRepository) {
 
     /**
      * Where the session low and high actually printed over the last five
-     * sessions, as ET clock windows. Returns ("", "", 0) when intraday
-     * history is unavailable — the UI then says so instead of guessing.
+     * sessions. The math runs in ET (the exchange's clock); the windows are
+     * DISPLAYED in Amman time, the user's own. Returns ("", "", 0) when
+     * intraday history is unavailable — the UI then says so instead of
+     * guessing.
      */
     private suspend fun timingFor(symbol: String): Timing {
         return try {
@@ -531,23 +534,23 @@ class PreMarketPicker(private val market: MarketRepository) {
         return if (s.size % 2 == 1) s[s.size / 2] else (s[s.size / 2 - 1] + s[s.size / 2]) / 2
     }
 
-    /** A ±15-minute window around [minute], clamped to the regular session. */
+    /**
+     * A ±15-minute window around [minute] (an ET minute-of-day), clamped to
+     * the regular session and rendered as Amman wall-clock time.
+     */
     private fun windowAround(minute: Int): String {
         val start = (minute - 15).coerceAtLeast(9 * 60 + 30)
         val end = (minute + 15).coerceAtMost(16 * 60)
-        return "${clock(start)}–${clock(end)} ET"
+        return "${ammanClock(start)}–${ammanClock(end)} Amman"
     }
 
-    private fun clock(minutes: Int): String {
-        val h24 = minutes / 60
-        val m = minutes % 60
-        val suffix = if (h24 >= 12) "PM" else "AM"
-        val h12 = when {
-            h24 == 0 -> 12
-            h24 > 12 -> h24 - 12
-            else -> h24
-        }
-        return String.format(Locale.US, "%d:%02d %s", h12, m, suffix)
+    /** Today's ET minute-of-day as an Amman wall-clock label, e.g. "4:45 PM". */
+    private fun ammanClock(minutesEt: Int): String {
+        val et = java.time.ZonedDateTime.now(ET)
+            .withHour(minutesEt / 60).withMinute(minutesEt % 60)
+            .withSecond(0).withNano(0)
+        return et.withZoneSameInstant(AMMAN)
+            .format(java.time.format.DateTimeFormatter.ofPattern("h:mm a", Locale.US))
     }
 
     private fun round1(v: Double): Double = round(v * 10.0) / 10.0
