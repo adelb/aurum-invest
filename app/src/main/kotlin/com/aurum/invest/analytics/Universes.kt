@@ -87,4 +87,40 @@ object Universes {
         AssetClass.INDEX -> "Index"
         AssetClass.EQUITY -> null
     }
+
+    /**
+     * News-search query for a non-equity symbol. Google News RSS returns thin
+     * or empty results for the raw ticker (e.g. `GC=F`), so we map to the
+     * everyday name of the instrument. Returns null for symbols the caller
+     * should search by the raw ticker (equities and unknowns).
+     */
+    fun newsQueryFor(symbol: String): String? {
+        // Metals — search by the metal name + "price" for financial-tone results.
+        when (symbol) {
+            "GC=F", "XAUUSD=X" -> return "gold price"
+            "SI=F", "XAGUSD=X" -> return "silver price"
+            "HG=F" -> return "copper price"
+            "PL=F" -> return "platinum price"
+            "PA=F" -> return "palladium price"
+        }
+        // FX pairs — split the ticker.
+        if (symbol.endsWith("=X") && symbol.length in 7..8) {
+            val core = symbol.removeSuffix("=X")
+            if (core.length == 6) {
+                val base = core.substring(0, 3)
+                val quote = core.substring(3)
+                return "$base $quote forex"
+            }
+        }
+        // Indices / futures
+        return when (symbol) {
+            "^NDX", "NQ=F" -> "Nasdaq 100"
+            "^DJI", "YM=F" -> "Dow Jones industrial"
+            "^GSPC", "ES=F" -> "S&P 500"
+            "^RUT" -> "Russell 2000"
+            "^VIX" -> "VIX volatility index"
+            "DX-Y.NYB" -> "US dollar index DXY"
+            else -> null
+        }
+    }
 }

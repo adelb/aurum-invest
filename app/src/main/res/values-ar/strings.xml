@@ -21,6 +21,17 @@
     <string name="markets_fx">العملات الأجنبية</string>
     <string name="markets_indices">المؤشرات والعقود الآجلة</string>
     <string name="markets_footer_note">تعكس العقود الآجلة تحركات ما بعد الجلسة؛ بينما تعكس المؤشرات النقدية جلسة التداول الاعتيادية. العملة المعروضة هي عملة التسعير التي يُرجعها Yahoo.</string>
+    <string name="markets_ideas_title">أفكار الصفقات</string>
+    <string name="markets_horizon_scalp">سكالبينج · 15د</string>
+    <string name="markets_horizon_short">قصير الأمد · ساعة</string>
+    <string name="markets_horizon_long">طويل الأمد · يومي</string>
+    <string name="markets_dir_long">شراء</string>
+    <string name="markets_dir_short">بيع</string>
+    <string name="markets_dir_neutral">محايد</string>
+    <string name="markets_news_title">الأخبار الحديثة</string>
+    <string name="markets_news_empty">لا توجد أخبار ذات صلة خلال آخر ٥ أيام.</string>
+    <string name="markets_open_full">افتح التحليل الكامل مع الدخول والأهداف ووقف الخسارة و15 مؤشراً.</string>
+    <string name="markets_open_full_action">افتح التحليل الكامل ←</string>
 
     <!-- الإعدادات -->
     <string name="settings_title">الإعدادات</string>

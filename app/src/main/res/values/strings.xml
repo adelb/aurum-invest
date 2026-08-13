@@ -21,6 +21,17 @@
     <string name="markets_fx">Foreign Currencies</string>
     <string name="markets_indices">Indices &amp; Futures</string>
     <string name="markets_footer_note">Futures reflect after-hours moves; cash indices show the regular session. Currency shown is the quote currency reported by Yahoo.</string>
+    <string name="markets_ideas_title">Trade ideas</string>
+    <string name="markets_horizon_scalp">Scalp · 15m</string>
+    <string name="markets_horizon_short">Short-term · 1h</string>
+    <string name="markets_horizon_long">Long-term · daily</string>
+    <string name="markets_dir_long">LONG</string>
+    <string name="markets_dir_short">SHORT</string>
+    <string name="markets_dir_neutral">NEUTRAL</string>
+    <string name="markets_news_title">Recent news</string>
+    <string name="markets_news_empty">No relevant news in the last 5 days.</string>
+    <string name="markets_open_full">Open the full analysis for entry / target / stop with 15 techniques.</string>
+    <string name="markets_open_full_action">Open full analysis →</string>
 
     <!-- Settings screen -->
     <string name="settings_title">Settings</string>
