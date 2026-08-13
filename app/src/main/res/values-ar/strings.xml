@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Aurum</string>
+    <string name="notification_listener_label">مزامنة بنك Aurum</string>
+
+    <!-- شريط التنقل السفلي -->
+    <string name="nav_portfolio">المحفظة</string>
+    <string name="nav_watchlist">قائمة المراقبة</string>
+    <string name="nav_picks">الاختيارات</string>
+    <string name="nav_wealth">الثروة</string>
+    <string name="nav_two_percent">2٪</string>
+    <string name="nav_markets">الأسواق</string>
+    <string name="nav_settings">الإعدادات</string>
+    <string name="nav_reports">التقارير</string>
+    <string name="nav_feed">الإشعارات</string>
+
+    <!-- شاشة الأسواق -->
+    <string name="markets_title">الأسواق العالمية</string>
+    <string name="markets_subtitle">المعادن، والعملات الأجنبية، ومؤشرات الأسهم الأمريكية — مباشرة من Yahoo Finance. اضغط على أي عنصر لعرض التفاصيل الكاملة.</string>
+    <string name="markets_metals">المعادن</string>
+    <string name="markets_fx">العملات الأجنبية</string>
+    <string name="markets_indices">المؤشرات والعقود الآجلة</string>
+    <string name="markets_footer_note">تعكس العقود الآجلة تحركات ما بعد الجلسة؛ بينما تعكس المؤشرات النقدية جلسة التداول الاعتيادية. العملة المعروضة هي عملة التسعير التي يُرجعها Yahoo.</string>
+
+    <!-- الإعدادات -->
+    <string name="settings_title">الإعدادات</string>
+    <string name="settings_bank_feed">إشعارات البنك</string>
+    <string name="settings_captured_alerts">تنبيهات الصفقات الملتقطة</string>
+    <string name="settings_captured_alerts_desc">راجع الصفقات المستخرجة من إشعارات البنك واستوردها إلى محفظتك</string>
+    <string name="settings_bank_sync">مزامنة البنك</string>
+    <string name="settings_notification_access">الوصول إلى الإشعارات</string>
+    <string name="settings_notification_access_desc">يتيح لـ Aurum قراءة تنبيهات صفقات البنك</string>
+    <string name="settings_connected">متصل</string>
+    <string name="settings_off">متوقف</string>
+    <string name="settings_enable_notification_access">تمكين الوصول إلى الإشعارات</string>
+    <string name="settings_bank_packages_label">حزم تطبيقات البنوك</string>
+    <string name="settings_bank_packages_help">أي إشعار يحتوي اسم حزمته على أحد هذه المفاتيح سيتم التقاطه</string>
+    <string name="settings_auto_import">استيراد تلقائي للصفقات عالية الثقة</string>
+    <string name="settings_auto_import_desc">تُضاف التنبيهات الموثوقة تلقائياً إلى سجل صفقاتك</string>
+    <string name="settings_about">حول التطبيق</string>
+    <string name="settings_about_body">محفظة استثمار شخصية: متابعة مباشرة للمحفظة، اختيارات أسبوعية، ارتباط بالذهب، والتقاط تلقائي للصفقات من إشعارات البنك.</string>
+    <string name="settings_about_disclaimer">الاقتراحات مبنية على بيانات السوق العامة ولا تُعدّ نصيحة مالية.</string>
+    <string name="settings_version">الإصدار %1$s</string>
+    <string name="settings_language">اللغة</string>
+    <string name="settings_language_desc">تُبدّل واجهة التطبيق والإعدادات إلى العربية. الشاشات الأعمق لا تزال قيد الترجمة.</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_arabic">العربية</string>
+
+    <!-- عام -->
+    <string name="common_back">رجوع</string>
+    <string name="common_loading">جارٍ التحميل…</string>
+    <string name="common_save">حفظ</string>
+    <string name="common_cancel">إلغاء</string>
+    <string name="common_close">إغلاق</string>
+    <string name="common_refresh">تحديث</string>
+    <string name="common_buy">شراء</string>
+    <string name="common_sell">بيع</string>
+    <string name="common_add">إضافة</string>
+    <string name="common_edit">تعديل</string>
+    <string name="common_delete">حذف</string>
+</resources>

@@ -215,6 +215,11 @@ class MarketRepository(
      * (never guessed) and is retried on a later visit.
      */
     suspend fun getSector(symbol: String, maxAgeMs: Long = 30L * 24 * 3_600_000L): String? {
+        // Non-equity instruments (metals, FX, indices) have no Yahoo sector —
+        // synthesize one from the symbol shape instead of round-tripping and
+        // caching null forever.
+        com.aurum.invest.analytics.Universes.syntheticSectorFor(symbol)?.let { return it }
+
         val key = "sector:$symbol"
         val now = System.currentTimeMillis()
         val cached = readCache(key)

@@ -43,11 +43,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurum.invest.BuildConfig
+import com.aurum.invest.R
 import com.aurum.invest.bank.BankNotificationListener
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.GoldGradientText
@@ -93,34 +95,65 @@ fun SettingsScreen(onBack: () -> Unit, onOpenFeed: () -> Unit = {}) {
                     IconButton(onClick = onBack) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = "Back",
+                            contentDescription = stringResource(R.string.common_back),
                             tint = AurumColors.text
                         )
                     }
                     Spacer(Modifier.width(4.dp))
                     Text(
-                        text = "Settings",
+                        text = stringResource(R.string.settings_title),
                         style = MaterialTheme.typography.headlineMedium,
                         color = AurumColors.text
                     )
                 }
             }
 
+            item(key = "language") {
+                Spacer(Modifier.height(20.dp))
+                SectionHeader(title = stringResource(R.string.settings_language))
+                Spacer(Modifier.height(14.dp))
+                AurumCard(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = stringResource(R.string.settings_language_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.textDim
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        LanguageChip(
+                            label = stringResource(R.string.settings_language_english),
+                            selected = state.language == "en",
+                            onClick = { vm.setLanguage("en") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        LanguageChip(
+                            label = stringResource(R.string.settings_language_arabic),
+                            selected = state.language == "ar",
+                            onClick = { vm.setLanguage("ar") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+
             item(key = "bank-feed-entry") {
                 Spacer(Modifier.height(20.dp))
-                SectionHeader(title = "Bank feed")
+                SectionHeader(title = stringResource(R.string.settings_bank_feed))
                 Spacer(Modifier.height(14.dp))
                 AurumCard(modifier = Modifier.fillMaxWidth(), onClick = onOpenFeed) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Captured trade alerts",
+                                text = stringResource(R.string.settings_captured_alerts),
                                 style = MaterialTheme.typography.titleSmall,
                                 color = AurumColors.text
                             )
                             Spacer(Modifier.height(2.dp))
                             Text(
-                                text = "Review and import trades caught from bank notifications",
+                                text = stringResource(R.string.settings_captured_alerts_desc),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = AurumColors.textDim
                             )
@@ -136,7 +169,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenFeed: () -> Unit = {}) {
 
             item(key = "bank-sync") {
                 Spacer(Modifier.height(20.dp))
-                SectionHeader(title = "Bank sync")
+                SectionHeader(title = stringResource(R.string.settings_bank_sync))
                 Spacer(Modifier.height(14.dp))
                 AurumCard(modifier = Modifier.fillMaxWidth()) {
                     Row(
@@ -146,22 +179,22 @@ fun SettingsScreen(onBack: () -> Unit, onOpenFeed: () -> Unit = {}) {
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Notification access",
+                                text = stringResource(R.string.settings_notification_access),
                                 style = MaterialTheme.typography.titleSmall,
                                 color = AurumColors.text
                             )
                             Spacer(Modifier.height(2.dp))
                             Text(
-                                text = "Lets Aurum read your bank's trade alerts",
+                                text = stringResource(R.string.settings_notification_access_desc),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = AurumColors.textDim
                             )
                         }
                         Spacer(Modifier.width(10.dp))
                         if (state.listenerEnabled) {
-                            PillTag(text = "Connected", color = AurumColors.gain)
+                            PillTag(text = stringResource(R.string.settings_connected), color = AurumColors.gain)
                         } else {
-                            PillTag(text = "Off", color = AurumColors.loss)
+                            PillTag(text = stringResource(R.string.settings_off), color = AurumColors.loss)
                         }
                     }
 
@@ -181,7 +214,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenFeed: () -> Unit = {}) {
                                 )
                             ) {
                                 Text(
-                                    text = "Enable notification access",
+                                    text = stringResource(R.string.settings_enable_notification_access),
                                     style = MaterialTheme.typography.labelLarge
                                 )
                             }
@@ -198,10 +231,10 @@ fun SettingsScreen(onBack: () -> Unit, onOpenFeed: () -> Unit = {}) {
                             packagesText = input
                             vm.saveBankPackages(input)
                         },
-                        label = { Text("Bank app packages") },
+                        label = { Text(stringResource(R.string.settings_bank_packages_label)) },
                         supportingText = {
                             Text(
-                                text = "Any notification whose app package contains one of these is captured",
+                                text = stringResource(R.string.settings_bank_packages_help),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = AurumColors.textDim
                             )
@@ -219,13 +252,13 @@ fun SettingsScreen(onBack: () -> Unit, onOpenFeed: () -> Unit = {}) {
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Auto-import high-confidence trades",
+                                text = stringResource(R.string.settings_auto_import),
                                 style = MaterialTheme.typography.titleSmall,
                                 color = AurumColors.text
                             )
                             Spacer(Modifier.height(2.dp))
                             Text(
-                                text = "Alerts parsed with high confidence are added to your ledger automatically",
+                                text = stringResource(R.string.settings_auto_import_desc),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = AurumColors.textDim
                             )
@@ -248,7 +281,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenFeed: () -> Unit = {}) {
 
             item(key = "about") {
                 Spacer(Modifier.height(28.dp))
-                SectionHeader(title = "About")
+                SectionHeader(title = stringResource(R.string.settings_about))
                 Spacer(Modifier.height(14.dp))
                 AurumCard(modifier = Modifier.fillMaxWidth()) {
                     GoldGradientText(
@@ -257,25 +290,45 @@ fun SettingsScreen(onBack: () -> Unit, onOpenFeed: () -> Unit = {}) {
                     )
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        text = "Version ${BuildConfig.VERSION_NAME}",
+                        text = stringResource(R.string.settings_version, BuildConfig.VERSION_NAME),
                         style = MaterialTheme.typography.labelMedium,
                         color = AurumColors.textDim
                     )
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        text = "A personal investment wallet: live portfolio tracking, weekly picks, gold correlation and automatic trade capture from bank notifications.",
+                        text = stringResource(R.string.settings_about_body),
                         style = MaterialTheme.typography.bodyMedium,
                         color = AurumColors.text
                     )
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        text = "Suggestions are computed from public market data and are not financial advice.",
+                        text = stringResource(R.string.settings_about_disclaimer),
                         style = MaterialTheme.typography.bodySmall,
                         color = AurumColors.textDim
                     )
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun LanguageChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Button(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (selected) AurumColors.gold else AurumColors.surfaceHigh,
+            contentColor = if (selected) AurumColors.bg else AurumColors.text
+        ),
+        modifier = modifier
+    ) {
+        Text(text = label, style = MaterialTheme.typography.labelLarge)
     }
 }
 

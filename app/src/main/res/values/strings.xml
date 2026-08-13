@@ -2,4 +2,60 @@
 <resources>
     <string name="app_name">Aurum</string>
     <string name="notification_listener_label">Aurum Bank Sync</string>
+
+    <!-- Bottom navigation labels -->
+    <string name="nav_portfolio">Portfolio</string>
+    <string name="nav_watchlist">Watchlist</string>
+    <string name="nav_picks">Picks</string>
+    <string name="nav_wealth">Wealth</string>
+    <string name="nav_two_percent">2%</string>
+    <string name="nav_markets">Markets</string>
+    <string name="nav_settings">Settings</string>
+    <string name="nav_reports">Reports</string>
+    <string name="nav_feed">Feed</string>
+
+    <!-- Markets screen -->
+    <string name="markets_title">Global Markets</string>
+    <string name="markets_subtitle">Metals, foreign currencies, and US indices — live from Yahoo Finance. Tap any row for the full detail view.</string>
+    <string name="markets_metals">Metals</string>
+    <string name="markets_fx">Foreign Currencies</string>
+    <string name="markets_indices">Indices &amp; Futures</string>
+    <string name="markets_footer_note">Futures reflect after-hours moves; cash indices show the regular session. Currency shown is the quote currency reported by Yahoo.</string>
+
+    <!-- Settings screen -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_bank_feed">Bank feed</string>
+    <string name="settings_captured_alerts">Captured trade alerts</string>
+    <string name="settings_captured_alerts_desc">Review and import trades caught from bank notifications</string>
+    <string name="settings_bank_sync">Bank sync</string>
+    <string name="settings_notification_access">Notification access</string>
+    <string name="settings_notification_access_desc">Lets Aurum read your bank\'s trade alerts</string>
+    <string name="settings_connected">Connected</string>
+    <string name="settings_off">Off</string>
+    <string name="settings_enable_notification_access">Enable notification access</string>
+    <string name="settings_bank_packages_label">Bank app packages</string>
+    <string name="settings_bank_packages_help">Any notification whose app package contains one of these is captured</string>
+    <string name="settings_auto_import">Auto-import high-confidence trades</string>
+    <string name="settings_auto_import_desc">Alerts parsed with high confidence are added to your ledger automatically</string>
+    <string name="settings_about">About</string>
+    <string name="settings_about_body">A personal investment wallet: live portfolio tracking, weekly picks, gold correlation and automatic trade capture from bank notifications.</string>
+    <string name="settings_about_disclaimer">Suggestions are computed from public market data and are not financial advice.</string>
+    <string name="settings_version">Version %1$s</string>
+    <string name="settings_language">Language</string>
+    <string name="settings_language_desc">Switches the app shell and Settings to Arabic. Deeper screens are still being translated.</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_arabic">العربية</string>
+
+    <!-- Common -->
+    <string name="common_back">Back</string>
+    <string name="common_loading">Loading…</string>
+    <string name="common_save">Save</string>
+    <string name="common_cancel">Cancel</string>
+    <string name="common_close">Close</string>
+    <string name="common_refresh">Refresh</string>
+    <string name="common_buy">Buy</string>
+    <string name="common_sell">Sell</string>
+    <string name="common_add">Add</string>
+    <string name="common_edit">Edit</string>
+    <string name="common_delete">Delete</string>
 </resources>

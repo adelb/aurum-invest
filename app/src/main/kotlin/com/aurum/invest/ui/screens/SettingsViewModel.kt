@@ -21,7 +21,8 @@ import kotlinx.coroutines.launch
 data class SettingsState(
     val bankPackages: String? = null,
     val autoImport: Boolean = false,
-    val listenerEnabled: Boolean = true
+    val listenerEnabled: Boolean = true,
+    val language: String = "en"
 )
 
 class SettingsViewModel(app: Application) : AndroidViewModel(app) {
@@ -36,9 +37,10 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<SettingsState> = combine(
         container.settings.bankPackages,
         container.settings.autoImport,
-        listenerEnabled
-    ) { pkgs, auto, enabled ->
-        SettingsState(bankPackages = pkgs, autoImport = auto, listenerEnabled = enabled)
+        listenerEnabled,
+        container.settings.language
+    ) { pkgs, auto, enabled, lang ->
+        SettingsState(bankPackages = pkgs, autoImport = auto, listenerEnabled = enabled, language = lang)
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
@@ -66,6 +68,16 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 container.settings.setAutoImport(value)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /** Switch UI language. Accepts "en" or "ar". */
+    fun setLanguage(value: String) {
+        viewModelScope.launch {
+            try {
+                container.settings.setLanguage(value)
             } catch (_: Exception) {
             }
         }

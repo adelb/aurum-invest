@@ -53,4 +53,15 @@ class SettingsRepository(private val context: Context) {
             it[keyWealthTarget] = target
         }
     }
+
+    // ---- Language (UI locale) -----------------------------------------------
+
+    private val keyLanguage = stringPreferencesKey("language")
+
+    /** "en" (default) or "ar". Consumed by ProvideAppLocale in the UI tree. */
+    val language: Flow<String> = context.dataStore.data.map { it[keyLanguage] ?: "en" }
+
+    suspend fun setLanguage(value: String) {
+        context.dataStore.edit { it[keyLanguage] = value }
+    }
 }

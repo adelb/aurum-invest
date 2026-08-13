@@ -1,6 +1,7 @@
 package com.aurum.invest.ui.nav
 
 import android.app.Application
+import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -12,6 +13,7 @@ import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Savings
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material3.Badge
@@ -29,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -42,11 +45,13 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.aurum.invest.AurumApp
+import com.aurum.invest.R
 import com.aurum.invest.ui.screens.AddTransactionScreen
 import com.aurum.invest.ui.screens.AnalysisScreen
 import com.aurum.invest.ui.screens.BankFeedScreen
 import com.aurum.invest.ui.screens.DashboardScreen
 import com.aurum.invest.ui.screens.EditPositionScreen
+import com.aurum.invest.ui.screens.MarketsScreen
 import com.aurum.invest.ui.screens.PicksScreen
 import com.aurum.invest.ui.screens.PositionDetailScreen
 import com.aurum.invest.ui.screens.PreMarketScreen
@@ -63,6 +68,7 @@ object Routes {
     const val DASHBOARD = "dashboard"; const val WATCHLIST = "watchlist"
     const val PICKS = "picks"; const val WEALTH = "wealth"
     const val PREMARKET = "premarket"
+    const val MARKETS = "markets"
     const val FEED = "feed"; const val SETTINGS = "settings"
     const val ADD = "add?symbol={symbol}&side={side}"; const val DETAIL = "detail/{symbol}"
     const val ANALYSIS = "analysis/{symbol}"; const val REPORTS = "reports"
@@ -85,7 +91,11 @@ class RootViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 }
 
-private data class TopDest(val route: String, val label: String, val icon: ImageVector)
+private data class TopDest(
+    val route: String,
+    @StringRes val labelRes: Int,
+    val icon: ImageVector
+)
 
 @Composable
 fun AurumRoot() {
@@ -95,14 +105,12 @@ fun AurumRoot() {
 
     val topDests = remember {
         listOf(
-            TopDest(Routes.DASHBOARD, "Portfolio", Icons.Rounded.AccountBalanceWallet),
-            TopDest(Routes.WATCHLIST, "Watchlist", Icons.Rounded.Visibility),
-            TopDest(Routes.PICKS, "Picks", Icons.AutoMirrored.Rounded.TrendingUp),
-            TopDest(Routes.WEALTH, "Wealth", Icons.Rounded.Savings),
-            // The 2% desk (pre-market + open-session scans against the daily
-            // target) replaces the bank Feed in the bar; the feed itself
-            // stays reachable from Settings.
-            TopDest(Routes.PREMARKET, "2%", Icons.Rounded.Bolt)
+            TopDest(Routes.DASHBOARD, R.string.nav_portfolio, Icons.Rounded.AccountBalanceWallet),
+            TopDest(Routes.WATCHLIST, R.string.nav_watchlist, Icons.Rounded.Visibility),
+            TopDest(Routes.PICKS, R.string.nav_picks, Icons.AutoMirrored.Rounded.TrendingUp),
+            TopDest(Routes.WEALTH, R.string.nav_wealth, Icons.Rounded.Savings),
+            TopDest(Routes.PREMARKET, R.string.nav_two_percent, Icons.Rounded.Bolt),
+            TopDest(Routes.MARKETS, R.string.nav_markets, Icons.Rounded.Public)
         )
     }
 
@@ -124,6 +132,7 @@ fun AurumRoot() {
                     tonalElevation = 0.dp
                 ) {
                     topDests.forEach { dest ->
+                        val label = stringResource(dest.labelRes)
                         NavigationBarItem(
                             selected = currentRoute == dest.route,
                             onClick = {
@@ -141,13 +150,13 @@ fun AurumRoot() {
                                             contentColor = AurumColors.bg
                                         ) { Text("$pending") }
                                     }) {
-                                        Icon(dest.icon, contentDescription = dest.label)
+                                        Icon(dest.icon, contentDescription = label)
                                     }
                                 } else {
-                                    Icon(dest.icon, contentDescription = dest.label)
+                                    Icon(dest.icon, contentDescription = label)
                                 }
                             },
-                            label = { Text(dest.label, style = MaterialTheme.typography.labelMedium) },
+                            label = { Text(label, style = MaterialTheme.typography.labelMedium) },
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = AurumColors.gold,
                                 selectedTextColor = AurumColors.gold,
@@ -207,6 +216,11 @@ fun AurumRoot() {
                 PreMarketScreen(
                     onOpenDetail = { nav.navigate(Routes.detail(it)) },
                     onOpenAnalysis = { nav.navigate(Routes.analysis(it)) }
+                )
+            }
+            composable(Routes.MARKETS) {
+                MarketsScreen(
+                    onOpenDetail = { nav.navigate(Routes.detail(it)) }
                 )
             }
             composable(Routes.FEED) {

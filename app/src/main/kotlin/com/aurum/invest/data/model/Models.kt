@@ -38,6 +38,13 @@ data class Candle(
 
 enum class TradeSide { BUY, SELL }
 
+/**
+ * Instrument classification. Drives display grouping (Metals / FX / Indices)
+ * and lets non-equity symbols skip the Yahoo sector lookup (which returns null
+ * for them).
+ */
+enum class AssetClass { EQUITY, METAL, FX, INDEX }
+
 /** An open (or fully closed) position derived from the transaction ledger. */
 data class Position(
     val symbol: String,
