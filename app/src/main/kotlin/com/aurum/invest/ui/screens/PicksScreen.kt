@@ -6,6 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -372,6 +374,7 @@ private fun PowerWindowBanner() {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PowerPickCard(
     pick: PowerPick,
@@ -412,7 +415,11 @@ private fun PowerPickCard(
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     PillTag(
                         text = String.format(
                             Locale.US, "+%.1f–%.1f%% ATR-based range",
@@ -420,7 +427,6 @@ private fun PowerPickCard(
                         ),
                         color = AurumColors.gold
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
                     if (pick.techDirection == "BULLISH" && pick.techTotal > 0) {
                         PillTag(
                             text = "${pick.techBullish}/${pick.techTotal} bullish",
@@ -596,6 +602,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EntryPickCard(
     pick: EntryPick,
@@ -636,12 +643,15 @@ private fun EntryPickCard(
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     PillTag(
                         text = String.format(Locale.US, "RR %.1f", pick.rewardRisk),
                         color = AurumColors.gold
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
                     if (pick.techDirection == "BULLISH" && pick.techTotal > 0) {
                         PillTag(
                             text = "${pick.techBullish}/${pick.techTotal} bullish",
@@ -650,7 +660,6 @@ private fun EntryPickCard(
                     }
                     val rating = pick.analystRating
                     if (rating != null && rating <= 2.5) {
-                        Spacer(modifier = Modifier.width(8.dp))
                         PillTag(text = "Buy-rated", color = AurumColors.info)
                     }
                 }
@@ -742,6 +751,7 @@ private fun EntryPickCard(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DailyPickCard(
     pick: DailyPick,
@@ -782,7 +792,11 @@ private fun DailyPickCard(
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     PillTag(
                         text = String.format(
                             Locale.US, "+%.0f–%.0f%% potential",
@@ -790,7 +804,6 @@ private fun DailyPickCard(
                         ),
                         color = AurumColors.gold
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
                     if (pick.techDirection == "BULLISH" && pick.techTotal > 0) {
                         PillTag(
                             text = "${pick.techBullish}/${pick.techTotal} bullish",

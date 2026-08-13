@@ -6,6 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -44,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -366,28 +370,30 @@ private fun TargetCard(state: PreMarketState, tab: DeskTab, onEdit: () -> Unit) 
                 Text(
                     text = "Daily profit target",
                     style = MaterialTheme.typography.labelMedium,
-                    color = AurumColors.textDim
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = Fmt.pct(state.targetPct),
                     style = MaterialTheme.typography.displaySmall,
-                    color = AurumColors.gold
+                    color = AurumColors.gold,
+                    maxLines = 1
                 )
             }
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = if (asOf > 0L) "Prices ${Fmt.timeAgo(asOf)}"
-                    else "Tap to change",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
-                if (rowsShown > 0) {
-                    Spacer(Modifier.height(6.dp))
+            // Capped so the count can never squeeze the goal beside it.
+            if (rowsShown > 0) {
+                Spacer(Modifier.width(12.dp))
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    modifier = Modifier.widthIn(max = 132.dp)
+                ) {
                     Text(
                         text = "$reliable of $rowsShown",
                         style = MaterialTheme.typography.titleMedium,
-                        color = if (reliable > 0) AurumColors.gain else AurumColors.loss
+                        color = if (reliable > 0) AurumColors.gain else AurumColors.loss,
+                        maxLines = 1
                     )
                     Text(
                         text = when (tab) {
@@ -395,11 +401,21 @@ private fun TargetCard(state: PreMarketState, tab: DeskTab, onEdit: () -> Unit) 
                             DeskTab.OPEN -> "reach it from here most days"
                         },
                         style = MaterialTheme.typography.labelSmall,
-                        color = AurumColors.textDim
+                        color = AurumColors.textDim,
+                        textAlign = TextAlign.End
                     )
                 }
             }
         }
+        // Freshness and the edit hint get their own line rather than competing
+        // for width with the goal.
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = if (asOf > 0L) "Prices ${Fmt.timeAgo(asOf)} · tap to change the target"
+            else "Tap to change the target",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
     }
 }
 
@@ -482,89 +498,50 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
     // price on the card is the live regular print, not a pre-market one.
     val session = Dates.marketSessionNow()
     val (pctCaption, priceCaption) = when {
-        !pick.livePreMarket -> "Last session " to "last close"
-        session == Dates.MarketSession.PRE -> "Pre-market " to "pre-market"
-        session == Dates.MarketSession.REGULAR -> "Live " to "live"
-        else -> "Last session " to "last close"
+        !pick.livePreMarket -> "Last session" to "last close"
+        session == Dates.MarketSession.PRE -> "Pre-market" to "pre-market"
+        session == Dates.MarketSession.REGULAR -> "Live" to "live"
+        else -> "Last session" to "last close"
     }
 
     AurumCard(onClick = onOpen, modifier = Modifier.fillMaxWidth().animateContentSize()) {
-        Row(verticalAlignment = Alignment.Top) {
-            Text(
-                text = pick.rank.toString().padStart(2, '0'),
-                style = MaterialTheme.typography.headlineMedium,
-                color = AurumColors.gold
-            )
-            Spacer(Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
-                        text = pick.symbol,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
-                    )
-                    if (pick.name.isNotBlank()) {
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = pick.name,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = AurumColors.textDim,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = pctCaption,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.textDim
-                    )
-                    DeltaPct(
-                        value = pick.preMarketPct,
-                        style = MaterialTheme.typography.labelMedium
-                    )
-                    Text(
-                        text = " · prev ${Fmt.money(pick.prevClose)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = AurumColors.textDim
-                    )
-                }
-            }
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = Fmt.money(pick.price),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
-                )
-                Text(
-                    text = priceCaption,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
-            }
-        }
+        PickHeader(
+            rank = pick.rank,
+            symbol = pick.symbol,
+            name = pick.name,
+            moveCaption = pctCaption,
+            movePct = pick.preMarketPct,
+            price = pick.price,
+            priceCaption = priceCaption,
+            referenceLabel = "prev",
+            referencePrice = pick.prevClose
+        )
 
         // The plan: buy here, sell there, stop below.
         Spacer(Modifier.height(14.dp))
-        Row(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
             StatTile(
                 label = "Buy near",
                 value = Fmt.money(pick.suggestedEntry),
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                maxLines = 1
             )
             StatTile(
                 label = "Sell at ${Fmt.pct(pick.targetPct)}",
                 value = Fmt.money(pick.targetPrice),
                 modifier = Modifier.weight(1f),
-                valueColor = AurumColors.gain
+                valueColor = AurumColors.gain,
+                maxLines = 1
             )
             StatTile(
                 label = "Stop",
                 value = Fmt.money(pick.stop),
                 modifier = Modifier.weight(1f),
-                valueColor = AurumColors.loss
+                valueColor = AurumColors.loss,
+                maxLines = 1
             )
         }
         // A buyer here needs the day to stretch further than the target alone.
@@ -592,7 +569,7 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
                 )
                 Spacer(Modifier.height(4.dp))
                 TimingLine(
-                    label = "Its high usually prints",
+                    label = "High usually prints",
                     value = pick.sellWindow,
                     color = AurumColors.gain
                 )
@@ -606,8 +583,8 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "From where the low and high landed over the last " +
-                        "${pick.timingSessions} sessions.",
+                    text = "Amman time, from where the low and high landed over the " +
+                        "last ${pick.timingSessions} sessions.",
                     style = MaterialTheme.typography.labelSmall,
                     color = AurumColors.textDim
                 )
@@ -616,26 +593,13 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
 
         // The odds of the target, stated plainly.
         Spacer(Modifier.height(14.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            PillTag(text = oddsLabel, color = oddsColor)
-            if (pick.sectorNote.isNotBlank()) {
-                Spacer(Modifier.width(8.dp))
-                PillTag(
-                    text = pick.sectorLabel,
-                    color = if (pick.sectorNote.contains("#1")) AurumColors.gold
-                    else AurumColors.info,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-            }
-            Spacer(Modifier.weight(1f))
-            Text(
-                text = "${Fmt.pct(pick.hitRatePct)} of ${pick.sessionsAnalyzed} sessions",
-                style = MaterialTheme.typography.labelMedium,
-                color = oddsColor
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        ScoreBar(score = pick.hitRatePct, modifier = Modifier.fillMaxWidth())
+        OddsBlock(
+            oddsLabel = oddsLabel,
+            oddsColor = oddsColor,
+            sectorLabel = if (pick.sectorNote.isNotBlank()) pick.sectorLabel else "",
+            sectorLeading = pick.sectorNote.contains("#1"),
+            hitRatePct = pick.hitRatePct
+        )
 
         Spacer(Modifier.height(10.dp))
         Text(
@@ -652,15 +616,11 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
             )
         }
         if (pick.headline.isNotBlank()) {
-            Spacer(Modifier.height(8.dp))
-            TimingLine(
-                label = "News (5d)",
-                value = newsLineValue(pick.headline, pick.headlineSource),
-                color = when {
-                    pick.headlineSentiment > 0 -> AurumColors.gain
-                    pick.headlineSentiment < 0 -> AurumColors.loss
-                    else -> AurumColors.textDim
-                }
+            Spacer(Modifier.height(10.dp))
+            NewsLine(
+                headline = pick.headline,
+                source = pick.headlineSource,
+                sentiment = pick.headlineSentiment
             )
         }
         if (pick.caution.isNotBlank()) {
@@ -701,6 +661,7 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
 }
 
 /** One open-session candidate, with the evidence for and against the target. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun IntradayCard(pick: IntradayPick, onOpen: () -> Unit, onAnalyze: () -> Unit) {
     val oddsColor = when {
@@ -710,138 +671,97 @@ private fun IntradayCard(pick: IntradayPick, onOpen: () -> Unit, onAnalyze: () -
     }
 
     AurumCard(onClick = onOpen, modifier = Modifier.fillMaxWidth().animateContentSize()) {
-        Row(verticalAlignment = Alignment.Top) {
-            Text(
-                text = pick.rank.toString().padStart(2, '0'),
-                style = MaterialTheme.typography.headlineMedium,
-                color = AurumColors.gold
-            )
-            Spacer(Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
-                        text = pick.symbol,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
-                    )
-                    if (pick.name.isNotBlank()) {
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = pick.name,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = AurumColors.textDim,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "Off the open ",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.textDim
-                    )
-                    DeltaPct(
-                        value = pick.sinceOpenPct,
-                        style = MaterialTheme.typography.labelMedium
-                    )
-                    Text(
-                        text = " · open ${Fmt.money(pick.openPrice)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = AurumColors.textDim
-                    )
-                }
-            }
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = Fmt.money(pick.price),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
-                )
-                Text(
-                    text = "now",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
-            }
-        }
+        PickHeader(
+            rank = pick.rank,
+            symbol = pick.symbol,
+            name = pick.name,
+            moveCaption = "Off the open",
+            movePct = pick.sinceOpenPct,
+            price = pick.price,
+            priceCaption = "now",
+            referenceLabel = "open",
+            referencePrice = pick.openPrice
+        )
 
         // Live confirmation: volume pace, the technique board, and either the
-        // trending theme or the last half hour — max 3 pills at 360dp.
-        Spacer(Modifier.height(10.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // trending theme or the last half hour. Wraps rather than crushing a
+        // pill when the labels run long.
+        Spacer(Modifier.height(12.dp))
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             PillTag(
                 text = String.format(java.util.Locale.US, "%.1fx volume", pick.relativeVolume),
-                color = AurumColors.info
+                color = AurumColors.info,
+                maxLines = 1
             )
-            Spacer(Modifier.width(8.dp))
             PillTag(
                 text = "${pick.techBullish}/${pick.techTotal} bullish",
-                color = AurumColors.gain
+                color = AurumColors.gain,
+                maxLines = 1
             )
             if (pick.sectorNote.isNotBlank()) {
-                Spacer(Modifier.width(8.dp))
                 PillTag(
                     text = pick.sectorLabel,
                     color = if (pick.sectorNote.contains("#1")) AurumColors.gold
                     else AurumColors.info,
-                    modifier = Modifier.weight(1f, fill = false)
+                    maxLines = 1
                 )
             } else if (pick.momentum30Pct > 0.0) {
-                Spacer(Modifier.width(8.dp))
                 PillTag(
                     text = String.format(
                         java.util.Locale.US, "+%.1f%% last 30m", pick.momentum30Pct
                     ),
-                    color = AurumColors.gain
+                    color = AurumColors.gain,
+                    maxLines = 1
                 )
             }
         }
 
         // The plan: buy here, sell there, stop below.
         Spacer(Modifier.height(12.dp))
-        Row(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
             StatTile(
                 label = "Buy near",
                 value = Fmt.money(pick.price),
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                maxLines = 1
             )
             StatTile(
                 label = "Sell at ${Fmt.pct(pick.targetPct)}",
                 value = Fmt.money(pick.targetPrice),
                 modifier = Modifier.weight(1f),
-                valueColor = AurumColors.gain
+                valueColor = AurumColors.gain,
+                maxLines = 1
             )
             StatTile(
                 label = "Stop",
                 value = Fmt.money(pick.stop),
                 modifier = Modifier.weight(1f),
-                valueColor = AurumColors.loss
+                valueColor = AurumColors.loss,
+                maxLines = 1
             )
         }
 
         // The odds of the remaining move, stated plainly.
         Spacer(Modifier.height(14.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            PillTag(
-                text = when {
-                    pick.hitRatePct >= 70.0 -> "Reaches it most days"
-                    pick.hitRatePct >= 55.0 -> "Reaches it often"
-                    pick.hitRatePct >= 40.0 -> "Roughly even odds"
-                    else -> "Needs an unusual day"
-                },
-                color = oddsColor
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                text = "${Fmt.pct(pick.hitRatePct)} of ${pick.sessionsAnalyzed} sessions",
-                style = MaterialTheme.typography.labelMedium,
-                color = oddsColor
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        ScoreBar(score = pick.hitRatePct, modifier = Modifier.fillMaxWidth())
+        OddsBlock(
+            oddsLabel = when {
+                pick.hitRatePct >= 70.0 -> "Reaches it most days"
+                pick.hitRatePct >= 55.0 -> "Reaches it often"
+                pick.hitRatePct >= 40.0 -> "Roughly even odds"
+                else -> "Needs an unusual day"
+            },
+            oddsColor = oddsColor,
+            sectorLabel = "",
+            sectorLeading = false,
+            hitRatePct = pick.hitRatePct
+        )
 
         Spacer(Modifier.height(10.dp))
         Text(
@@ -858,15 +778,11 @@ private fun IntradayCard(pick: IntradayPick, onOpen: () -> Unit, onAnalyze: () -
             )
         }
         if (pick.headline.isNotBlank()) {
-            Spacer(Modifier.height(8.dp))
-            TimingLine(
-                label = "News (5d)",
-                value = newsLineValue(pick.headline, pick.headlineSource),
-                color = when {
-                    pick.headlineSentiment > 0 -> AurumColors.gain
-                    pick.headlineSentiment < 0 -> AurumColors.loss
-                    else -> AurumColors.textDim
-                }
+            Spacer(Modifier.height(10.dp))
+            NewsLine(
+                headline = pick.headline,
+                source = pick.headlineSource,
+                sentiment = pick.headlineSentiment
             )
         }
         if (pick.caution.isNotBlank()) {
@@ -949,25 +865,208 @@ private fun IntradayMethodCard(targetPct: Double) {
     }
 }
 
-/** Headline trimmed so the row stays readable, with its source appended. */
-private fun newsLineValue(headline: String, source: String): String {
-    val trimmed = if (headline.length > 56) headline.take(55).trimEnd() + "…" else headline
-    return if (source.isBlank()) trimmed else "$trimmed · $source"
+/**
+ * Shared card header: rank, name, the session move, and the price block.
+ * Every text is bounded and the middle column is the only elastic one, so a
+ * long company name or a four-digit price can never push a neighbour out of
+ * the card or land on top of it.
+ */
+@Composable
+private fun PickHeader(
+    rank: Int,
+    symbol: String,
+    name: String,
+    moveCaption: String,
+    movePct: Double,
+    price: Double,
+    priceCaption: String,
+    referenceLabel: String,
+    referencePrice: Double
+) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        Text(
+            text = rank.toString().padStart(2, '0'),
+            style = MaterialTheme.typography.headlineMedium,
+            color = AurumColors.gold,
+            maxLines = 1
+        )
+        Spacer(Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    text = symbol,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AurumColors.text,
+                    maxLines = 1
+                )
+                if (name.isNotBlank()) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = name,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.textDim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // The figure keeps its natural width; the caption is the side
+                // that gives way, so the percentage can never be squeezed into
+                // one character per line on a narrow screen or a large font.
+                Text(
+                    text = moveCaption,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Spacer(Modifier.width(5.dp))
+                DeltaPct(value = movePct, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        Spacer(Modifier.width(10.dp))
+        Column(
+            horizontalAlignment = Alignment.End,
+            modifier = Modifier.widthIn(max = 116.dp)
+        ) {
+            Text(
+                text = Fmt.money(price),
+                style = MaterialTheme.typography.titleSmall,
+                color = AurumColors.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = priceCaption,
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim,
+                maxLines = 1
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = "$referenceLabel ${Fmt.money(referencePrice)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
 }
 
+/**
+ * The odds verdict: wrapping pills, then the measured hit rate on its own
+ * line beside the bar. The pills wrap instead of competing with the figure
+ * for the same row, which is what used to crush them on narrow screens. The
+ * caption stays short because the sample size is already spelled out in the
+ * reason line below.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun OddsBlock(
+    oddsLabel: String,
+    oddsColor: androidx.compose.ui.graphics.Color,
+    sectorLabel: String,
+    sectorLeading: Boolean,
+    hitRatePct: Double
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            PillTag(text = oddsLabel, color = oddsColor, maxLines = 1)
+            if (sectorLabel.isNotBlank()) {
+                PillTag(
+                    text = sectorLabel,
+                    color = if (sectorLeading) AurumColors.gold else AurumColors.info,
+                    maxLines = 1
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ScoreBar(score = hitRatePct, modifier = Modifier.weight(1f))
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = String.format(java.util.Locale.US, "%.0f%% hit rate", hitRatePct),
+                style = MaterialTheme.typography.labelMedium,
+                color = oddsColor,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+/**
+ * A recent headline, given a full-width line to read on instead of being
+ * squeezed into the right half of a label row and truncated mid-word.
+ */
+@Composable
+private fun NewsLine(headline: String, source: String, sentiment: Int) {
+    val tone = when {
+        sentiment > 0 -> AurumColors.gain
+        sentiment < 0 -> AurumColors.loss
+        else -> AurumColors.textDim
+    }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "News (5d)",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim,
+                maxLines = 1
+            )
+            if (source.isNotBlank()) {
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "· $source",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        Spacer(Modifier.height(3.dp))
+        Text(
+            text = headline,
+            style = MaterialTheme.typography.bodySmall,
+            color = tone,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+/**
+ * Label on the left, value right-aligned in whatever space is left. The value
+ * is the elastic side so a long window description wraps inside the card
+ * rather than running under the label.
+ */
 @Composable
 private fun TimingLine(label: String, value: String, color: androidx.compose.ui.graphics.Color) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
         Text(
             text = label,
             style = MaterialTheme.typography.bodySmall,
-            color = AurumColors.textDim
+            color = AurumColors.textDim,
+            maxLines = 1
         )
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.width(12.dp))
         Text(
             text = value.ifBlank { "—" },
             style = MaterialTheme.typography.labelMedium,
-            color = color
+            color = color,
+            textAlign = TextAlign.End,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
         )
     }
 }

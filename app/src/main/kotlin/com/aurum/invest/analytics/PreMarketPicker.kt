@@ -702,12 +702,13 @@ class PreMarketPicker(
 
     /**
      * A ±15-minute window around [minute] (an ET minute-of-day), clamped to
-     * the regular session and rendered as Amman wall-clock time.
+     * the regular session and rendered as Amman wall-clock time. The zone is
+     * named once by the card that shows these windows, not on every row.
      */
     private fun windowAround(minute: Int): String {
         val start = (minute - 15).coerceAtLeast(9 * 60 + 30)
         val end = (minute + 15).coerceAtMost(16 * 60)
-        return "${ammanClock(start)}–${ammanClock(end)} Amman"
+        return "${ammanClock(start)}–${ammanClock(end)}"
     }
 
     /** Today's ET minute-of-day as an Amman wall-clock label, e.g. "4:45 PM". */

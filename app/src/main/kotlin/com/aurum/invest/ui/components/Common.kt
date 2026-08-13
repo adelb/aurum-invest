@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aurum.invest.core.Fmt
@@ -156,43 +157,58 @@ fun SectionHeader(
     }
 }
 
+/**
+ * Label over value. [maxLines] caps both lines so a row of tiles keeps its
+ * baselines aligned when one label is longer than its neighbours.
+ */
 @Composable
 fun StatTile(
     label: String,
     value: String,
     modifier: Modifier = Modifier,
-    valueColor: Color = AurumColors.text
+    valueColor: Color = AurumColors.text,
+    maxLines: Int = Int.MAX_VALUE
 ) {
     Column(modifier = modifier) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,
-            color = AurumColors.textDim
+            color = AurumColors.textDim,
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis
         )
         Text(
             text = value,
             style = MaterialTheme.typography.titleMedium,
-            color = valueColor
+            color = valueColor,
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
 
+/** A signed percentage. Always one line — a number reads as broken when wrapped. */
 @Composable
 fun DeltaPct(value: Double, modifier: Modifier = Modifier, style: TextStyle = LocalTextStyle.current) {
     Text(
         text = Fmt.signedPct(value),
         style = style,
         color = AurumColors.deltaColor(value),
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
         modifier = modifier
     )
 }
 
+/** A signed money amount. Always one line, for the same reason as [DeltaPct]. */
 @Composable
 fun DeltaMoney(value: Double, modifier: Modifier = Modifier, style: TextStyle = LocalTextStyle.current) {
     Text(
         text = Fmt.signedMoney(value),
         style = style,
         color = AurumColors.deltaColor(value),
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
         modifier = modifier
     )
 }
@@ -221,9 +237,18 @@ fun ActionBadge(action: AdviceAction, modifier: Modifier = Modifier) {
     PillTag(text = adviceLabel(action), color = color, modifier = modifier)
 }
 
-/** Generic colored pill tag. */
+/**
+ * Generic colored pill tag. A pill is a chip, so its label stays on one line
+ * with an ellipsis by default: without that, a tight row squeezes the box to
+ * near-zero width and the text stacks into a crushed, unreadable blob.
+ */
 @Composable
-fun PillTag(text: String, color: Color, modifier: Modifier = Modifier) {
+fun PillTag(
+    text: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+    maxLines: Int = 1
+) {
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(50))
@@ -236,7 +261,9 @@ fun PillTag(text: String, color: Color, modifier: Modifier = Modifier) {
                 fontWeight = FontWeight.SemiBold,
                 letterSpacing = 0.2.sp
             ),
-            color = color
+            color = color,
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
