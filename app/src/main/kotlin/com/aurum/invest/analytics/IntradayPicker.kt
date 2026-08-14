@@ -71,7 +71,7 @@ data class IntradayPick(
  * from their current price before the close.
  *
  * Integrity rules — a name is proposed only when ALL of these hold:
- *  1. **The technique board confirms it** — the 15-technique outlook must be
+ *  1. **The technique board confirms it** — the 20-technique outlook must be
  *     BULLISH. A trending screener line with a bearish board is dropped.
  *  2. **The current move agrees** — the stock trades above its open. A name
  *     falling on the session is never proposed for a further gain.

@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
 import com.aurum.invest.analytics.BookContext
 import com.aurum.invest.analytics.PortfolioLens
+import com.aurum.invest.analytics.RelationGroup
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.model.DailyPick
 import com.aurum.invest.data.model.EntryPick
@@ -53,6 +54,10 @@ data class PicksState(
     val powerRows: List<PowerPick> = emptyList(),
     val powerLoading: Boolean = true,
     val powerRefreshing: Boolean = false,
+    // Relations — first-party links: who moves when the giants move.
+    val relationRows: List<RelationGroup> = emptyList(),
+    val relationLoading: Boolean = true,
+    val relationRefreshing: Boolean = false,
     // The user's book + sector classification of visible picks, so every
     // suggestion can be read against what is actually held.
     val book: BookContext = BookContext.EMPTY,
@@ -69,6 +74,7 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
         const val TAB_ENTRIES = "entries"
         const val TAB_POWER = "power"
         const val TAB_WEEKLY = "weekly"
+        const val TAB_RELATION = "relation"
     }
 
     private val container = (app as AurumApp).container
@@ -263,6 +269,28 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
                 } finally {
                     inFlight.remove(tab)
                 }
+            }
+            TAB_RELATION -> viewModelScope.launch {
+                try {
+                    val groups = picks.ensureRelations()
+                    _state.update { it.copy(relationRows = groups, relationLoading = false) }
+                } finally {
+                    inFlight.remove(tab)
+                }
+            }
+        }
+    }
+
+    /** Re-reads the relation groups from fresh quotes and candles. */
+    fun refreshRelations() {
+        if (_state.value.relationRefreshing) return
+        viewModelScope.launch {
+            _state.update { it.copy(relationRefreshing = true) }
+            try {
+                val groups = picks.recomputeRelations()
+                _state.update { it.copy(relationRows = groups, relationLoading = false) }
+            } finally {
+                _state.update { it.copy(relationRefreshing = false) }
             }
         }
     }

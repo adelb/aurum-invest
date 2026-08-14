@@ -22,7 +22,7 @@ import org.json.JSONObject
  * redeploy, never extra money on top of this week's plan.
  *
  * Reads the whole market (Yahoo's saved screens), the trending sectors, each
- * finalist's news tone, the 15-technique board, and the latest pre/post-market
+ * finalist's news tone, the 20-technique board, and the latest pre/post-market
  * prints — and it knows the user's book, so an already-held name is marked as
  * an add, not a fresh discovery.
  */
@@ -342,7 +342,7 @@ class NextWeekPlanner(
                         "this week's."
                 ),
                 caveat = "Built ${Dates.todayLabel()} from the whole-market screens, sector " +
-                    "momentum, news tone, the 15-technique board, and the latest pre/post-market " +
+                    "momentum, news tone, the 20-technique board, and the latest pre/post-market " +
                     "prints. Numbers refresh until Monday's open; projections are dampened " +
                     "extrapolations, not promises."
             )

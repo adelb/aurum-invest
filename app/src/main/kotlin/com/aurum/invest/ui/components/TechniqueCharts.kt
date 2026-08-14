@@ -49,8 +49,13 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aurum.invest.analytics.AdxData
+import com.aurum.invest.analytics.AroonData
 import com.aurum.invest.analytics.BollingerData
+import com.aurum.invest.analytics.CciData
+import com.aurum.invest.analytics.CmfData
 import com.aurum.invest.analytics.DonchianData
+import com.aurum.invest.analytics.KeltnerData
+import com.aurum.invest.analytics.WilliamsRData
 import com.aurum.invest.analytics.FibonacciData
 import com.aurum.invest.analytics.FvgData
 import com.aurum.invest.analytics.GoldenCrossData
@@ -1461,6 +1466,285 @@ fun GoldenCrossDiagram(
                 "Price" to priceLineColor,
                 "SMA 50" to AurumColors.gold,
                 "SMA 200" to AurumColors.info
+            ),
+            modifier = Modifier.padding(top = 8.dp)
+        )
+    }
+}
+
+/** Fixed -100..0 pane with the -20/-80 zones — Williams %R, gold line. */
+@Composable
+fun WilliamsRDiagram(
+    data: WilliamsRData,
+    timestamps: List<Long>,
+    viewport: DiagramViewport,
+    modifier: Modifier = Modifier,
+    onTap: (() -> Unit)? = null
+) {
+    val textMeasurer = rememberTextMeasurer()
+    Canvas(
+        modifier = modifier.fillMaxWidth().height(186.dp).diagramGestures(viewport, onTap)
+    ) {
+        val r = data.r.win(viewport)
+        if (r.size < 2) return@Canvas
+        val pane = Pane(-100.0, 0.0, size.width, size.height - AXIS_H, 10f, r.size)
+        val y20 = pane.y(-20.0)
+        val y80 = pane.y(-80.0)
+
+        drawRect(
+            color = AurumColors.surfaceHigh,
+            topLeft = Offset(0f, y20),
+            size = Size(size.width, y80 - y20)
+        )
+        val lineColor = AurumColors.textDim.copy(alpha = 0.55f)
+        dashedLevel(y20, lineColor)
+        dashedLevel(y80, lineColor)
+
+        val dim = chartLabelStyle(AurumColors.textDim)
+        val m20 = textMeasurer.measure(AnnotatedString("-20"), dim)
+        drawText(textMeasurer, "-20", topLeft = Offset(4f, y20 - m20.size.height - 2f), style = dim)
+        drawText(textMeasurer, "-80", topLeft = Offset(4f, y80 + 2f), style = dim)
+
+        strokeSeries(seriesPoints(r, pane), AurumColors.gold, 2.5f)
+
+        val lastIdx = r.indexOfLast { it != null }
+        if (lastIdx >= 0) {
+            val v = r[lastIdx]
+            if (v != null) {
+                val txt = "%R ${v.roundToInt()}"
+                val goldStyle = chartLabelStyle(AurumColors.gold)
+                val m = textMeasurer.measure(AnnotatedString(txt), goldStyle)
+                val ty = (pane.y(v) - m.size.height - 4f)
+                    .coerceIn(2f, size.height - AXIS_H - m.size.height - 2f)
+                drawText(
+                    textMeasurer, txt,
+                    topLeft = Offset(size.width - m.size.width - 4f, ty),
+                    style = goldStyle
+                )
+            }
+        }
+        drawTimeAxis(textMeasurer, timestamps.win(viewport))
+        scrubAt(viewport, r.size, size.width)?.let { sc ->
+            val lines = buildList {
+                r.getOrNull(sc.idx)?.let { add("%R ${it.roundToInt()}" to AurumColors.gold) }
+            }
+            drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+        }
+    }
+}
+
+/** Zero-centered CCI with dashed ±100 trigger lines, gold line. */
+@Composable
+fun CciDiagram(
+    data: CciData,
+    timestamps: List<Long>,
+    viewport: DiagramViewport,
+    modifier: Modifier = Modifier,
+    onTap: (() -> Unit)? = null
+) {
+    val textMeasurer = rememberTextMeasurer()
+    Canvas(
+        modifier = modifier.fillMaxWidth().height(186.dp).diagramGestures(viewport, onTap)
+    ) {
+        val cci = data.cci.win(viewport)
+        if (cci.size < 2) return@Canvas
+        var minV = -150.0
+        var maxV = 150.0
+        cci.forEach {
+            if (it != null) {
+                if (it < minV) minV = it
+                if (it > maxV) maxV = it
+            }
+        }
+        val pane = Pane(minV, maxV, size.width, size.height - AXIS_H, 10f, cci.size)
+        val yPlus = pane.y(100.0)
+        val yMinus = pane.y(-100.0)
+        val y0 = pane.y(0.0)
+
+        val lineColor = AurumColors.textDim.copy(alpha = 0.55f)
+        dashedLevel(yPlus, AurumColors.gain.copy(alpha = 0.5f))
+        dashedLevel(yMinus, AurumColors.loss.copy(alpha = 0.5f))
+        dashedLevel(y0, lineColor)
+
+        val dim = chartLabelStyle(AurumColors.textDim)
+        val mPlus = textMeasurer.measure(AnnotatedString("+100"), dim)
+        drawText(textMeasurer, "+100", topLeft = Offset(4f, yPlus - mPlus.size.height - 2f), style = dim)
+        drawText(textMeasurer, "-100", topLeft = Offset(4f, yMinus + 2f), style = dim)
+
+        strokeSeries(seriesPoints(cci, pane), AurumColors.gold, 2.5f)
+        drawTimeAxis(textMeasurer, timestamps.win(viewport))
+        scrubAt(viewport, cci.size, size.width)?.let { sc ->
+            val lines = buildList {
+                cci.getOrNull(sc.idx)?.let { add("CCI ${it.roundToInt()}" to AurumColors.gold) }
+            }
+            drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+        }
+    }
+}
+
+/** Price inside the EMA(20) ± 2 ATR(10) Keltner channel: flat band, dashed EMA middle. */
+@Composable
+fun KeltnerDiagram(
+    data: KeltnerData,
+    timestamps: List<Long>,
+    viewport: DiagramViewport,
+    modifier: Modifier = Modifier,
+    ohlc: List<Candle>? = null,
+    style: PriceStyle = PriceStyle.LINE,
+    onTap: (() -> Unit)? = null
+) {
+    val textMeasurer = rememberTextMeasurer()
+    Column(modifier = modifier) {
+        Canvas(
+            modifier = Modifier.fillMaxWidth().height(170.dp).diagramGestures(viewport, onTap)
+        ) {
+            val closes = data.closes.win(viewport)
+            if (closes.size < 2) return@Canvas
+            val candlesW = ohlc?.win(viewport)
+            val upper = data.upper.win(viewport)
+            val lower = data.lower.win(viewport)
+            val middle = data.middle.win(viewport)
+            val vals = ArrayList<Double>(closes.size * 3)
+            vals.addAll(closes)
+            upper.forEach { if (it != null) vals.add(it) }
+            lower.forEach { if (it != null) vals.add(it) }
+            vals.includeOhlcRange(candlesW, style)
+            val minV = vals.min()
+            val maxV = vals.max()
+            val pane = Pane(minV, maxV, size.width, size.height - AXIS_H, 8f, closes.size)
+            drawPriceGrid(textMeasurer, pane, minV, maxV)
+
+            val upperPts = seriesPoints(upper, pane)
+            val lowerPts = seriesPoints(lower, pane)
+            if (upperPts.size >= 2 && lowerPts.size >= 2) {
+                val band = Path()
+                band.moveTo(upperPts.first().x, upperPts.first().y)
+                appendSmooth(band, upperPts)
+                val lowerRev = lowerPts.asReversed()
+                band.lineTo(lowerRev.first().x, lowerRev.first().y)
+                appendSmooth(band, lowerRev)
+                band.close()
+                drawPath(band, color = AurumColors.gainSoft)
+                val edge = AurumColors.gain.copy(alpha = 0.5f)
+                strokeSeries(upperPts, edge, 1.5f)
+                strokeSeries(lowerPts, edge, 1.5f)
+            }
+            dashedSeries(seriesPoints(middle, pane), AurumColors.textDim.copy(alpha = 0.7f))
+            drawPriceSeries(closes, candlesW, style, pane)
+            drawTimeAxis(textMeasurer, timestamps.win(viewport))
+            scrubAt(viewport, closes.size, size.width)?.let { sc ->
+                val lines = priceScrubLines(sc.idx, closes, candlesW, style).toMutableList()
+                upper.getOrNull(sc.idx)?.let { lines += "Upper ${Fmt.money(it)}" to AurumColors.gain }
+                middle.getOrNull(sc.idx)?.let { lines += "EMA 20 ${Fmt.money(it)}" to AurumColors.textDim }
+                lower.getOrNull(sc.idx)?.let { lines += "Lower ${Fmt.money(it)}" to AurumColors.gain }
+                drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+            }
+        }
+        LegendRow(
+            entries = listOf(
+                "Price" to priceLineColor,
+                "ATR channel" to AurumColors.gain.copy(alpha = 0.6f),
+                "EMA 20" to AurumColors.textDim
+            ),
+            modifier = Modifier.padding(top = 8.dp)
+        )
+    }
+}
+
+/** Chaikin Money Flow: zero-centered gold line with the ±0.05 noise band dashed. */
+@Composable
+fun CmfDiagram(
+    data: CmfData,
+    timestamps: List<Long>,
+    viewport: DiagramViewport,
+    modifier: Modifier = Modifier,
+    onTap: (() -> Unit)? = null
+) {
+    val textMeasurer = rememberTextMeasurer()
+    Canvas(
+        modifier = modifier.fillMaxWidth().height(158.dp).diagramGestures(viewport, onTap)
+    ) {
+        val cmf = data.cmf.win(viewport)
+        if (cmf.size < 2) return@Canvas
+        var minV = -0.25
+        var maxV = 0.25
+        cmf.forEach {
+            if (it != null) {
+                if (it < minV) minV = it
+                if (it > maxV) maxV = it
+            }
+        }
+        val pane = Pane(minV, maxV, size.width, size.height - AXIS_H, 10f, cmf.size)
+        val y0 = pane.y(0.0)
+        val yHi = pane.y(0.05)
+        val yLo = pane.y(-0.05)
+
+        dashedLevel(y0, AurumColors.textDim.copy(alpha = 0.55f))
+        dashedLevel(yHi, AurumColors.gain.copy(alpha = 0.45f))
+        dashedLevel(yLo, AurumColors.loss.copy(alpha = 0.45f))
+
+        val dim = chartLabelStyle(AurumColors.textDim)
+        val mHi = textMeasurer.measure(AnnotatedString("+0.05"), dim)
+        drawText(textMeasurer, "+0.05", topLeft = Offset(4f, yHi - mHi.size.height - 2f), style = dim)
+        drawText(textMeasurer, "-0.05", topLeft = Offset(4f, yLo + 2f), style = dim)
+
+        strokeSeries(seriesPoints(cmf, pane), AurumColors.gold, 2.5f)
+        drawTimeAxis(textMeasurer, timestamps.win(viewport))
+        scrubAt(viewport, cmf.size, size.width)?.let { sc ->
+            val lines = buildList {
+                cmf.getOrNull(sc.idx)?.let {
+                    add(String.format(java.util.Locale.US, "CMF %+.2f", it) to AurumColors.gold)
+                }
+            }
+            drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+        }
+    }
+}
+
+/** Aroon up (green) vs down (red) on a fixed 0..100 pane with the 70/30 lines. */
+@Composable
+fun AroonDiagram(
+    data: AroonData,
+    timestamps: List<Long>,
+    viewport: DiagramViewport,
+    modifier: Modifier = Modifier,
+    onTap: (() -> Unit)? = null
+) {
+    val textMeasurer = rememberTextMeasurer()
+    Column(modifier = modifier) {
+        Canvas(
+            modifier = Modifier.fillMaxWidth().height(158.dp).diagramGestures(viewport, onTap)
+        ) {
+            val up = data.up.win(viewport)
+            val down = data.down.win(viewport)
+            if (up.size < 2) return@Canvas
+            val pane = Pane(0.0, 100.0, size.width, size.height - AXIS_H, 10f, up.size)
+            val y70 = pane.y(70.0)
+            val y30 = pane.y(30.0)
+            val lineColor = AurumColors.textDim.copy(alpha = 0.55f)
+            dashedLevel(y70, lineColor)
+            dashedLevel(y30, lineColor)
+
+            val dim = chartLabelStyle(AurumColors.textDim)
+            val m70 = textMeasurer.measure(AnnotatedString("70"), dim)
+            drawText(textMeasurer, "70", topLeft = Offset(4f, y70 - m70.size.height - 2f), style = dim)
+            drawText(textMeasurer, "30", topLeft = Offset(4f, y30 + 2f), style = dim)
+
+            strokeSeries(seriesPoints(up, pane), AurumColors.gain, 2.5f)
+            strokeSeries(seriesPoints(down, pane), AurumColors.loss, 2f)
+            drawTimeAxis(textMeasurer, timestamps.win(viewport))
+            scrubAt(viewport, up.size, size.width)?.let { sc ->
+                val lines = buildList {
+                    up.getOrNull(sc.idx)?.let { add("Up ${it.roundToInt()}" to AurumColors.gain) }
+                    down.getOrNull(sc.idx)?.let { add("Down ${it.roundToInt()}" to AurumColors.loss) }
+                }
+                drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+            }
+        }
+        LegendRow(
+            entries = listOf(
+                "Aroon up" to AurumColors.gain,
+                "Aroon down" to AurumColors.loss
             ),
             modifier = Modifier.padding(top = 8.dp)
         )

@@ -23,7 +23,7 @@ import org.json.JSONObject
  * the 4-month target, the stop, the expected profit, and when to buy and sell.
  *
  * Every number is derived from real analysis, honestly:
- *  - the 15-technique board votes on every candidate (bearish boards are out)
+ *  - the 20-technique board votes on every candidate (bearish boards are out)
  *  - this week's trending sectors (via ETF momentum + news tone) boost their members
  *  - news sentiment and insider/institutional headlines adjust conviction
  *  - expected 4-month moves extrapolate observed 20/60-day momentum with decay,
@@ -337,7 +337,7 @@ class WealthPlanner(
             }
             if (screened.isEmpty()) return null
 
-            // 4 — deep read of the finalists with the 15-technique board + news.
+            // 4 — deep read of the finalists with the 20-technique board + news.
             val finalists = screened.sortedByDescending { it.raw }.take(FINALISTS)
             val deep = ArrayList<Deep>()
             for (chunk in finalists.chunked(DEEP_CHUNK)) {
@@ -452,7 +452,7 @@ class WealthPlanner(
                     allocations.filter { it.heldNote.isNotEmpty() }.map { it.symbol }
                 ),
                 marketNotes = marketNotes,
-                caveat = "Recomputed every week from live prices, the 15-technique board, sector " +
+                caveat = "Recomputed every week from live prices, the 20-technique board, sector " +
                     "momentum, and public news. Expected profits are dampened momentum " +
                     "extrapolations, not promises — decision support, not financial advice.",
                 planNote = planNote,
@@ -790,7 +790,7 @@ class WealthPlanner(
             )
         }
         add(
-            "Re-open Wealth each Monday: the plan re-reads sectors, the 15-technique board, and " +
+            "Re-open Wealth each Monday: the plan re-reads sectors, the 20-technique board, and " +
                 "the news, then re-ranks. A plan that never changes is a plan nobody is checking."
         )
         add(

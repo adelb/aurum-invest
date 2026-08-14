@@ -49,6 +49,11 @@ object TechniqueExplain {
             "psar" -> psar(analysis, result, price)
             "mfi" -> mfi(analysis, result)
             "gc" -> gc(analysis, result, price)
+            "willr" -> willr(analysis, result)
+            "cci" -> cci(analysis, result)
+            "keltner" -> keltner(analysis, result, price)
+            "cmf" -> cmf(analysis, result)
+            "aroon" -> aroon(analysis, result)
             else -> null
         }
     }
@@ -735,6 +740,243 @@ object TechniqueExplain {
         )
     }
 
+    // ---------------------------------------------------------------- willr
+
+    private fun willr(a: TechniqueAnalysis, r: TechniqueResult): TechniqueDetail {
+        val now = a.willrData.r.lastOrNull { it != null }
+        val prev5 = a.willrData.r.let { s -> if (s.size >= 6) s[s.size - 6] else null }
+        val reading = mutableListOf(r.summary)
+        if (now != null && prev5 != null) {
+            val dir = if (now >= prev5) "rising" else "falling"
+            reading += "The line is $dir: %R moved from ${fmt0(prev5)} to ${fmt0(now)} in five sessions."
+        }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "Larry Williams' %R locates today's close inside the last 14 days' " +
+                "high-low range on a -100..0 scale. Near 0 the stock keeps closing at the " +
+                "top of its range (overbought); near -100 at the bottom (oversold). It is " +
+                "the fastest of the range oscillators — it fires early, at the cost of " +
+                "more noise.",
+            drawn = listOf(
+                "Gold line — the 14-day Williams %R.",
+                "Shaded band — the -20 to -80 neutral zone.",
+                "Dashed lines — -20 (overbought) and -80 (oversold)."
+            ),
+            reading = reading,
+            levels = buildList {
+                now?.let { add("%R now" to fmt0(it)) }
+                prev5?.let { add("%R 5 bars ago" to fmt0(it)) }
+                add("Overbought line" to "-20")
+                add("Oversold line" to "-80")
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "The higher-probability entry is %R climbing back OUT of the sub--80 zone, not sitting in it.",
+                    "Williams himself waited for price confirmation — a close above the prior day's high — before acting."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "Closes pinned near the range top fade eventually — take profits into strength rather than chasing.",
+                    "In a strong uptrend %R can hug the -20 line for weeks; only fade with a trend technique agreeing."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "Mid-range %R has no edge — wait for a tag of either extreme.",
+                    "Use it as a timing overlay on the slower trend techniques, not on its own."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- cci
+
+    private fun cci(a: TechniqueAnalysis, r: TechniqueResult): TechniqueDetail {
+        val now = a.cciData.cci.lastOrNull { it != null }
+        val prev5 = a.cciData.cci.let { s -> if (s.size >= 6) s[s.size - 6] else null }
+        val reading = mutableListOf(r.summary)
+        if (now != null && prev5 != null) {
+            val dir = if (now >= prev5) "rising" else "falling"
+            reading += "CCI is $dir: from ${fmt0(prev5)} to ${fmt0(now)} in five sessions."
+        }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "Donald Lambert's Commodity Channel Index measures how far the " +
+                "typical price has strayed from its own 20-day average, in units of its " +
+                "normal deviation. Lambert's original system is trend-following: a push " +
+                "OVER +100 marks the start of a strong up-move worth riding, a drop under " +
+                "-100 a strong down-move. Roughly 70-80% of the time CCI stays inside the " +
+                "band — those readings carry no signal.",
+            drawn = listOf(
+                "Gold line — the 20-day CCI.",
+                "Green dashed line — +100, the strong-uptrend trigger.",
+                "Red dashed line — -100, the strong-downtrend trigger.",
+                "Dim dashed line — zero, the 20-day average itself."
+            ),
+            reading = reading,
+            levels = buildList {
+                now?.let { add("CCI now" to fmt0(it)) }
+                prev5?.let { add("CCI 5 bars ago" to fmt0(it)) }
+                add("Uptrend trigger" to "+100")
+                add("Downtrend trigger" to "-100")
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "Lambert's rule: long while CCI holds above +100; the exit is the drop back below it.",
+                    "The further above +100, the stronger the move — but late entries above +200 have the worst risk/reward."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "Below -100 the down-move is statistically established — dip-buying against it has poor odds.",
+                    "The all-clear is CCI recrossing -100 from below; before that, bounces are suspect."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "Inside the ±100 band CCI is silent by design — no trade from this technique.",
+                    "Watch for the band exit: the direction of the first ±100 break tends to run."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- keltner
+
+    private fun keltner(a: TechniqueAnalysis, r: TechniqueResult, price: Double): TechniqueDetail {
+        val u = a.keltnerData.upper.lastOrNull { it != null }
+        val m = a.keltnerData.middle.lastOrNull { it != null }
+        val l = a.keltnerData.lower.lastOrNull { it != null }
+        val reading = mutableListOf(r.summary)
+        if (u != null && l != null && u - l > 1e-9) {
+            val pos = ((price - l) / (u - l) * 100.0).coerceIn(-25.0, 125.0)
+            reading += "Price sits at ${fmt0(pos)}% of the channel span (0% = lower band, 100% = upper)."
+        }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "Keltner Channels wrap a 20-day EMA with bands two ATRs away — a " +
+                "volatility-adjusted envelope of normal trading. Unlike Bollinger Bands " +
+                "(which widen on the very volatility they measure), the ATR basis makes a " +
+                "close OUTSIDE the channel a genuine breakout signal: price left its " +
+                "normal envelope by more than its own volatility allows.",
+            drawn = listOf(
+                "Green shaded band — EMA(20) ± 2 x ATR(10).",
+                "Dashed middle line — the 20-day EMA.",
+                "Price — the daily closes (line or candles)."
+            ),
+            reading = reading,
+            levels = buildList {
+                u?.let { add("Upper channel" to Fmt.money(it)) }
+                m?.let { add("Middle (EMA 20)" to Fmt.money(it)) }
+                l?.let { add("Lower channel" to Fmt.money(it)) }
+                add("Last close" to Fmt.money(price))
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "A close above the channel is the trend-entry signal Linda Raschke built systems on — ride it with the EMA as the trailing reference.",
+                    "The move is over when price closes back inside and loses the middle line."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "A close below the channel is a genuine breakdown, not noise — bounces toward the middle line tend to get sold.",
+                    "Wait for a reclaim of the EMA before treating any bounce as a turn."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "Inside the channel is normal trading — no breakout to act on.",
+                    "Combine with Bollinger: Bollinger squeezing INSIDE Keltner is the classic pre-breakout compression."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- cmf
+
+    private fun cmf(a: TechniqueAnalysis, r: TechniqueResult): TechniqueDetail {
+        val now = a.cmfData.cmf.lastOrNull { it != null }
+        val prev5 = a.cmfData.cmf.let { s -> if (s.size >= 6) s[s.size - 6] else null }
+        val reading = mutableListOf(r.summary)
+        if (now != null && prev5 != null) {
+            val dir = if (now >= prev5) "improving" else "deteriorating"
+            reading += "Money flow is $dir: CMF moved from ${fmtCmfE(prev5)} to ${fmtCmfE(now)} in five sessions."
+        }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "Marc Chaikin's Money Flow asks WHERE inside each day's range the " +
+                "stock closed, and weights the answer by volume over 20 days. Persistent " +
+                "closes near daily highs on real volume (+CMF) are the footprint of " +
+                "accumulation; closes near the lows (-CMF) of distribution. It reads " +
+                "conviction, not direction — which is why it often disagrees with price " +
+                "just before turns.",
+            drawn = listOf(
+                "Gold line — the 20-day Chaikin Money Flow.",
+                "Green dashed line — +0.05, above which accumulation is meaningful.",
+                "Red dashed line — -0.05, below which distribution is meaningful.",
+                "Dim dashed line — zero."
+            ),
+            reading = reading,
+            levels = buildList {
+                now?.let { add("CMF now" to fmtCmfE(it)) }
+                prev5?.let { add("CMF 5 bars ago" to fmtCmfE(it)) }
+                add("Accumulation line" to "+0.05")
+                add("Distribution line" to "-0.05")
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "Sustained positive CMF behind a flat price is quiet accumulation — the classic setup before a mark-up.",
+                    "Strongest when CMF holds positive through a price dip: buyers absorbing the selling."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "Negative CMF under a rising price is distribution — rallies are being sold into; tighten stops.",
+                    "New buying is early until CMF recrosses zero."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "Inside the ±0.05 band money flow is balanced — no conviction either way.",
+                    "Watch the zero cross: it is the earliest tell that one side has taken over."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- aroon
+
+    private fun aroon(a: TechniqueAnalysis, r: TechniqueResult): TechniqueDetail {
+        val up = a.aroonData.up.lastOrNull { it != null }
+        val down = a.aroonData.down.lastOrNull { it != null }
+        val reading = mutableListOf(r.summary)
+        if (up != null && down != null) {
+            reading += when {
+                up >= 100.0 -> "Aroon up at 100 means a fresh 25-day high printed this bar."
+                down >= 100.0 -> "Aroon down at 100 means a fresh 25-day low printed this bar."
+                else -> "Neither extreme is fresh: the last 25-day high was ${fmt0((100 - up) * 0.25)} bars ago, the last low ${fmt0((100 - down) * 0.25)} bars ago."
+            }
+        }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "Tushar Chande's Aroon asks a disarmingly simple question: how " +
+                "recently did the stock print its 25-day high, and how recently its 25-day " +
+                "low? Fresh highs with stale lows define an uptrend; the reverse a " +
+                "downtrend. Because it measures TIME rather than distance, it spots " +
+                "emerging trends earlier than moving averages do.",
+            drawn = listOf(
+                "Green line — Aroon up: 100 when the 25-day high is fresh, 0 when it is 25 bars old.",
+                "Red line — Aroon down: the same clock for the 25-day low.",
+                "Dashed lines — the 70/30 split that defines an established trend."
+            ),
+            reading = reading,
+            levels = buildList {
+                up?.let { add("Aroon up" to fmt0(it)) }
+                down?.let { add("Aroon down" to fmt0(it)) }
+                add("Trend threshold" to "70 / 30")
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "Up over 70 with down under 30 is an established uptrend — hold or add on dips while the split lasts.",
+                    "The warning is Aroon up decaying below 70 without a new high: the trend is aging."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "Down over 70 with up under 30 is an established downtrend — fresh lows keep printing; stand aside.",
+                    "The first REAL signal of repair is Aroon up crossing above Aroon down."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "The lines are tangled — the market is deciding; the next 25-day extreme picks the winner.",
+                    "An up/down cross is the earliest trend-change hint this technique gives."
+                )
+            }
+        )
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private fun pctFrom(a: Double, b: Double): Double =
@@ -751,4 +993,6 @@ object TechniqueExplain {
     private fun fmtSig(v: Double): String =
         if (abs(v) < 0.05) String.format(Locale.US, "%.3f", v)
         else String.format(Locale.US, "%.2f", v)
+
+    private fun fmtCmfE(v: Double): String = String.format(Locale.US, "%+.2f", v)
 }

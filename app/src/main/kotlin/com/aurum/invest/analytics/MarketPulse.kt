@@ -82,7 +82,7 @@ data class MarketRating(
  * Score >= 60 -> INVEST, >= 42 -> SELECTIVE, else DEFENSIVE. Alongside the
  * verdict it collects the last session's best performers (liquidity-gated so
  * a halted micro-cap spike can't rank) and scans for names positioned for the
- * next session, each confirmed by the 15-technique board with an honest
+ * next session, each confirmed by the 20-technique board with an honest
  * ATR-based range. Never throws — null on total failure.
  */
 class MarketPulse(private val market: MarketRepository) {
@@ -458,7 +458,7 @@ class MarketPulse(private val market: MarketRepository) {
     /**
      * Names positioned for the next session: strong-but-not-blow-off day,
      * closing near the high, above the 50-day, volume running hot — then the
-     * ~18 best are confirmed against RSI, ATR and the 15-technique board.
+     * ~18 best are confirmed against RSI, ATR and the 20-technique board.
      */
     private suspend fun tomorrowPicks(pool: List<ScreenerQuote>): List<TomorrowPick> {
         val shortlist = pool.asSequence()

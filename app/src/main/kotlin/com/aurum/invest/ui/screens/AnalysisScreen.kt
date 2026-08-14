@@ -43,23 +43,34 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Arrangement
 import com.aurum.invest.analytics.BuyPlan
 import com.aurum.invest.analytics.PlanTranche
 import com.aurum.invest.analytics.TechniqueAnalysis
 import com.aurum.invest.analytics.TechniqueDetail
+import com.aurum.invest.analytics.TechniqueEvaluation
+import com.aurum.invest.analytics.TechniqueEvaluator
 import com.aurum.invest.analytics.TechniqueExplain
 import com.aurum.invest.analytics.TechniqueResult
+import com.aurum.invest.analytics.TechniqueScore
 import com.aurum.invest.analytics.TechniqueVerdict
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.ui.components.AdxDiagram
+import com.aurum.invest.ui.components.AroonDiagram
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.BollingerDiagram
+import com.aurum.invest.ui.components.CciDiagram
+import com.aurum.invest.ui.components.CmfDiagram
 import com.aurum.invest.ui.components.DonchianDiagram
 import com.aurum.invest.ui.components.EmptyState
 import com.aurum.invest.ui.components.FibonacciDiagram
 import com.aurum.invest.ui.components.FvgDiagram
 import com.aurum.invest.ui.components.GoldenCrossDiagram
 import com.aurum.invest.ui.components.IchimokuDiagram
+import com.aurum.invest.ui.components.KeltnerDiagram
 import com.aurum.invest.ui.components.MaTrendDiagram
 import com.aurum.invest.ui.components.MacdDiagram
 import com.aurum.invest.ui.components.MfiDiagram
@@ -72,6 +83,7 @@ import com.aurum.invest.ui.components.SegmentedToggle
 import com.aurum.invest.ui.components.StatTile
 import com.aurum.invest.ui.components.StochasticDiagram
 import com.aurum.invest.ui.components.SupportResistanceDiagram
+import com.aurum.invest.ui.components.WilliamsRDiagram
 import com.aurum.invest.ui.components.rememberDiagramViewport
 import com.aurum.invest.ui.theme.AurumColors
 
@@ -108,9 +120,11 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
                     style = MaterialTheme.typography.titleLarge,
                     color = AurumColors.text
                 )
+                val techCount = state.analysis?.results?.size
                 Text(
-                    text = if (tab == AnalysisTab.TECHNIQUES) "15-technique analysis"
-                    else "$3,000 five-day plan",
+                    text = if (tab == AnalysisTab.TECHNIQUES) {
+                        if (techCount != null) "$techCount-technique analysis" else "Technique analysis"
+                    } else "$3,000 five-day plan",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
@@ -149,7 +163,7 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
                 ) {
                     item {
                         SegmentedToggle(
-                            options = listOf("15 techniques", "$3,000 plan"),
+                            options = listOf("${analysis.results.size} techniques", "$3,000 plan"),
                             selected = if (tab == AnalysisTab.TECHNIQUES) 0 else 1,
                             onSelect = { tab = if (it == 0) AnalysisTab.TECHNIQUES else AnalysisTab.PLAN }
                         )
@@ -159,6 +173,8 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
                     if (tab == AnalysisTab.TECHNIQUES) {
                         item {
                             OutlookCard(analysis = analysis, price = state.price)
+                            Spacer(Modifier.height(14.dp))
+                            AccuracyCard(evaluation = state.evaluation)
                             Spacer(Modifier.height(12.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
@@ -191,6 +207,7 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
                                     result = result,
                                     analysis = analysis,
                                     style = priceStyle,
+                                    score = state.evaluation?.scores?.firstOrNull { it.key == result.key },
                                     onTapChart = { sheetKey = result.key }
                                 )
                                 if (index < analysis.results.lastIndex) {
@@ -341,10 +358,17 @@ private fun TechniqueCard(
     result: TechniqueResult,
     analysis: TechniqueAnalysis,
     style: PriceStyle,
+    score: TechniqueScore?,
     onTapChart: () -> Unit
 ) {
     val viewport = rememberDiagramViewport(analysis.timestamps.size)
-    AurumCard {
+    val trusted = score?.trusted == true
+    // The gold border is EARNED: only a technique that actually called this
+    // stock's 5-day moves right over the last 3 months wears it.
+    val cardModifier =
+        if (trusted) Modifier.border(1.5.dp, AurumColors.gold, RoundedCornerShape(16.dp))
+        else Modifier
+    AurumCard(modifier = cardModifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = result.name,
@@ -352,6 +376,10 @@ private fun TechniqueCard(
                 color = AurumColors.text,
                 modifier = Modifier.weight(1f)
             )
+            if (trusted) {
+                PillTag(text = "Trusted", color = AurumColors.gold)
+                Spacer(Modifier.width(8.dp))
+            }
             VerdictPill(verdict = result.verdict)
             Spacer(Modifier.width(10.dp))
             Text(
@@ -379,6 +407,11 @@ private fun TechniqueCard(
             "donchian" -> DonchianDiagram(analysis.donchianData, ts, viewport, m, ohlc, style, onTapChart)
             "psar" -> PsarDiagram(analysis.psarData, ts, viewport, m, ohlc, style, onTapChart)
             "mfi" -> MfiDiagram(analysis.mfiData, ts, viewport, m, onTapChart)
+            "willr" -> WilliamsRDiagram(analysis.willrData, ts, viewport, m, onTapChart)
+            "cci" -> CciDiagram(analysis.cciData, ts, viewport, m, onTapChart)
+            "keltner" -> KeltnerDiagram(analysis.keltnerData, ts, viewport, m, ohlc, style, onTapChart)
+            "cmf" -> CmfDiagram(analysis.cmfData, ts, viewport, m, onTapChart)
+            "aroon" -> AroonDiagram(analysis.aroonData, ts, viewport, m, onTapChart)
             else -> GoldenCrossDiagram(analysis.gcData, ts, viewport, m, ohlc, style, onTapChart)
         }
         Spacer(Modifier.height(12.dp))
@@ -387,12 +420,101 @@ private fun TechniqueCard(
             style = MaterialTheme.typography.bodySmall,
             color = AurumColors.textDim
         )
+        if (score != null) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = accuracyLine(score),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (trusted) AurumColors.gold else AurumColors.textDim
+            )
+        }
         Spacer(Modifier.height(6.dp))
         Text(
             text = "Tap the chart for the full analysis",
             style = MaterialTheme.typography.labelSmall,
             color = AurumColors.gold.copy(alpha = 0.8f)
         )
+    }
+}
+
+/** One honest sentence on a technique's measured 3-month record. */
+private fun accuracyLine(score: TechniqueScore): String = when {
+    score.signals == 0 ->
+        "Last 3 months: no directional calls on this stock — nothing to grade."
+    score.signals < TechniqueEvaluator.MIN_SIGNALS ->
+        "Last 3 months: ${score.hits} of ${score.signals} calls right — too few to grade for trust."
+    else ->
+        "Last 3 months: called ${score.hits} of ${score.signals} 5-day moves right (${score.hitRate}%)."
+}
+
+/**
+ * The standalone accuracy engine's verdict: which techniques have actually
+ * called this stock's moves over the last 3 months. Trusted names are the
+ * ones wearing the gold border below.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AccuracyCard(evaluation: TechniqueEvaluation?) {
+    AurumCard {
+        Text(
+            text = "Technique accuracy · last 3 months",
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(8.dp))
+        when {
+            evaluation == null -> {
+                Text(
+                    text = "Grading every technique against the real 5-day moves of the " +
+                        "last 3 months…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+            }
+            else -> {
+                val trusted = evaluation.scores.filter { it.trusted }
+                    .sortedByDescending { it.hitRate }
+                if (trusted.isEmpty()) {
+                    Text(
+                        text = "No technique cleared the trust bar on this stock: at least " +
+                            "${TechniqueEvaluator.MIN_SIGNALS} directional calls with a " +
+                            "${TechniqueEvaluator.TRUST_HIT_RATE}%+ hit rate over " +
+                            "${evaluation.daysEvaluated} graded sessions. That is the honest answer — " +
+                            "no border is painted gold without a track record.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.textDim
+                    )
+                } else {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        trusted.forEach { s ->
+                            PillTag(text = "${s.name} · ${s.hitRate}%", color = AurumColors.gold)
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "These techniques called this stock's 5-day moves right at least " +
+                            "${TechniqueEvaluator.TRUST_HIT_RATE}% of the time across " +
+                            "${evaluation.daysEvaluated} graded sessions — their cards wear the " +
+                            "gold border, and the 5-day outlook weights every vote by this " +
+                            "measured record.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.textDim
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "A call counts as right when the stock then moved at least " +
+                        "${TechniqueEvaluator.MOVE_DEADBAND_PCT}% in the called direction " +
+                        "within ${evaluation.horizonDays} trading days. Past accuracy is " +
+                        "measured, not promised.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
     }
 }
 

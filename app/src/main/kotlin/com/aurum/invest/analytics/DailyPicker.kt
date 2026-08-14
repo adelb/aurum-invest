@@ -23,7 +23,7 @@ import org.json.JSONObject
  *  1. Cheap screen on cached daily candles — short-term momentum, latest-session
  *     volume surge, ATR capacity (can this name even move 3%+ in a day?),
  *     breakout proximity, and RSI headroom.
- *  2. Deep read on the ~12 finalists — the 15-technique analysis, live quote,
+ *  2. Deep read on the ~12 finalists — the 20-technique analysis, live quote,
  *     pre/post-market prints, and the last 5 days of news with sentiment.
  *
  * Technique-bearish names are dropped; the survivors are ranked and the top
@@ -193,7 +193,7 @@ class DailyPicker(
             }
             if (deep.isEmpty()) return emptyList()
 
-            // Keep names the 15 techniques do not read as bearish. When the
+            // Keep names the 20 techniques do not read as bearish. When the
             // WHOLE list is bearish, return nothing — an empty screen is an
             // honest answer; a list of least-bad bearish names is not.
             val kept = deep.filter { it.techDirection != TechniqueVerdict.BEARISH.name }
@@ -313,7 +313,7 @@ class DailyPicker(
 
     private suspend fun deepRead(s: Screened): Deep? {
         return try {
-            // A full year so all 15 techniques (incl. the 200-day cross) can vote.
+            // A full year so all 20 techniques (incl. the 200-day cross) can vote.
             val candles = try {
                 market.getDailyCandles(s.symbol, 365)
             } catch (_: Exception) {

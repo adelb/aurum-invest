@@ -10,7 +10,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
- * Fifteen-technique chart analysis over daily candles. Pure Kotlin — no Android
+ * Twenty-technique chart analysis over daily candles. Pure Kotlin — no Android
  * dependencies, never throws. All rolling series are index-aligned with the
  * (last <= 120) candles the analysis ran on: entry i belongs to candle i, and
  * is null until enough history exists at that index. [TechniqueAnalysis.timestamps]
@@ -101,6 +101,26 @@ data class GoldenCrossData(
     val sma200: List<Double?>
 )
 
+/** Larry Williams' %R(14): -100 (close at the range low) to 0 (at the high). */
+data class WilliamsRData(val r: List<Double?>)
+
+/** Donald Lambert's Commodity Channel Index (20). */
+data class CciData(val cci: List<Double?>)
+
+/** Keltner Channels: EMA(20) middle, bands at 2 x ATR(10). */
+data class KeltnerData(
+    val closes: List<Double>,
+    val upper: List<Double?>,
+    val middle: List<Double?>,
+    val lower: List<Double?>
+)
+
+/** Marc Chaikin's Money Flow (20), -1..+1. */
+data class CmfData(val cmf: List<Double?>)
+
+/** Tushar Chande's Aroon(25): up/down lines, each 0..100. */
+data class AroonData(val up: List<Double?>, val down: List<Double?>)
+
 data class TechniqueResult(
     val key: String,
     val name: String,
@@ -142,7 +162,12 @@ data class TechniqueAnalysis(
     val donchianData: DonchianData,
     val psarData: PsarData,
     val mfiData: MfiData,
-    val gcData: GoldenCrossData
+    val gcData: GoldenCrossData,
+    val willrData: WilliamsRData,
+    val cciData: CciData,
+    val keltnerData: KeltnerData,
+    val cmfData: CmfData,
+    val aroonData: AroonData
 )
 
 object Techniques {
@@ -162,8 +187,19 @@ object Techniques {
         "0.618" to 0.618, "0.786" to 0.786, "1.0" to 1.0
     )
 
-    /** Null when fewer than 30 daily candles are supplied. Uses the last <= 120 candles. */
-    fun analyze(symbol: String, candles: List<Candle>): TechniqueAnalysis? {
+    /**
+     * Null when fewer than 30 daily candles are supplied. Uses the last <= 120 candles.
+     *
+     * [accuracyWeights] — optional measured 3-month hit rate (0..100) per technique
+     * key, from [TechniqueEvaluator]. When present, each technique's outlook vote
+     * is scaled by its own track record on this stock, so proven techniques speak
+     * louder and coin-flip ones quieter. Verdicts and strengths are unchanged.
+     */
+    fun analyze(
+        symbol: String,
+        candles: List<Candle>,
+        accuracyWeights: Map<String, Int>? = null
+    ): TechniqueAnalysis? {
         if (candles.size < MIN_CANDLES) return null
         val cs = candles.takeLast(SERIES_MAX)
         val closes = cs.map { it.close }
@@ -194,6 +230,11 @@ object Techniques {
         val donData = donchianData(cs, closes)
         val psarData = psarData(cs, closes)
         val mfiData = MfiData(mfiSeries(cs, 14))
+        val willrData = WilliamsRData(williamsRSeries(cs, 14))
+        val cciData = CciData(cciSeries(cs, 20))
+        val keltnerData = keltnerData(cs, closes)
+        val cmfData = CmfData(cmfSeries(cs, 20))
+        val aroonData = aroonData(cs, 25)
         // Golden cross needs history beyond the display window: compute the
         // 50/200 averages over the FULL candle list, then trim to the window.
         val fullCloses = candles.map { it.close }
@@ -219,10 +260,15 @@ object Techniques {
             donchianResult(price, donData),
             psarResult(price, psarData),
             mfiResult(n, mfiData),
-            gcResult(candles.size, price, gcData)
+            gcResult(candles.size, price, gcData),
+            willrResult(n, willrData),
+            cciResult(n, cciData),
+            keltnerResult(price, keltnerData),
+            cmfResult(n, cmfData),
+            aroonResult(n, aroonData)
         )
 
-        val outlook = buildOutlook(cs, price, results, supports, resistances)
+        val outlook = buildOutlook(cs, price, results, supports, resistances, accuracyWeights)
 
         return TechniqueAnalysis(
             symbol = symbol,
@@ -244,7 +290,12 @@ object Techniques {
             donchianData = donData,
             psarData = psarData,
             mfiData = mfiData,
-            gcData = gcData
+            gcData = gcData,
+            willrData = willrData,
+            cciData = cciData,
+            keltnerData = keltnerData,
+            cmfData = cmfData,
+            aroonData = aroonData
         )
     }
 
@@ -337,6 +388,7 @@ object Techniques {
                 "Needs 15 daily candles for RSI(14); $n available."
             )
         val prev5 = if (rsiS.size >= 6) rsiS[rsiS.size - 6] else null
+        val prev = if (rsiS.size >= 2) rsiS[rsiS.size - 2] else null
         val trendNote = prev5?.let { " Five bars ago it was ${fmt0(it)}." } ?: ""
 
         return when {
@@ -349,6 +401,17 @@ object Techniques {
                 "rsi", name, TechniqueVerdict.BEARISH,
                 (55.0 + (r - 70.0) * 3.0).roundToInt().coerceIn(55, 95),
                 "RSI(14) at ${fmt0(r)}, over the 70 overbought line.$trendNote"
+            )
+            // The turn back THROUGH the line is the higher-probability signal:
+            // an oversold read can stay oversold, but the recross confirms the
+            // sellers (or buyers) actually let go.
+            prev != null && prev < 30.0 -> TechniqueResult(
+                "rsi", name, TechniqueVerdict.BULLISH, 68,
+                "RSI(14) crossed back up through 30 — now ${fmt0(r)} from ${fmt0(prev)}; the oversold turn is confirmed."
+            )
+            prev != null && prev > 70.0 -> TechniqueResult(
+                "rsi", name, TechniqueVerdict.BEARISH, 68,
+                "RSI(14) rolled back under 70 — now ${fmt0(r)} from ${fmt0(prev)}; the overbought turn is confirmed."
             )
             else -> TechniqueResult(
                 "rsi", name, TechniqueVerdict.NEUTRAL, 30,
@@ -1257,6 +1320,309 @@ object Techniques {
         }
     }
 
+    // -- technique 16: Williams %R -------------------------------------------
+
+    /** %R = -100 * (HH14 - close) / (HH14 - LL14); -100 at the range low, 0 at the high. */
+    private fun williamsRSeries(candles: List<Candle>, period: Int): List<Double?> {
+        val hh = highSeries(candles, period)
+        val ll = lowSeries(candles, period)
+        return List(candles.size) { i ->
+            val h = hh[i]
+            val l = ll[i]
+            if (h == null || l == null) null
+            else {
+                val range = h - l
+                if (range > 1e-12) -100.0 * (h - candles[i].close) / range else -50.0
+            }
+        }
+    }
+
+    private fun willrResult(n: Int, data: WilliamsRData): TechniqueResult {
+        val name = "Williams %R"
+        val r = data.r.lastOrNull { it != null }
+            ?: return TechniqueResult(
+                "willr", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 14 daily candles for Williams %R(14); $n available."
+            )
+        val prev = if (data.r.size >= 2) data.r[data.r.size - 2] else null
+        return when {
+            r <= -80.0 -> TechniqueResult(
+                "willr", name, TechniqueVerdict.BULLISH,
+                (55.0 + (-r - 80.0) * 1.5).roundToInt().coerceIn(55, 90),
+                "%R at ${fmt0(r)} — the close sits in the bottom fifth of the 14-day range, Larry Williams' oversold zone."
+            )
+            r >= -20.0 -> TechniqueResult(
+                "willr", name, TechniqueVerdict.BEARISH,
+                (55.0 + (r + 20.0) * 1.5).roundToInt().coerceIn(55, 90),
+                "%R at ${fmt0(r)} — the close sits in the top fifth of the 14-day range, the overbought zone."
+            )
+            prev != null && prev <= -80.0 -> TechniqueResult(
+                "willr", name, TechniqueVerdict.BULLISH, 65,
+                "%R climbed out of the oversold zone — now ${fmt0(r)} from ${fmt0(prev)}; the turn is confirmed."
+            )
+            prev != null && prev >= -20.0 -> TechniqueResult(
+                "willr", name, TechniqueVerdict.BEARISH, 65,
+                "%R dropped out of the overbought zone — now ${fmt0(r)} from ${fmt0(prev)}; the rollover is confirmed."
+            )
+            else -> TechniqueResult(
+                "willr", name, TechniqueVerdict.NEUTRAL, 30,
+                "%R at ${fmt0(r)}, mid-range between the -20 and -80 lines."
+            )
+        }
+    }
+
+    // -- technique 17: Commodity Channel Index -------------------------------
+
+    /** Lambert's CCI: (tp - SMA(tp)) / (0.015 * mean deviation) over [period]. */
+    private fun cciSeries(candles: List<Candle>, period: Int): List<Double?> {
+        val n = candles.size
+        val out = arrayOfNulls<Double>(n)
+        if (n < period) return out.toList()
+        val tp = DoubleArray(n) { (candles[it].high + candles[it].low + candles[it].close) / 3.0 }
+        for (i in period - 1 until n) {
+            var sum = 0.0
+            for (j in i - period + 1..i) sum += tp[j]
+            val mean = sum / period
+            var dev = 0.0
+            for (j in i - period + 1..i) dev += abs(tp[j] - mean)
+            dev /= period
+            out[i] = if (dev > 1e-12) (tp[i] - mean) / (0.015 * dev) else 0.0
+        }
+        return out.toList()
+    }
+
+    private fun cciResult(n: Int, data: CciData): TechniqueResult {
+        val name = "CCI momentum"
+        val c = data.cci.lastOrNull { it != null }
+            ?: return TechniqueResult(
+                "cci", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 20 daily candles for CCI(20); $n available."
+            )
+        // Lambert's original system: a push OVER +100 marks the start of a
+        // strong up-move (trend entry), under -100 a strong down-move. This is
+        // deliberately the trend school — the reversion school is already
+        // covered by RSI, MFI, stochastic and Williams %R.
+        return when {
+            c >= 100.0 -> TechniqueResult(
+                "cci", name, TechniqueVerdict.BULLISH,
+                (55.0 + (c - 100.0) * 0.15).roundToInt().coerceIn(55, 92),
+                "CCI(20) at ${fmt0(c)}, over the +100 line — Lambert's strong-uptrend trigger."
+            )
+            c <= -100.0 -> TechniqueResult(
+                "cci", name, TechniqueVerdict.BEARISH,
+                (55.0 + (-c - 100.0) * 0.15).roundToInt().coerceIn(55, 92),
+                "CCI(20) at ${fmt0(c)}, under the -100 line — Lambert's strong-downtrend trigger."
+            )
+            else -> {
+                val lean = when {
+                    c > 0.0 -> "leaning positive"
+                    c < 0.0 -> "leaning negative"
+                    else -> "flat"
+                }
+                TechniqueResult(
+                    "cci", name, TechniqueVerdict.NEUTRAL, 30,
+                    "CCI(20) at ${fmt0(c)}, inside the ±100 band ($lean); no trend trigger."
+                )
+            }
+        }
+    }
+
+    // -- technique 18: Keltner Channels --------------------------------------
+
+    /** EMA(20) middle with bands at 2 x rolling ATR(10). */
+    private fun keltnerData(candles: List<Candle>, closes: List<Double>): KeltnerData {
+        val n = candles.size
+        val middle = emaSeries(closes, 20)
+        val atr = atrSeries(candles, 10)
+        val upper = arrayOfNulls<Double>(n)
+        val lower = arrayOfNulls<Double>(n)
+        for (i in 0 until n) {
+            val m = middle[i]
+            val a = atr[i]
+            if (m != null && a != null) {
+                upper[i] = m + 2.0 * a
+                lower[i] = m - 2.0 * a
+            }
+        }
+        return KeltnerData(closes, upper.toList(), middle, lower.toList())
+    }
+
+    private fun keltnerResult(price: Double, d: KeltnerData): TechniqueResult {
+        val name = "Keltner Channels"
+        val n = d.closes.size
+        val upper = d.upper.lastOrNull()
+        val middle = d.middle.lastOrNull()
+        val lower = d.lower.lastOrNull()
+        if (upper == null || middle == null || lower == null) {
+            return TechniqueResult(
+                "keltner", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 21 daily candles for the EMA(20)/ATR(10) channel; $n available."
+            )
+        }
+        return when {
+            price > upper -> {
+                val margin = if (upper > 0.0) (price - upper) / upper * 100.0 else 0.0
+                TechniqueResult(
+                    "keltner", name, TechniqueVerdict.BULLISH,
+                    (60.0 + margin * 10.0).roundToInt().coerceIn(60, 92),
+                    "Close ${Fmt.money(price)} rides ${fmt1(margin)}% above the upper channel ${Fmt.money(upper)} — " +
+                        "a volatility-adjusted breakout, not a normal fluctuation."
+                )
+            }
+            price < lower -> {
+                val margin = if (lower > 0.0) (lower - price) / lower * 100.0 else 0.0
+                TechniqueResult(
+                    "keltner", name, TechniqueVerdict.BEARISH,
+                    (60.0 + margin * 10.0).roundToInt().coerceIn(60, 92),
+                    "Close ${Fmt.money(price)} sits ${fmt1(margin)}% below the lower channel ${Fmt.money(lower)} — " +
+                        "a volatility-adjusted breakdown."
+                )
+            }
+            else -> {
+                val width = upper - lower
+                val pos = if (width > 1e-9) (price - lower) / width * 100.0 else 50.0
+                TechniqueResult(
+                    "keltner", name, TechniqueVerdict.NEUTRAL, 30,
+                    "Close ${Fmt.money(price)} sits at ${fmt0(pos)}% of the ${Fmt.money(lower)}–${Fmt.money(upper)} " +
+                        "channel around the ${Fmt.money(middle)} EMA; no breakout."
+                )
+            }
+        }
+    }
+
+    // -- technique 19: Chaikin Money Flow ------------------------------------
+
+    /** CMF(period) = sum(mf volume) / sum(volume); multiplier ((c-l)-(h-c))/(h-l). */
+    private fun cmfSeries(candles: List<Candle>, period: Int): List<Double?> {
+        val n = candles.size
+        val out = arrayOfNulls<Double>(n)
+        if (n < period) return out.toList()
+        val mfv = DoubleArray(n)
+        val vol = DoubleArray(n)
+        for (i in 0 until n) {
+            val c = candles[i]
+            val range = c.high - c.low
+            val mult = if (range > 1e-12) ((c.close - c.low) - (c.high - c.close)) / range else 0.0
+            vol[i] = c.volume.toDouble()
+            mfv[i] = mult * vol[i]
+        }
+        for (i in period - 1 until n) {
+            var sumMfv = 0.0
+            var sumVol = 0.0
+            for (j in i - period + 1..i) {
+                sumMfv += mfv[j]
+                sumVol += vol[j]
+            }
+            out[i] = if (sumVol > 0.0) sumMfv / sumVol else 0.0
+        }
+        return out.toList()
+    }
+
+    private fun cmfResult(n: Int, d: CmfData): TechniqueResult {
+        val name = "Chaikin Money Flow"
+        val c = d.cmf.lastOrNull { it != null }
+            ?: return TechniqueResult(
+                "cmf", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 20 daily candles for CMF(20); $n available."
+            )
+        val prev5 = if (d.cmf.size >= 6) d.cmf[d.cmf.size - 6] else null
+        val trendNote = prev5?.let { " Five bars ago it was ${fmtCmf(it)}." } ?: ""
+        return when {
+            c >= 0.05 -> TechniqueResult(
+                "cmf", name, TechniqueVerdict.BULLISH,
+                (55.0 + c * 150.0).roundToInt().coerceIn(55, 90),
+                "CMF(20) at ${fmtCmf(c)} — closes keep landing in the top of their daily ranges " +
+                    "on real volume: buyers are accumulating.$trendNote"
+            )
+            c <= -0.05 -> TechniqueResult(
+                "cmf", name, TechniqueVerdict.BEARISH,
+                (55.0 - c * 150.0).roundToInt().coerceIn(55, 90),
+                "CMF(20) at ${fmtCmf(c)} — closes keep landing in the bottom of their daily ranges " +
+                    "on real volume: sellers are distributing.$trendNote"
+            )
+            else -> TechniqueResult(
+                "cmf", name, TechniqueVerdict.NEUTRAL, 30,
+                "CMF(20) at ${fmtCmf(c)}, inside the ±0.05 noise band; money flow is balanced.$trendNote"
+            )
+        }
+    }
+
+    // -- technique 20: Aroon -------------------------------------------------
+
+    /** Aroon(25): up = 100*(period - bars since the period high)/period; down mirrored. */
+    private fun aroonData(candles: List<Candle>, period: Int): AroonData {
+        val n = candles.size
+        val up = arrayOfNulls<Double>(n)
+        val down = arrayOfNulls<Double>(n)
+        for (i in period until n) {
+            var hiIdx = i
+            var loIdx = i
+            for (j in i - period..i) {
+                if (candles[j].high >= candles[hiIdx].high) hiIdx = j
+                if (candles[j].low <= candles[loIdx].low) loIdx = j
+            }
+            up[i] = 100.0 * (period - (i - hiIdx)) / period
+            down[i] = 100.0 * (period - (i - loIdx)) / period
+        }
+        return AroonData(up.toList(), down.toList())
+    }
+
+    private fun aroonResult(n: Int, d: AroonData): TechniqueResult {
+        val name = "Aroon trend"
+        val up = d.up.lastOrNull { it != null }
+        val down = d.down.lastOrNull { it != null }
+        if (up == null || down == null) {
+            return TechniqueResult(
+                "aroon", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 26 daily candles for Aroon(25); $n available."
+            )
+        }
+        return when {
+            up >= 70.0 && down <= 30.0 -> TechniqueResult(
+                "aroon", name, TechniqueVerdict.BULLISH,
+                (55.0 + (up - down) * 0.4).roundToInt().coerceIn(55, 92),
+                "Aroon up ${fmt0(up)} vs down ${fmt0(down)} — the 25-day high is fresh and the " +
+                    "25-day low is old: an established uptrend."
+            )
+            down >= 70.0 && up <= 30.0 -> TechniqueResult(
+                "aroon", name, TechniqueVerdict.BEARISH,
+                (55.0 + (down - up) * 0.4).roundToInt().coerceIn(55, 92),
+                "Aroon down ${fmt0(down)} vs up ${fmt0(up)} — the 25-day low is fresh and the " +
+                    "25-day high is old: an established downtrend."
+            )
+            else -> {
+                val lead = if (up >= down) "up leads" else "down leads"
+                TechniqueResult(
+                    "aroon", name, TechniqueVerdict.NEUTRAL, 30,
+                    "Aroon up ${fmt0(up)} vs down ${fmt0(down)} ($lead) — neither side holds the " +
+                        "70/30 split; no established trend."
+                )
+            }
+        }
+    }
+
+    /** Rolling Wilder ATR; first value at index [period]. */
+    private fun atrSeries(candles: List<Candle>, period: Int): List<Double?> {
+        val n = candles.size
+        val out = arrayOfNulls<Double>(n)
+        if (period <= 0 || n < period + 1) return out.toList()
+        val tr = DoubleArray(n)
+        for (i in 1 until n) {
+            val c = candles[i]
+            val pc = candles[i - 1].close
+            tr[i] = max(c.high - c.low, max(abs(c.high - pc), abs(c.low - pc)))
+        }
+        var atr = 0.0
+        for (i in 1..period) atr += tr[i]
+        atr /= period
+        out[period] = atr
+        for (i in period + 1 until n) {
+            atr = (atr * (period - 1) + tr[i]) / period
+            out[i] = atr
+        }
+        return out.toList()
+    }
+
     // -- outlook -------------------------------------------------------------
 
     private fun buildOutlook(
@@ -1264,19 +1630,29 @@ object Techniques {
         price: Double,
         results: List<TechniqueResult>,
         supports: List<Level>,
-        resistances: List<Level>
+        resistances: List<Level>,
+        accuracyWeights: Map<String, Int>? = null
     ): FiveDayOutlook {
         val bullishCount = results.count { it.verdict == TechniqueVerdict.BULLISH }
         val bearishCount = results.count { it.verdict == TechniqueVerdict.BEARISH }
         val neutralCount = results.count { it.verdict == TechniqueVerdict.NEUTRAL }
 
-        val wBull = results.filter { it.verdict == TechniqueVerdict.BULLISH }.sumOf { it.strength }
-        val wBear = results.filter { it.verdict == TechniqueVerdict.BEARISH }.sumOf { it.strength }
-        val wNeut = results.filter { it.verdict == TechniqueVerdict.NEUTRAL }.sumOf { it.strength }
-        val total = max(1, wBull + wBear + wNeut)
+        // Vote weight = strength, scaled by the technique's measured 3-month
+        // hit rate on this stock when available: a 75%-accurate technique
+        // speaks at 1.25x, a 25% one at 0.75x. Without evaluation data every
+        // technique keeps its plain strength.
+        fun voteWeight(r: TechniqueResult): Double {
+            val hitRate = accuracyWeights?.get(r.key) ?: return r.strength.toDouble()
+            return r.strength * (0.5 + hitRate.coerceIn(0, 100) / 100.0)
+        }
 
-        val bullShare = wBull.toDouble() / total
-        val bearShare = wBear.toDouble() / total
+        val wBull = results.filter { it.verdict == TechniqueVerdict.BULLISH }.sumOf { voteWeight(it) }
+        val wBear = results.filter { it.verdict == TechniqueVerdict.BEARISH }.sumOf { voteWeight(it) }
+        val wNeut = results.filter { it.verdict == TechniqueVerdict.NEUTRAL }.sumOf { voteWeight(it) }
+        val total = max(1.0, wBull + wBear + wNeut)
+
+        val bullShare = wBull / total
+        val bearShare = wBear / total
         val direction = when {
             bullShare >= 0.55 -> TechniqueVerdict.BULLISH
             bearShare >= 0.55 -> TechniqueVerdict.BEARISH
@@ -1286,7 +1662,7 @@ object Techniques {
             TechniqueVerdict.BULLISH -> (bullShare * 100.0).roundToInt()
             TechniqueVerdict.BEARISH -> (bearShare * 100.0).roundToInt()
             TechniqueVerdict.NEUTRAL ->
-                (max(max(wBull, wBear), wNeut).toDouble() / total * 100.0).roundToInt()
+                (max(max(wBull, wBear), wNeut) / total * 100.0).roundToInt()
         }.coerceIn(0, 100)
 
         val atr = Indicators.atr(candles, 14) ?: (price * 0.02)
@@ -1322,9 +1698,12 @@ object Techniques {
             else -> "No clustered support or resistance levels in the last $SR_LOOKBACK candles."
         }
 
+        val voteBasis =
+            if (accuracyWeights.isNullOrEmpty()) "strength-weighted votes."
+            else "votes, weighted by strength and each technique's measured 3-month accuracy on this stock."
         val summary = listOf(
             "$bullishCount of ${results.size} techniques read bullish, $bearishCount bearish, $neutralCount neutral.",
-            "The leading side holds $confidence% of the strength-weighted votes.",
+            "The leading side holds $confidence% of the $voteBasis",
             "Expected range ${Fmt.money(low)} to ${Fmt.money(high)} from the ${Fmt.money(price)} close, using a 14-day ATR of ${Fmt.money(atr)}.",
             srSentence,
             "Computed from past prices only; not a guarantee of future moves."
@@ -1611,6 +1990,9 @@ object Techniques {
     private fun fmt0(v: Double): String = String.format(Locale.US, "%.0f", v)
 
     private fun fmt1(v: Double): String = String.format(Locale.US, "%.1f", v)
+
+    /** CMF values are small signed fractions; two decimals with an explicit sign. */
+    private fun fmtCmf(v: Double): String = String.format(Locale.US, "%+.2f", v)
 
     /** Adaptive precision for small MACD magnitudes (penny stocks). */
     private fun fmtSig(v: Double): String =

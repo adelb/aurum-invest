@@ -366,7 +366,7 @@ class SectorStrategy(
      * The theme's representative names, ranked; only technique-approved ones
      * survive, and the [PICKS_PER_THEME] strongest are proposed. "Strongest"
      * is measured, not guessed: the last 3 trading days' move, the latest
-     * session's volume against its 20-day average, the 15-technique board,
+     * session's volume against its 20-day average, the 20-technique board,
      * RSI, and the last 5 days of headlines (reports, analyst actions,
      * insider flow) all feed the score.
      */

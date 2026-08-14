@@ -276,7 +276,7 @@ private fun SetupForm(
                 Text(
                     text = "Tell Aurum how much you want to put to work and what profit you " +
                         "aim for over the next 4 months. Every week the plan re-reads the " +
-                        "market — trending sectors, the 15-technique board on every candidate, " +
+                        "market — trending sectors, the 20-technique board on every candidate, " +
                         "news, and flow headlines — and tells you what to buy, for how much, " +
                         "when to sell, and exactly what you lose if every stop hits.",
                     style = MaterialTheme.typography.bodyMedium,
@@ -1632,7 +1632,7 @@ private fun SectorCard(plan: WealthPlan, onOpenAnalysis: (String) -> Unit) {
         plan.topSectors.forEach { s -> SectorRow(s, onOpenAnalysis) }
         Spacer(Modifier.height(6.dp))
         Text(
-            text = "Tap a ticker for its 15-technique analysis.",
+            text = "Tap a ticker for its 20-technique analysis.",
             style = MaterialTheme.typography.labelSmall,
             color = AurumColors.textDim
         )
@@ -1840,7 +1840,7 @@ private fun AllocationCard(
             )
             Spacer(Modifier.width(6.dp))
             Text(
-                text = "15-technique analysis",
+                text = "20-technique analysis",
                 style = MaterialTheme.typography.labelMedium,
                 color = AurumColors.gold
             )

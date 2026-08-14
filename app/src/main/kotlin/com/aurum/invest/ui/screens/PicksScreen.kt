@@ -49,6 +49,8 @@ import com.aurum.invest.data.model.PowerPick
 import com.aurum.invest.analytics.NoteKind
 import com.aurum.invest.analytics.PickNote
 import com.aurum.invest.analytics.PortfolioLens
+import com.aurum.invest.analytics.RelatedMove
+import com.aurum.invest.analytics.RelationGroup
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.DeltaPct
@@ -68,7 +70,8 @@ private enum class PicksTab(val key: String) {
     DAILY(PicksViewModel.TAB_DAILY),
     ENTRIES(PicksViewModel.TAB_ENTRIES),
     POWER(PicksViewModel.TAB_POWER),
-    WEEKLY(PicksViewModel.TAB_WEEKLY)
+    WEEKLY(PicksViewModel.TAB_WEEKLY),
+    RELATION(PicksViewModel.TAB_RELATION)
 }
 
 @Composable
@@ -99,6 +102,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                         PicksTab.ENTRIES -> "Best Entries"
                         PicksTab.POWER -> "Power Hour"
                         PicksTab.WEEKLY -> "Weekly Picks"
+                        PicksTab.RELATION -> "Relations"
                     },
                     style = MaterialTheme.typography.headlineMedium,
                     color = AurumColors.text
@@ -109,6 +113,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                         PicksTab.ENTRIES -> "Market-wide entry-price scan"
                         PicksTab.POWER -> "Buy 2:30–4:00 PM ET · sell into tomorrow"
                         PicksTab.WEEKLY -> state.weekLabel
+                        PicksTab.RELATION -> "Who moves when the giants move"
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = AurumColors.textDim
@@ -119,6 +124,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 PicksTab.ENTRIES -> state.entryRefreshing
                 PicksTab.POWER -> state.powerRefreshing
                 PicksTab.WEEKLY -> state.refreshing
+                PicksTab.RELATION -> state.relationRefreshing
             }
             // Fixed 48dp slot so the header doesn't shift when the
             // refresh button swaps to the busy spinner and back.
@@ -137,6 +143,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                                 PicksTab.ENTRIES -> vm.refreshEntries()
                                 PicksTab.POWER -> vm.refreshPower()
                                 PicksTab.WEEKLY -> vm.refresh()
+                                PicksTab.RELATION -> vm.refreshRelations()
                             }
                         }
                     ) {
@@ -151,19 +158,21 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
         }
 
         SegmentedToggle(
-            options = listOf("Today", "Entries", "Power", "Weekly"),
+            options = listOf("Today", "Entries", "Power", "Weekly", "Relation"),
             selected = when (tab) {
                 PicksTab.DAILY -> 0
                 PicksTab.ENTRIES -> 1
                 PicksTab.POWER -> 2
                 PicksTab.WEEKLY -> 3
+                PicksTab.RELATION -> 4
             },
             onSelect = {
                 tab = when (it) {
                     0 -> PicksTab.DAILY
                     1 -> PicksTab.ENTRIES
                     2 -> PicksTab.POWER
-                    else -> PicksTab.WEEKLY
+                    3 -> PicksTab.WEEKLY
+                    else -> PicksTab.RELATION
                 }
             },
             compact = true,
@@ -176,6 +185,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 PicksTab.ENTRIES -> state.entryRefreshing
                 PicksTab.POWER -> state.powerRefreshing
                 PicksTab.WEEKLY -> state.refreshing
+                PicksTab.RELATION -> state.relationRefreshing
             },
             onRefresh = {
                 when (tab) {
@@ -183,6 +193,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                     PicksTab.ENTRIES -> vm.refreshEntries()
                     PicksTab.POWER -> vm.refreshPower()
                     PicksTab.WEEKLY -> vm.refresh()
+                    PicksTab.RELATION -> vm.refreshRelations()
                 }
             },
             modifier = Modifier.fillMaxSize()
@@ -197,6 +208,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 PicksTab.ENTRIES -> entryItems(state, onOpenDetail, onOpenAnalysis, vm::refreshEntries)
                 PicksTab.POWER -> powerItems(state, onOpenDetail, onOpenAnalysis, vm::refreshPower)
                 PicksTab.WEEKLY -> weeklyItems(state, onOpenDetail, onOpenAnalysis, vm::refresh)
+                PicksTab.RELATION -> relationItems(state, onOpenDetail, onOpenAnalysis, vm::refreshRelations)
             }
         }
         }
@@ -249,7 +261,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.dailyItems(
             item {
                 Text(
                     text = "The stocks best positioned to move today — whole-market screens plus " +
-                        "the fixed universe, read through momentum, volume, the 15 techniques, " +
+                        "the fixed universe, read through momentum, volume, the 20 techniques, " +
                         "pre/post-market prints, and news. Each range is that stock's own " +
                         "measured volatility, not a promise.",
                     style = MaterialTheme.typography.bodySmall,
@@ -320,7 +332,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.powerItems(
                     text = "The 10 strongest candidates to buy in the last 90 minutes and hold " +
                         "into tomorrow: the whole market screened for names finishing near " +
                         "their daily high on hot volume after 4 strong trading days, confirmed " +
-                        "by the 15-technique board. Refresh inside the window for the live read.",
+                        "by the 20-technique board. Refresh inside the window for the live read.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
@@ -573,7 +585,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
                 Text(
                     text = "The best entry setups across 8 market-wide screens: kept only when " +
                         "the long trend is intact, the price has pulled back toward support, " +
-                        "the 15-technique board does not read the dip as a falling knife, and " +
+                        "the 20-technique board does not read the dip as a falling knife, and " +
                         "the week's news does not explain the dip away.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
@@ -944,7 +956,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.weeklyItems(
     item {
         Text(
             text = "The week's strongest sustained setups — momentum, volume, and the " +
-                "15-technique board over the fixed universe plus the market-wide screens. " +
+                "20-technique board over the fixed universe plus the market-wide screens. " +
                 "Every pick now carries its stop and first target in the reason line: a " +
                 "pick without an exit is not a plan.",
             style = MaterialTheme.typography.bodySmall,
@@ -1121,6 +1133,218 @@ private fun PickCard(
             }
         }
         PortfolioNoteTag(note)
+    }
+}
+
+// ------------------------------------------------------------ relation tab
+
+private fun androidx.compose.foundation.lazy.LazyListScope.relationItems(
+    state: PicksState,
+    onOpenDetail: (String) -> Unit,
+    onOpenAnalysis: (String) -> Unit,
+    onRefresh: () -> Unit
+) {
+    when {
+        state.relationRows.isEmpty() && (state.relationLoading || state.relationRefreshing) -> item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 56.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = AurumColors.gold)
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "Measuring who moves with the giants…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
+        }
+        state.relationRows.isEmpty() -> item {
+            EmptyState(
+                title = "No relation data yet",
+                message = "Load the first-party relation map: each giant, its suppliers and " +
+                    "partners, and how tightly they actually move together.",
+                actionLabel = "Load now",
+                onAction = onRefresh
+            )
+        }
+        else -> {
+            item {
+                Text(
+                    text = "First-party relations: each giant with the stocks tied to it by a " +
+                        "real business link — its manufacturer, suppliers, and the companies " +
+                        "that build around it. When AMD rises this week, these lists answer " +
+                        "who rises with it. The link is curated fact; every number is " +
+                        "measured live — this week's moves and the actual 3-month " +
+                        "correlation of daily returns.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+            }
+            items(state.relationRows, key = { "rel-${it.symbol}" }) { group ->
+                RelationGroupCard(
+                    group = group,
+                    onOpenDetail = onOpenDetail,
+                    onOpenAnalysis = onOpenAnalysis
+                )
+            }
+            item {
+                Text(
+                    text = "Groups are ordered by the size of the giant's move this week. " +
+                        "Correlation is measured from ~3 months of shared trading days — a " +
+                        "curated link that measures weak is shown weak. Decision support, " +
+                        "not financial advice.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RelationGroupCard(
+    group: RelationGroup,
+    onOpenDetail: (String) -> Unit,
+    onOpenAnalysis: (String) -> Unit
+) {
+    AurumCard(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.clickable { onOpenDetail(group.symbol) }
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        text = group.symbol,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AurumColors.text
+                    )
+                    if (group.name.isNotBlank()) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = group.name,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AurumColors.textDim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val week = group.weekChangePct
+                    if (week != null) {
+                        DeltaPct(value = week, style = MaterialTheme.typography.labelMedium)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "this week",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AurumColors.textDim
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                    }
+                    DeltaPct(value = group.dayChangePct, style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "today",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = Fmt.money(group.price),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text
+                )
+                IconButton(
+                    onClick = { onOpenAnalysis(group.symbol) },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.QueryStats,
+                        contentDescription = "Analyze ${group.symbol}",
+                        tint = AurumColors.gold,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Text(
+            text = "Moves with ${group.symbol}",
+            style = MaterialTheme.typography.labelMedium,
+            color = AurumColors.textDim
+        )
+        group.related.forEach { rel ->
+            Spacer(modifier = Modifier.height(10.dp))
+            RelatedRow(rel = rel, onOpen = { onOpenDetail(rel.symbol) })
+        }
+    }
+}
+
+@Composable
+private fun RelatedRow(rel: RelatedMove, onOpen: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onOpen() }
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = rel.symbol,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                val corr = rel.correlation
+                if (corr != null) {
+                    PillTag(
+                        text = String.format(Locale.US, "r %.2f", corr),
+                        color = when {
+                            corr >= 0.6 -> AurumColors.gold
+                            corr >= 0.3 -> AurumColors.info
+                            else -> AurumColors.textDim
+                        }
+                    )
+                } else {
+                    PillTag(text = "r —", color = AurumColors.textDim)
+                }
+            }
+            Text(
+                text = rel.note.replaceFirstChar { it.uppercase() },
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(horizontalAlignment = Alignment.End) {
+            val week = rel.weekChangePct
+            if (week != null) {
+                DeltaPct(value = week, style = MaterialTheme.typography.labelMedium)
+                Text(
+                    text = "this week",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            } else {
+                DeltaPct(value = rel.dayChangePct, style = MaterialTheme.typography.labelMedium)
+                Text(
+                    text = "today",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
     }
 }
 

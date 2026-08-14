@@ -7,6 +7,8 @@ import com.aurum.invest.analytics.IntradayPicker
 import com.aurum.invest.analytics.PowerPicker
 import com.aurum.invest.analytics.PreMarketPick
 import com.aurum.invest.analytics.PreMarketPicker
+import com.aurum.invest.analytics.RelationGroup
+import com.aurum.invest.analytics.RelationPicker
 import com.aurum.invest.analytics.WeeklyPicker
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.db.CacheDao
@@ -53,6 +55,56 @@ class PicksRepository(
 
         /** Power-hour picks (buy 2:30-4:00 PM ET), one cached set per local date. */
         private const val POWER_KEY_PREFIX = "powerpicks:"
+
+        /** First-party relation groups, one cached set per local date. */
+        private const val RELATION_KEY_PREFIX = "relations:"
+    }
+
+    // ---- first-party relations (cache-backed, one set per calendar day) -----------
+
+    private fun relationKey(): String = RELATION_KEY_PREFIX + Dates.todayIso()
+
+    /** Today's stored relation groups (no computation). Empty on any failure. */
+    suspend fun getRelations(): List<RelationGroup> = try {
+        cacheDao.get(relationKey())?.let { RelationPicker.fromJson(it.json) } ?: emptyList()
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    /**
+     * Today's relation groups, recomputed when the stored set is older than
+     * [maxAgeMs] (30 min) — the whole point is who is moving NOW.
+     */
+    suspend fun ensureRelations(maxAgeMs: Long = 1_800_000L): List<RelationGroup> {
+        val entry = try {
+            cacheDao.get(relationKey())
+        } catch (_: Exception) {
+            null
+        }
+        val stored = entry?.let { RelationPicker.fromJson(it.json) }.orEmpty()
+        val fresh = entry != null &&
+            System.currentTimeMillis() - entry.updatedAt <= maxAgeMs
+        if (stored.isNotEmpty() && fresh) return stored
+        return recomputeRelations().ifEmpty { stored }
+    }
+
+    /** Re-reads every relation group from fresh quotes and candles. */
+    suspend fun recomputeRelations(): List<RelationGroup> {
+        return try {
+            val groups = RelationPicker(market).computeGroups()
+            if (groups.isNotEmpty()) {
+                cacheDao.put(
+                    CacheEntity(
+                        key = relationKey(),
+                        json = RelationPicker.toJson(groups),
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+            }
+            groups
+        } catch (_: Exception) {
+            getRelations()
+        }
     }
 
     // ---- power-hour picks (cache-backed, one set per calendar day) ----------------

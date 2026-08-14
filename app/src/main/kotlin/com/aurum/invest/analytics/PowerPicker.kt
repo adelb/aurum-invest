@@ -28,7 +28,7 @@ import org.json.JSONObject
  *  3. Deep read on the ~28 best: the last 4 TRADING DAYS' behavior (total
  *     move, up-day consistency, acceleration into today), RSI in the
  *     momentum band, 4-day volume vs the 20-day average, breakout proximity,
- *     and the 15-technique board (bearish boards are dropped).
+ *     and the 20-technique board (bearish boards are dropped).
  *
  * Next-day potential is derived honestly from ATR plus the momentum read;
  * each pick carries a morning exit target and a hard stop under today's low.
