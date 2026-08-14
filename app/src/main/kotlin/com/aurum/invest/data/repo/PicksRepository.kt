@@ -1,6 +1,5 @@
 package com.aurum.invest.data.repo
 
-import com.aurum.invest.analytics.DailyPicker
 import com.aurum.invest.analytics.EntryPicker
 import com.aurum.invest.analytics.IntradayPick
 import com.aurum.invest.analytics.IntradayPicker
@@ -9,13 +8,15 @@ import com.aurum.invest.analytics.PreMarketPick
 import com.aurum.invest.analytics.PreMarketPicker
 import com.aurum.invest.analytics.RelationGroup
 import com.aurum.invest.analytics.RelationPicker
+import com.aurum.invest.analytics.UFingerprintCache
+import com.aurum.invest.analytics.UPatternEngine
+import com.aurum.invest.analytics.UPick
 import com.aurum.invest.analytics.WeeklyPicker
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.db.CacheDao
 import com.aurum.invest.data.db.CacheEntity
 import com.aurum.invest.data.db.PicksDao
 import com.aurum.invest.data.db.WeeklyPickEntity
-import com.aurum.invest.data.model.DailyPick
 import com.aurum.invest.data.model.EntryPick
 import com.aurum.invest.data.model.PowerPick
 import com.aurum.invest.data.model.WeeklyPick
@@ -41,8 +42,14 @@ class PicksRepository(
         /** Budget (under-$25) picks share the weekly_picks table under a suffixed week key. */
         const val BUDGET_SUFFIX = ":U25"
 
-        /** Daily picks live in the JSON cache, one entry per local date. */
-        private const val DAILY_KEY_PREFIX = "dailypicks:"
+        /** U-pattern picks live in the JSON cache, one entry per local date. */
+        private const val U_KEY_PREFIX = "upicks:"
+
+        /** Symbols already notified as buy zones, one entry per local date. */
+        private const val U_NOTIFIED_KEY_PREFIX = "unotified:"
+
+        /** Per-symbol U fingerprints (3-day TTL enforced by the engine). */
+        private const val U_FINGERPRINT_KEY_PREFIX = "ufp:"
 
         /** Pre-market picks: one entry per local date and profit target. */
         private const val PREMARKET_KEY_PREFIX = "premarket:"
@@ -323,51 +330,123 @@ class PicksRepository(
         }
     }
 
-    // ---- daily picks (cache-backed, one set per calendar day) ---------------------
+    // ---- U-pattern picks (cache-backed, one set per calendar day) -----------------
 
-    private fun dailyKey(): String = DAILY_KEY_PREFIX + Dates.todayIso()
+    private fun uKey(): String = U_KEY_PREFIX + Dates.todayIso()
+    private fun uNotifiedKey(): String = U_NOTIFIED_KEY_PREFIX + Dates.todayIso()
 
-    /** Today's stored daily picks (no computation). Empty on any failure. */
-    suspend fun getDaily(): List<DailyPick> = try {
-        cacheDao.get(dailyKey())?.let { DailyPicker.fromJson(it.json) } ?: emptyList()
+    /** Per-symbol fingerprint persistence handed to the engine. */
+    private val uFingerprints = object : UFingerprintCache {
+        override suspend fun read(symbol: String): Pair<String, Long>? = try {
+            cacheDao.get(U_FINGERPRINT_KEY_PREFIX + symbol)?.let { it.json to it.updatedAt }
+        } catch (_: Exception) {
+            null
+        }
+
+        override suspend fun write(symbol: String, json: String) {
+            try {
+                cacheDao.put(
+                    CacheEntity(
+                        key = U_FINGERPRINT_KEY_PREFIX + symbol,
+                        json = json,
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+            } catch (_: Exception) {
+                // cache write failure is non-fatal
+            }
+        }
+    }
+
+    private fun uEngine(): UPatternEngine = UPatternEngine(market, uFingerprints)
+
+    /** Today's stored U-pattern picks (no computation). Empty on any failure. */
+    suspend fun getUPattern(): List<UPick> = try {
+        cacheDao.get(uKey())?.let { UPatternEngine.fromJson(it.json) } ?: emptyList()
     } catch (_: Exception) {
         emptyList()
     }
 
     /**
-     * Today's daily picks, recomputed when the stored set is older than
-     * [maxAgeMs] (30 min) — a same-day movers list frozen since the open
-     * stops describing the day it names.
+     * Today's U-pattern picks. Missing -> full scan; present but with live
+     * states older than [liveMaxAgeMs] (3 min) -> the cheap live re-read.
+     * The fingerprint half of a pick is stable all day; only the live half
+     * goes stale in minutes.
      */
-    suspend fun ensureDaily(maxAgeMs: Long = 1_800_000L): List<DailyPick> {
+    suspend fun ensureUPattern(liveMaxAgeMs: Long = 180_000L): List<UPick> {
         val entry = try {
-            cacheDao.get(dailyKey())
+            cacheDao.get(uKey())
         } catch (_: Exception) {
             null
         }
-        val stored = entry?.let { DailyPicker.fromJson(it.json) }.orEmpty()
-        val fresh = entry != null &&
-            System.currentTimeMillis() - entry.updatedAt <= maxAgeMs
-        if (stored.isNotEmpty() && fresh) return stored
-        return recomputeDaily().ifEmpty { stored }
+        val stored = entry?.let { UPatternEngine.fromJson(it.json) }.orEmpty()
+        if (stored.isEmpty()) return recomputeUPattern()
+        val fresh = System.currentTimeMillis() - entry!!.updatedAt <= liveMaxAgeMs
+        return if (fresh) stored else refreshULive()
     }
 
-    /** Recomputes today's daily picks from fresh market data and replaces the stored set. */
-    suspend fun recomputeDaily(): List<DailyPick> {
+    /** The full market rescan: screens, fingerprints, gates, live read. */
+    suspend fun recomputeUPattern(): List<UPick> {
         return try {
-            val picks = DailyPicker(market, news).computePicks(Dates.todayIso())
-            if (picks.isNotEmpty()) {
-                cacheDao.put(
-                    CacheEntity(
-                        key = dailyKey(),
-                        json = DailyPicker.toJson(picks),
-                        updatedAt = System.currentTimeMillis()
-                    )
-                )
-            }
+            val picks = uEngine().compute(Dates.todayIso())
+            if (picks.isNotEmpty()) storeU(picks)
             picks
         } catch (_: Exception) {
-            getDaily()
+            getUPattern()
+        }
+    }
+
+    /** Re-reads only today's live state for the stored picks and saves it back. */
+    suspend fun refreshULive(): List<UPick> {
+        val stored = getUPattern()
+        if (stored.isEmpty()) return stored
+        return try {
+            val updated = uEngine().refreshLive(stored)
+            storeU(updated)
+            updated
+        } catch (_: Exception) {
+            stored
+        }
+    }
+
+    private suspend fun storeU(picks: List<UPick>) {
+        try {
+            cacheDao.put(
+                CacheEntity(
+                    key = uKey(),
+                    json = UPatternEngine.toJson(picks),
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+        } catch (_: Exception) {
+            // cache write failure is non-fatal
+        }
+    }
+
+    /** Symbols already alerted as buy zones today — never notify one twice. */
+    suspend fun uNotifiedToday(): Set<String> = try {
+        cacheDao.get(uNotifiedKey())?.json
+            ?.split(',')
+            ?.filter { it.isNotBlank() }
+            ?.toSet()
+            ?: emptySet()
+    } catch (_: Exception) {
+        emptySet()
+    }
+
+    suspend fun markUNotified(symbols: Set<String>) {
+        if (symbols.isEmpty()) return
+        try {
+            val merged = uNotifiedToday() + symbols
+            cacheDao.put(
+                CacheEntity(
+                    key = uNotifiedKey(),
+                    json = merged.joinToString(","),
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+        } catch (_: Exception) {
+            // best-effort — worst case a duplicate alert
         }
     }
 

@@ -135,33 +135,6 @@ data class ExtendedHours(
         get() = preMarketPrice ?: postMarketPrice ?: regularPrice
 }
 
-/** One same-day pick: a stock the engine reads as capable of a 3-10%+ up-move today. */
-data class DailyPick(
-    val date: String,             // ISO local date the pick was computed for
-    val rank: Int,
-    val symbol: String,
-    val name: String,
-    val score: Double,            // 0..100
-    val expectedLowPct: Double,   // potential day move, low bound (>= 3)
-    val expectedHighPct: Double,  // potential day move, high bound
-    val reason: String,
-    val price: Double,            // price at pick time
-    val prevClose: Double,
-    val dayChangePct: Double,     // regular-session move at pick time
-    val preMarketPct: Double?,
-    val postMarketPct: Double?,
-    val marketState: String,
-    val techDirection: String,    // BULLISH / BEARISH / NEUTRAL from the technique board
-    val techBullish: Int,         // bullish technique count
-    val techTotal: Int,           // how many techniques voted (20 as of v4.0)
-    val techConfidence: Int,
-    val volumeRatio: Double,      // latest session volume vs 20-day average
-    val newsScore: Int,           // summed headline sentiment, clamped
-    val headline: String,         // newest related headline ("" when none)
-    val headlineSource: String,
-    val headlineSentiment: Int
-)
-
 /** One row from a Yahoo predefined screener — the market-wide candidate pool. */
 data class ScreenerQuote(
     val symbol: String,

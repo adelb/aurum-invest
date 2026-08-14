@@ -18,6 +18,7 @@ object Schedules {
 
     private const val REFRESH_WORK_NAME = "aurum-refresh"
     private const val WEEKLY_PICKS_WORK_NAME = "aurum-weekly-picks"
+    private const val U_PATTERN_WORK_NAME = "aurum-upattern"
 
     fun ensure(context: Context) {
         try {
@@ -43,6 +44,17 @@ object Schedules {
                 WEEKLY_PICKS_WORK_NAME,
                 ExistingPeriodicWorkPolicy.KEEP,
                 weeklyPicks
+            )
+
+            // WorkManager's floor is 15 minutes — the U-pattern watcher runs
+            // at that cadence and exits instantly outside the US session.
+            val uPattern = PeriodicWorkRequestBuilder<UPatternWorker>(15, TimeUnit.MINUTES)
+                .setConstraints(connected)
+                .build()
+            workManager.enqueueUniquePeriodicWork(
+                U_PATTERN_WORK_NAME,
+                ExistingPeriodicWorkPolicy.KEEP,
+                uPattern
             )
         } catch (_: Exception) {
             // Scheduling must never crash app startup; workers are best-effort.
