@@ -26,7 +26,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.QueryStats
+import androidx.compose.material.icons.rounded.RocketLaunch
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarBorder
@@ -42,6 +44,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -53,9 +56,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.aurum.invest.analytics.RotationState
 import com.aurum.invest.analytics.StockCatalog
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.GoldLink
+import java.util.Locale
 import com.aurum.invest.ui.components.ActionBadge
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
@@ -365,21 +370,38 @@ private fun SectorBrowse(
     onOpenDetail: (String) -> Unit,
     onOpenAnalysis: (String) -> Unit
 ) {
+    // Rotation applied to the shelf order itself: once the trend scan lands,
+    // the chips run hot -> cold, so the trendiest sectors sit up front.
+    val orderedSectors = remember(state.pulses) {
+        if (state.pulses.isEmpty()) StockCatalog.SECTORS
+        else StockCatalog.SECTORS.sortedBy { state.pulses[it.name]?.rank ?: Int.MAX_VALUE }
+    }
     Column(modifier = Modifier.fillMaxSize()) {
         Spacer(modifier = Modifier.height(14.dp))
         LazyRow(
             contentPadding = PaddingValues(horizontal = 20.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(StockCatalog.SECTORS, key = { it.name }) { sector ->
+            items(orderedSectors, key = { it.name }) { sector ->
                 val selected = sector.name == state.selectedSector
-                Box(
+                val hot = state.pulses[sector.name]?.hot == true
+                Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(50))
                         .background(if (selected) AurumColors.gold else AurumColors.surface)
                         .clickable { vm.selectSector(sector.name) }
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (hot) {
+                        Icon(
+                            imageVector = Icons.Rounded.LocalFireDepartment,
+                            contentDescription = "Trending sector",
+                            tint = if (selected) AurumColors.bg else AurumColors.gold,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
                     Text(
                         text = sector.name,
                         style = MaterialTheme.typography.labelMedium,
@@ -394,12 +416,7 @@ private fun SectorBrowse(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {
-                Text(
-                    text = "${state.selectedSector} — sorted by the last 2 weeks' real move. " +
-                        "The gold border marks the sector's best 2-week performers.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim
-                )
+                SectorPulseCard(state)
             }
             if (state.sectorLoading && state.sectorRows.isEmpty()) {
                 item {
@@ -423,6 +440,129 @@ private fun SectorBrowse(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * The selected shelf's live read: rotation state and weekly rank from the
+ * shared sector scan, what the user already holds from this shelf, and the
+ * next-week breakout watch — every figure measured, nothing invented.
+ */
+@Composable
+private fun SectorPulseCard(state: StocksState) {
+    val pulse = state.pulses[state.selectedSector]
+    AurumCard(modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = state.selectedSector,
+                style = MaterialTheme.typography.titleSmall,
+                color = AurumColors.text
+            )
+            if (pulse?.hot == true) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Icon(
+                    imageVector = Icons.Rounded.LocalFireDepartment,
+                    contentDescription = "Trending sector",
+                    tint = AurumColors.gold,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            if (pulse != null) {
+                when (pulse.state) {
+                    RotationState.INFLOW ->
+                        PillTag(text = "Money flowing in", color = AurumColors.gain)
+                    RotationState.OUTFLOW ->
+                        PillTag(text = "Money rotating out", color = AurumColors.loss)
+                    RotationState.STEADY ->
+                        PillTag(text = "Steady", color = AurumColors.textDim)
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        if (pulse != null) {
+            val stats = buildString {
+                append(
+                    String.format(
+                        Locale.US,
+                        "#%d of %d this week · %+.1f%% in 5 days · %+.1f%% in 20",
+                        pulse.rank, pulse.ofTotal, pulse.r5Pct, pulse.r20Pct
+                    )
+                )
+                if (pulse.volumeRatio > 0.0) {
+                    append(String.format(Locale.US, " · %.1fx volume", pulse.volumeRatio))
+                }
+                if (pulse.newsTone != 0) {
+                    append(String.format(Locale.US, " · news tone %+d", pulse.newsTone))
+                }
+                append(" (${pulse.etf})")
+            }
+            Text(
+                text = stats,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        } else {
+            Text(
+                text = "Sorted by the last 2 weeks' real move; the gold border marks " +
+                    "the shelf's best performers.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
+        // What the book already holds from this shelf — exact membership only.
+        if (!state.book.isEmpty) {
+            Spacer(modifier = Modifier.height(6.dp))
+            val held = state.sectorRows.filter { it.heldPct != null }
+            if (held.isNotEmpty()) {
+                val total = held.sumOf { it.heldPct ?: 0.0 }
+                Text(
+                    text = "In your book from this shelf: " +
+                        held.joinToString(", ") {
+                            String.format(Locale.US, "%s %.0f%%", it.symbol, it.heldPct)
+                        } +
+                        String.format(Locale.US, " — %.0f%% of the book", total),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.gold
+                )
+            } else if (state.sectorRows.isNotEmpty()) {
+                Text(
+                    text = "Nothing from this shelf in your portfolio.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        // The forward look: names pressing their highs on real volume.
+        Spacer(modifier = Modifier.height(6.dp))
+        when {
+            state.breakoutScanning -> Text(
+                text = "Scanning for next-week setups…",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+            state.breakouts.isNotEmpty() -> Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Rounded.RocketLaunch,
+                    contentDescription = null,
+                    tint = AurumColors.gain,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Next-week watch: " +
+                        state.breakouts.joinToString(", ") { it.symbol } +
+                        " — pressing highs on volume.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.gain
+                )
+            }
+            else -> Text(
+                text = "No name here passes the next-week breakout bar right now.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
         }
     }
 }
@@ -454,6 +594,18 @@ private fun BrowseRowCard(
                     if (row.top) {
                         Spacer(modifier = Modifier.width(8.dp))
                         PillTag(text = "Top 2 weeks", color = AurumColors.gold)
+                    }
+                    if (row.breakout != null) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        PillTag(text = "Next week", color = AurumColors.gain)
+                    }
+                    val held = row.heldPct
+                    if (held != null) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        PillTag(
+                            text = String.format(Locale.US, "Held · %.0f%%", held),
+                            color = AurumColors.gold
+                        )
                     }
                 }
                 if (row.name.isNotBlank()) {
@@ -492,6 +644,34 @@ private fun BrowseRowCard(
                         color = AurumColors.textDim
                     )
                 }
+            }
+        }
+        val breakout = row.breakout
+        if (breakout != null) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Rounded.RocketLaunch,
+                    contentDescription = "Next-week breakout watch",
+                    tint = AurumColors.gain,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = breakout.reason,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.gain
+                )
+            }
+            if (breakout.newsNote.isNotBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "“${breakout.newsNote}”",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
         Spacer(modifier = Modifier.height(8.dp))

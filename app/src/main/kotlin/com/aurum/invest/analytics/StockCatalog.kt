@@ -5,14 +5,23 @@ package com.aurum.invest.analytics
  * way a person browses — by sector. Pure data, no Android imports. Prices,
  * 2-week performance and highlights are always computed live from market
  * data; this file only says WHO belongs to each shelf.
+ *
+ * Each shelf carries a [SectorList.themeKey] pointing into
+ * [SectorTrends.SECTORS], so the browse can show the shelf's live trend
+ * (ETF momentum, volume, news tone) without a second market sweep.
  */
 object StockCatalog {
 
-    data class SectorList(val name: String, val stocks: List<Pair<String, String>>)
+    data class SectorList(
+        val name: String,
+        val themeKey: String,
+        val stocks: List<Pair<String, String>>
+    )
 
     val SECTORS: List<SectorList> = listOf(
         SectorList(
             "Semiconductors & AI",
+            "semis",
             listOf(
                 "NVDA" to "NVIDIA",
                 "AMD" to "Advanced Micro Devices",
@@ -29,14 +38,24 @@ object StockCatalog {
                 "ARM" to "Arm Holdings",
                 "SMCI" to "Super Micro Computer",
                 "MRVL" to "Marvell Technology",
-                "ON" to "ON Semiconductor"
+                "ON" to "ON Semiconductor",
+                "NXPI" to "NXP Semiconductors",
+                "ADI" to "Analog Devices",
+                "MCHP" to "Microchip Technology",
+                "MPWR" to "Monolithic Power Systems",
+                "TER" to "Teradyne",
+                "SWKS" to "Skyworks Solutions",
+                "ALAB" to "Astera Labs",
+                "CRDO" to "Credo Technology"
             )
         ),
         SectorList(
             "Technology",
+            "software",
             listOf(
                 "AAPL" to "Apple",
                 "MSFT" to "Microsoft",
+                "AMZN" to "Amazon",
                 "ORCL" to "Oracle",
                 "CRM" to "Salesforce",
                 "ADBE" to "Adobe",
@@ -50,11 +69,19 @@ object StockCatalog {
                 "PLTR" to "Palantir Technologies",
                 "UBER" to "Uber Technologies",
                 "ANET" to "Arista Networks",
-                "DELL" to "Dell Technologies"
+                "DELL" to "Dell Technologies",
+                "PANW" to "Palo Alto Networks",
+                "CRWD" to "CrowdStrike",
+                "FTNT" to "Fortinet",
+                "NET" to "Cloudflare",
+                "DDOG" to "Datadog",
+                "WDAY" to "Workday",
+                "ABNB" to "Airbnb"
             )
         ),
         SectorList(
             "Financials",
+            "banks",
             listOf(
                 "JPM" to "JPMorgan Chase",
                 "BAC" to "Bank of America",
@@ -69,11 +96,21 @@ object StockCatalog {
                 "SCHW" to "Charles Schwab",
                 "PYPL" to "PayPal",
                 "COIN" to "Coinbase",
-                "HBAN" to "Huntington Bancshares"
+                "HBAN" to "Huntington Bancshares",
+                "USB" to "U.S. Bancorp",
+                "PNC" to "PNC Financial",
+                "COF" to "Capital One",
+                "BX" to "Blackstone",
+                "KKR" to "KKR",
+                "PGR" to "Progressive",
+                "IBKR" to "Interactive Brokers",
+                "SOFI" to "SoFi Technologies",
+                "HOOD" to "Robinhood Markets"
             )
         ),
         SectorList(
             "Healthcare",
+            "health",
             listOf(
                 "UNH" to "UnitedHealth Group",
                 "JNJ" to "Johnson & Johnson",
@@ -88,11 +125,22 @@ object StockCatalog {
                 "GILD" to "Gilead Sciences",
                 "CVS" to "CVS Health",
                 "MDT" to "Medtronic",
-                "VRTX" to "Vertex Pharmaceuticals"
+                "VRTX" to "Vertex Pharmaceuticals",
+                "NVO" to "Novo Nordisk",
+                "AZN" to "AstraZeneca",
+                "BMY" to "Bristol Myers Squibb",
+                "DHR" to "Danaher",
+                "SYK" to "Stryker",
+                "BSX" to "Boston Scientific",
+                "REGN" to "Regeneron Pharmaceuticals",
+                "MRNA" to "Moderna",
+                "ZTS" to "Zoetis",
+                "HCA" to "HCA Healthcare"
             )
         ),
         SectorList(
             "Energy",
+            "oil",
             listOf(
                 "XOM" to "Exxon Mobil",
                 "CVX" to "Chevron",
@@ -105,11 +153,18 @@ object StockCatalog {
                 "DVN" to "Devon Energy",
                 "PSX" to "Phillips 66",
                 "VLO" to "Valero Energy",
-                "MPC" to "Marathon Petroleum"
+                "MPC" to "Marathon Petroleum",
+                "FANG" to "Diamondback Energy",
+                "KMI" to "Kinder Morgan",
+                "WMB" to "Williams Companies",
+                "OKE" to "ONEOK",
+                "TRGP" to "Targa Resources",
+                "ET" to "Energy Transfer"
             )
         ),
         SectorList(
             "Consumer",
+            "consumer",
             listOf(
                 "WMT" to "Walmart",
                 "COST" to "Costco Wholesale",
@@ -124,11 +179,22 @@ object StockCatalog {
                 "PG" to "Procter & Gamble",
                 "CL" to "Colgate-Palmolive",
                 "MDLZ" to "Mondelez",
-                "EL" to "Estee Lauder"
+                "EL" to "Estee Lauder",
+                "TJX" to "TJX Companies",
+                "ROST" to "Ross Stores",
+                "LULU" to "Lululemon Athletica",
+                "CMG" to "Chipotle Mexican Grill",
+                "YUM" to "Yum! Brands",
+                "DPZ" to "Domino's Pizza",
+                "MNST" to "Monster Beverage",
+                "CELH" to "Celsius Holdings",
+                "DG" to "Dollar General",
+                "HSY" to "Hershey"
             )
         ),
         SectorList(
             "Media & telecom",
+            "media",
             listOf(
                 "GOOGL" to "Alphabet",
                 "META" to "Meta Platforms",
@@ -141,11 +207,19 @@ object StockCatalog {
                 "SPOT" to "Spotify",
                 "RBLX" to "Roblox",
                 "WBD" to "Warner Bros. Discovery",
-                "SNAP" to "Snap"
+                "SNAP" to "Snap",
+                "TTD" to "Trade Desk",
+                "RDDT" to "Reddit",
+                "PINS" to "Pinterest",
+                "EA" to "Electronic Arts",
+                "TTWO" to "Take-Two Interactive",
+                "CHTR" to "Charter Communications",
+                "LYV" to "Live Nation"
             )
         ),
         SectorList(
             "Industrials",
+            "industrials",
             listOf(
                 "BA" to "Boeing",
                 "CAT" to "Caterpillar",
@@ -160,11 +234,22 @@ object StockCatalog {
                 "UNP" to "Union Pacific",
                 "ETN" to "Eaton",
                 "EMR" to "Emerson Electric",
-                "VRT" to "Vertiv Holdings"
+                "VRT" to "Vertiv Holdings",
+                "NOC" to "Northrop Grumman",
+                "GD" to "General Dynamics",
+                "LHX" to "L3Harris Technologies",
+                "TDG" to "TransDigm",
+                "PH" to "Parker Hannifin",
+                "ITW" to "Illinois Tool Works",
+                "CSX" to "CSX",
+                "WM" to "Waste Management",
+                "PWR" to "Quanta Services",
+                "GEV" to "GE Vernova"
             )
         ),
         SectorList(
             "Auto & EV",
+            "autos",
             listOf(
                 "TSLA" to "Tesla",
                 "F" to "Ford Motor",
@@ -173,11 +258,18 @@ object StockCatalog {
                 "LCID" to "Lucid Group",
                 "NIO" to "NIO",
                 "TM" to "Toyota Motor",
-                "ALB" to "Albemarle"
+                "ALB" to "Albemarle",
+                "HMC" to "Honda Motor",
+                "STLA" to "Stellantis",
+                "XPEV" to "XPeng",
+                "LI" to "Li Auto",
+                "APTV" to "Aptiv",
+                "MBLY" to "Mobileye"
             )
         ),
         SectorList(
             "Materials & mining",
+            "materials",
             listOf(
                 "LIN" to "Linde",
                 "APD" to "Air Products",
@@ -189,11 +281,18 @@ object StockCatalog {
                 "RIO" to "Rio Tinto",
                 "BHP" to "BHP Group",
                 "MP" to "MP Materials",
-                "CLF" to "Cleveland-Cliffs"
+                "CLF" to "Cleveland-Cliffs",
+                "SCCO" to "Southern Copper",
+                "AA" to "Alcoa",
+                "STLD" to "Steel Dynamics",
+                "SHW" to "Sherwin-Williams",
+                "ECL" to "Ecolab",
+                "CTVA" to "Corteva"
             )
         ),
         SectorList(
             "Gold & silver",
+            "goldminers",
             listOf(
                 "NEM" to "Newmont",
                 "B" to "Barrick Mining",
@@ -205,11 +304,17 @@ object StockCatalog {
                 "AU" to "AngloGold Ashanti",
                 "HMY" to "Harmony Gold",
                 "PAAS" to "Pan American Silver",
-                "AG" to "First Majestic Silver"
+                "AG" to "First Majestic Silver",
+                "GFI" to "Gold Fields",
+                "HL" to "Hecla Mining",
+                "CDE" to "Coeur Mining",
+                "EGO" to "Eldorado Gold",
+                "MAG" to "MAG Silver"
             )
         ),
         SectorList(
             "Utilities & REITs",
+            "utilities",
             listOf(
                 "NEE" to "NextEra Energy",
                 "DUK" to "Duke Energy",
@@ -220,7 +325,16 @@ object StockCatalog {
                 "AMT" to "American Tower",
                 "EQIX" to "Equinix",
                 "O" to "Realty Income",
-                "SPG" to "Simon Property Group"
+                "SPG" to "Simon Property Group",
+                "CEG" to "Constellation Energy",
+                "VST" to "Vistra",
+                "NRG" to "NRG Energy",
+                "EXC" to "Exelon",
+                "SRE" to "Sempra",
+                "XEL" to "Xcel Energy",
+                "DLR" to "Digital Realty Trust",
+                "WELL" to "Welltower",
+                "AVB" to "AvalonBay Communities"
             )
         )
     )

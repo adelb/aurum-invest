@@ -60,6 +60,7 @@ object PortfolioLens {
         "defense" to setOf("Industrials"),
         "industrials" to setOf("Industrials"),
         "consumer" to setOf("Consumer Cyclical", "Consumer Defensive"),
+        "media" to setOf("Communication Services"),
         "utilities" to setOf("Utilities")
     )
 

@@ -48,6 +48,8 @@ class SectorTrends(
             Triple("defense", "Defense & aerospace", "ITA"),
             Triple("industrials", "Industrials", "XLI"),
             Triple("consumer", "Consumer & retail", "XLY"),
+            Triple("media", "Media & telecom", "XLC"),
+            Triple("autos", "Autos & EV", "DRIV"),
             Triple("utilities", "Utilities & power", "XLU"),
             Triple("nuclear", "Uranium & nuclear", "URA"),
             Triple("solar", "Solar & clean energy", "TAN")
@@ -100,6 +102,12 @@ class SectorTrends(
             "consumer" to listOf(
                 "WMT" to "Walmart", "COST" to "Costco", "HD" to "Home Depot", "MCD" to "McDonald's"
             ),
+            "media" to listOf(
+                "NFLX" to "Netflix", "DIS" to "Disney", "TMUS" to "T-Mobile", "SPOT" to "Spotify"
+            ),
+            "autos" to listOf(
+                "TSLA" to "Tesla", "GM" to "General Motors", "F" to "Ford", "RIVN" to "Rivian"
+            ),
             "utilities" to listOf(
                 "NEE" to "NextEra", "VST" to "Vistra", "DUK" to "Duke Energy", "SO" to "Southern Co."
             ),
@@ -114,7 +122,8 @@ class SectorTrends(
         /**
          * Reverse of [WATCH]: symbol -> (theme key, theme label), for engines
          * that need to know which tracked theme a candidate belongs to
-         * without a network lookup. Covers the 64 watch names.
+         * without a network lookup. Covers all the watch names; a symbol on
+         * two themes keeps the first (earlier themes rank higher in demand).
          */
         val SYMBOL_THEME: Map<String, Pair<String, String>> by lazy {
             buildMap {

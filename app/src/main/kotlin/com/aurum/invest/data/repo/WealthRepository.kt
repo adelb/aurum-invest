@@ -97,6 +97,13 @@ class WealthRepository(
         } ?: emptyList()
     }
 
+    /**
+     * The shared sector scan for screens outside Wealth (the sector browse's
+     * rotation read) — same half-hour cache, so opening the browse right
+     * after the Wealth tab costs no extra sweep.
+     */
+    suspend fun sectorTrends(): List<SectorTrend> = sectorTrendsCached()
+
     /** (base, target) or null when the user has not set the inputs yet. */
     suspend fun getInputs(): Pair<Double, Double>? = try {
         val base = settings.wealthBase.first()

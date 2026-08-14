@@ -5,9 +5,16 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
 import com.aurum.invest.analytics.AdviceEngine
+import com.aurum.invest.analytics.BookContext
+import com.aurum.invest.analytics.BreakoutCall
+import com.aurum.invest.analytics.BreakoutScout
 import com.aurum.invest.analytics.GoldCorrelation
+import com.aurum.invest.analytics.PortfolioLens
+import com.aurum.invest.analytics.SectorPulse
+import com.aurum.invest.analytics.SectorRotation
 import com.aurum.invest.analytics.StockCatalog
 import com.aurum.invest.data.db.WatchItemEntity
+import com.aurum.invest.data.repo.PortfolioRepository
 import com.aurum.invest.data.model.Advice
 import com.aurum.invest.data.model.GoldLink
 import com.aurum.invest.data.model.Quote
@@ -45,7 +52,11 @@ data class BrowseRow(
     /** Return over the last 10 trading days (~2 weeks); null when history is short. */
     val twoWeekPct: Double?,
     /** True for the sector's best 2-week performers — the gold-border highlight. */
-    val top: Boolean
+    val top: Boolean,
+    /** This name's share of the user's book, null when not held. */
+    val heldPct: Double? = null,
+    /** The measured next-week breakout setup, null for the vast majority. */
+    val breakout: BreakoutCall? = null
 )
 
 data class StocksState(
@@ -63,6 +74,13 @@ data class StocksState(
     val selectedSector: String = StockCatalog.SECTORS.first().name,
     val sectorRows: List<BrowseRow> = emptyList(),
     val sectorLoading: Boolean = false,
+    /** Live rotation read per shelf name; empty until the trend scan lands. */
+    val pulses: Map<String, SectorPulse> = emptyMap(),
+    /** Next-week breakout calls for the selected sector, strongest first. */
+    val breakouts: List<BreakoutCall> = emptyList(),
+    val breakoutScanning: Boolean = false,
+    /** The user's live book, so shelves can say what is already held. */
+    val book: BookContext = BookContext.EMPTY,
     // Live watch membership so every row can show/toggle its star.
     val watchedSymbols: Set<String> = emptySet()
 )
@@ -72,6 +90,7 @@ class StocksViewModel(app: Application) : AndroidViewModel(app) {
     private val container = (app as AurumApp).container
     private val market = container.market
     private val watch = container.watch
+    private val scout = BreakoutScout(container.market, container.news)
 
     private val _state = MutableStateFlow(StocksState())
     val state: StateFlow<StocksState> = _state.asStateFlow()
@@ -79,6 +98,7 @@ class StocksViewModel(app: Application) : AndroidViewModel(app) {
     private var searchJob: Job? = null
     private var tagJob: Job? = null
     private var sectorJob: Job? = null
+    private var trendsJob: Job? = null
     private val refreshTick = MutableStateFlow(0)
     private val forceFresh = AtomicBoolean(false)
 
@@ -99,6 +119,33 @@ class StocksViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     loadRows(items)
                 }
+        }
+        // The user's book, kept live so shelf rows mark held names correctly
+        // right after a trade lands.
+        viewModelScope.launch {
+            container.portfolio.observePositions().collectLatest { positions ->
+                val open = positions.filter { PortfolioRepository.isOpen(it) }
+                val book = if (open.isEmpty()) {
+                    BookContext.EMPTY
+                } else {
+                    try {
+                        val quotes = market.getQuotes(open.map { it.symbol })
+                        val views = open.map { PortfolioRepository.toView(it, quotes[it.symbol]) }
+                        val sectors = market.getSectors(open.map { it.symbol })
+                        PortfolioLens.build(views, sectors)
+                    } catch (_: Exception) {
+                        BookContext.EMPTY
+                    }
+                }
+                _state.update { st ->
+                    st.copy(
+                        book = book,
+                        sectorRows = st.sectorRows.map { row ->
+                            row.copy(heldPct = book.heldWeights[row.symbol])
+                        }
+                    )
+                }
+            }
         }
     }
 
@@ -233,8 +280,26 @@ class StocksViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Loads the initial sector the first time the search view opens. */
     fun ensureSector() {
+        ensureTrends()
         if (_state.value.sectorRows.isEmpty() && !_state.value.sectorLoading) {
             selectSector(_state.value.selectedSector, force = true)
+        }
+    }
+
+    /**
+     * One rotation read per screen visit: the shared half-hour sector scan
+     * (ETF momentum, volume, news tone) ranked across the catalog shelves.
+     */
+    private fun ensureTrends() {
+        if (_state.value.pulses.isNotEmpty() || trendsJob?.isActive == true) return
+        trendsJob = viewModelScope.launch {
+            val trends = try {
+                container.wealth.sectorTrends()
+            } catch (_: Exception) {
+                emptyList()
+            }
+            val pulses = SectorRotation.pulses(trends)
+            if (pulses.isNotEmpty()) _state.update { it.copy(pulses = pulses) }
         }
     }
 
@@ -242,12 +307,33 @@ class StocksViewModel(app: Application) : AndroidViewModel(app) {
         if (!force && name == _state.value.selectedSector && _state.value.sectorRows.isNotEmpty()) return
         val sector = StockCatalog.SECTORS.firstOrNull { it.name == name } ?: return
         sectorJob?.cancel()
-        _state.update { it.copy(selectedSector = name, sectorRows = emptyList(), sectorLoading = true) }
+        _state.update {
+            it.copy(
+                selectedSector = name,
+                sectorRows = emptyList(),
+                sectorLoading = true,
+                breakouts = emptyList(),
+                breakoutScanning = true
+            )
+        }
         sectorJob = viewModelScope.launch {
             val rows = hydrateBrowseRows(sector.stocks, sortByPerformance = true)
             _state.update { st ->
                 if (st.selectedSector == name) st.copy(sectorRows = rows, sectorLoading = false)
                 else st
+            }
+            // The forward look runs after the shelf is on screen: candles are
+            // already cached from the hydrate, so only the finalists cost more.
+            val calls = scout.scan(sector.stocks)
+            _state.update { st ->
+                if (st.selectedSector != name) st
+                else st.copy(
+                    breakouts = calls,
+                    breakoutScanning = false,
+                    sectorRows = st.sectorRows.map { row ->
+                        row.copy(breakout = calls.firstOrNull { it.symbol == row.symbol })
+                    }
+                )
             }
         }
     }
@@ -289,7 +375,8 @@ class StocksViewModel(app: Application) : AndroidViewModel(app) {
                             quote = quotes[symbol],
                             spark = spark,
                             twoWeekPct = twoWeek,
-                            top = false
+                            top = false,
+                            heldPct = _state.value.book.heldWeights[symbol]
                         )
                     }
                 }.awaitAll()
