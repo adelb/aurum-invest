@@ -693,6 +693,15 @@ private fun PortfolioGradeCard(grade: PortfolioGrade, onOpenDetail: (String) -> 
                         Spacer(Modifier.height(8.dp))
                         GradeActionRow(action, onOpenDetail)
                     }
+                    if (c.actions.isNotEmpty() && c.planReachesGreen) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "All steps together: ${c.points} → " +
+                                "${c.projectedPoints}/${c.maxPoints} — reaches the green line.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AurumColors.gain
+                        )
+                    }
                 }
             }
         }
