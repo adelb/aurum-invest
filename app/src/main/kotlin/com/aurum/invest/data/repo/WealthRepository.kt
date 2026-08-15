@@ -47,7 +47,7 @@ class WealthRepository(
         private const val PULSE_KEY = "marketpulse:v2"
         private const val TRENDS_KEY = "sectortrends:v2"
         private const val FLOW_KEY = "moneyflow:v2"
-        private const val REVIEW_KEY = "portfolioreview:v3"
+        private const val REVIEW_KEY = "portfolioreview:v4"
         private const val NEXT_SESSION_KEY = "nextsession:v2"
         private const val NS_NOTIFIED_PREFIX = "nextsession:notified:"
         private const val PREVIEW_KEY_PREFIX = "wealthplan:next:v2:"

@@ -42,7 +42,13 @@ data class HoldingVerdict(
     val newsScore: Int,
     val newsNote: String,          // "" when nothing headline-worthy
     /** Latest session move %, from the live quote (or the last two daily closes); null when not measurable. */
-    val sessionMovePct: Double? = null
+    val sessionMovePct: Double? = null,
+    /** Price at/above its own 50-day average; null when the listing is too young to measure. */
+    val above50: Boolean? = null,
+    /** 20-day return minus the S&P 500's, percentage points; null without a measured SPY baseline. */
+    val rel20Pct: Double? = null,
+    /** The holding's own sector money-flow verdict name (INFLOW/NEUTRAL/OUTFLOW); "" when unmapped. */
+    val flowVerdictName: String = ""
 )
 
 /** A holding the engine could NOT measure this run — named, with the reason, never guessed around. */
@@ -85,7 +91,9 @@ data class PortfolioReview(
     /** Holdings excluded from this run because they could not be measured. */
     val unverified: List<UnverifiedHolding> = emptyList(),
     /** The whole-market regime line from the pulse engine; "" when unavailable. */
-    val marketNote: String = ""
+    val marketNote: String = "",
+    /** The book graded 0-100 against the published rules of elite investors. */
+    val grade: PortfolioGrade? = null
 ) {
     companion object {
         fun toJson(r: PortfolioReview): String = JSONObject().apply {
@@ -95,6 +103,7 @@ data class PortfolioReview(
             put("cashPct", r.suggestedCashPct)
             put("caveat", r.caveat)
             put("marketNote", r.marketNote)
+            r.grade?.let { put("grade", PortfolioGrade.toJson(it)) }
             put("sectorNotes", JSONArray(r.sectorNotes))
             put("unverified", JSONArray().apply {
                 r.unverified.forEach { u ->
@@ -117,6 +126,9 @@ data class PortfolioReview(
                         put("conf", v.techConfidence); put("dir", v.techDirection.name)
                         put("rsi", v.rsi); put("news", v.newsScore); put("newsNote", v.newsNote)
                         v.sessionMovePct?.let { put("session", it) }
+                        v.above50?.let { put("above50", it) }
+                        v.rel20Pct?.let { put("rel20", it) }
+                        if (v.flowVerdictName.isNotEmpty()) put("flowVerdict", v.flowVerdictName)
                     })
                 }
             })
@@ -178,7 +190,12 @@ data class PortfolioReview(
                             newsScore = v.optInt("news", 0),
                             newsNote = v.optString("newsNote", ""),
                             sessionMovePct =
-                                if (v.has("session")) v.optDouble("session") else null
+                                if (v.has("session")) v.optDouble("session") else null,
+                            above50 =
+                                if (v.has("above50")) v.optBoolean("above50") else null,
+                            rel20Pct =
+                                if (v.has("rel20")) v.optDouble("rel20") else null,
+                            flowVerdictName = v.optString("flowVerdict", "")
                         )
                     )
                 }
@@ -242,7 +259,8 @@ data class PortfolioReview(
                 rebalance = rebalance,
                 caveat = o.optString("caveat", ""),
                 unverified = unverified,
-                marketNote = o.optString("marketNote", "")
+                marketNote = o.optString("marketNote", ""),
+                grade = o.optJSONObject("grade")?.let { PortfolioGrade.fromJson(it) }
             )
         } catch (_: Exception) {
             null
@@ -469,7 +487,8 @@ class PortfolioAdvisor(
                 "sector money flow, each stock's own support structure and ATR, and public headlines. " +
                 "Decision support, not financial advice.",
             unverified = unverified,
-            marketNote = marketNote
+            marketNote = marketNote,
+            grade = PortfolioGrader.grade(verdicts, book, flow, pulse)
         )
     }
 
@@ -683,7 +702,10 @@ class PortfolioAdvisor(
                     rsi = round1(rsi),
                     newsScore = newsScore,
                     newsNote = newsNote,
-                    sessionMovePct = sessionMovePct?.let { round1(it) }
+                    sessionMovePct = sessionMovePct?.let { round1(it) },
+                    above50 = sma50?.let { price >= it },
+                    rel20Pct = rel20?.let { round1(it) },
+                    flowVerdictName = sectorFlow?.verdict?.name ?: ""
                 )
             )
         } catch (_: Exception) {

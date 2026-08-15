@@ -61,6 +61,7 @@ import com.aurum.invest.analytics.NextWeekSector
 import com.aurum.invest.analytics.NextWeekStock
 import com.aurum.invest.analytics.NoteKind
 import com.aurum.invest.analytics.PickNote
+import com.aurum.invest.analytics.PortfolioGrade
 import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.analytics.PortfolioReview
 import com.aurum.invest.analytics.RebalanceMove
@@ -199,6 +200,9 @@ private fun WealthContent(
                 else -> {
                     val review = state.review
                     item { ReviewSummaryCard(review) }
+                    review.grade?.let { grade ->
+                        item { PortfolioGradeCard(grade) }
+                    }
                     items(review.verdicts.size) { i ->
                         HoldingCard(
                             verdict = review.verdicts[i],
@@ -561,6 +565,100 @@ private fun ReviewSummaryCard(review: PortfolioReview) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun PortfolioGradeCard(grade: PortfolioGrade) {
+    AurumCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Portfolio grade",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text
+                )
+                Text(
+                    text = "Your book against the published rules of elite investors — " +
+                        "Buffett, O'Neil, Livermore, Weinstein, Minervini.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = "${grade.score}",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = AurumColors.gold
+                )
+                Text(
+                    text = if (grade.maxScore == 100) "of 100" else "of ${grade.maxScore} measured",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        if (grade.maxScore > 0) {
+            ScoreBar(score = grade.score * 100.0 / grade.maxScore)
+            Spacer(Modifier.height(4.dp))
+        }
+        Text(
+            text = grade.band,
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.gold
+        )
+        Spacer(Modifier.height(10.dp))
+        grade.components.forEach { c ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(vertical = 3.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = c.label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AurumColors.text
+                    )
+                    Text(
+                        text = c.evidence,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                if (c.measured) {
+                    Text(
+                        text = "${c.points}/${c.maxPoints}",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = when {
+                            c.points * 100 >= c.maxPoints * 80 -> AurumColors.gain
+                            c.points * 100 >= c.maxPoints * 50 -> AurumColors.text
+                            else -> AurumColors.loss
+                        }
+                    )
+                } else {
+                    PillTag(text = "not measured", color = AurumColors.textDim)
+                }
+            }
+        }
+        HorizontalDivider(
+            color = AurumColors.hairline,
+            modifier = Modifier.padding(vertical = 8.dp)
+        )
+        Text(
+            text = "Do next: ${grade.suggestion}",
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.gold
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "A comparison against these investors' published rules — their live holdings " +
+                "are not public in real time, and Aurum does not pretend otherwise.",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
     }
 }
 
