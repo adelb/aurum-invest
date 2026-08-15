@@ -61,6 +61,8 @@ import com.aurum.invest.analytics.NextWeekSector
 import com.aurum.invest.analytics.NextWeekStock
 import com.aurum.invest.analytics.NoteKind
 import com.aurum.invest.analytics.PickNote
+import com.aurum.invest.analytics.GradeAction
+import com.aurum.invest.analytics.GradeActionKind
 import com.aurum.invest.analytics.PortfolioGrade
 import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.analytics.PortfolioReview
@@ -201,7 +203,7 @@ private fun WealthContent(
                     val review = state.review
                     item { ReviewSummaryCard(review) }
                     review.grade?.let { grade ->
-                        item { PortfolioGradeCard(grade) }
+                        item { PortfolioGradeCard(grade, onOpenDetail) }
                     }
                     items(review.verdicts.size) { i ->
                         HoldingCard(
@@ -569,7 +571,9 @@ private fun ReviewSummaryCard(review: PortfolioReview) {
 }
 
 @Composable
-private fun PortfolioGradeCard(grade: PortfolioGrade) {
+private fun PortfolioGradeCard(grade: PortfolioGrade, onOpenDetail: (String) -> Unit) {
+    // Which discipline's action dropdown is open; one at a time.
+    var expandedKey by rememberSaveable { mutableStateOf<String?>(null) }
     AurumCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
@@ -611,16 +615,33 @@ private fun PortfolioGradeCard(grade: PortfolioGrade) {
         )
         Spacer(Modifier.height(10.dp))
         grade.components.forEach { c ->
+            val expandable = c.actions.isNotEmpty() || c.principle.isNotEmpty()
+            val expanded = expandedKey == c.key
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(vertical = 3.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(enabled = expandable) {
+                        expandedKey = if (expanded) null else c.key
+                    }
+                    .padding(vertical = 4.dp)
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = c.label,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = AurumColors.text
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = c.label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AurumColors.text
+                        )
+                        if (c.actions.isNotEmpty()) {
+                            Spacer(Modifier.width(6.dp))
+                            PillTag(
+                                text = "${c.actions.size} fix${if (c.actions.size > 1) "es" else ""}",
+                                color = AurumColors.gold
+                            )
+                        }
+                    }
                     Text(
                         text = c.evidence,
                         style = MaterialTheme.typography.labelSmall,
@@ -633,13 +654,45 @@ private fun PortfolioGradeCard(grade: PortfolioGrade) {
                         text = "${c.points}/${c.maxPoints}",
                         style = MaterialTheme.typography.titleSmall,
                         color = when {
-                            c.points * 100 >= c.maxPoints * 80 -> AurumColors.gain
+                            c.green -> AurumColors.gain
                             c.points * 100 >= c.maxPoints * 50 -> AurumColors.text
                             else -> AurumColors.loss
                         }
                     )
                 } else {
                     PillTag(text = "not measured", color = AurumColors.textDim)
+                }
+                if (expandable) {
+                    Icon(
+                        imageVector = if (expanded) Icons.Rounded.ExpandLess
+                        else Icons.Rounded.ExpandMore,
+                        contentDescription = if (expanded) "Collapse" else "Show how to improve",
+                        tint = AurumColors.textDim,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+            if (expanded) {
+                Column(modifier = Modifier.padding(start = 8.dp, bottom = 6.dp)) {
+                    if (c.principle.isNotEmpty()) {
+                        Text(
+                            text = c.principle,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AurumColors.textDim
+                        )
+                    }
+                    if (c.green && c.actions.isEmpty()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "In the green — nothing to fix here.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AurumColors.gain
+                        )
+                    }
+                    c.actions.forEach { action ->
+                        Spacer(Modifier.height(8.dp))
+                        GradeActionRow(action, onOpenDetail)
+                    }
                 }
             }
         }
@@ -655,10 +708,67 @@ private fun PortfolioGradeCard(grade: PortfolioGrade) {
         Spacer(Modifier.height(4.dp))
         Text(
             text = "A comparison against these investors' published rules — their live holdings " +
-                "are not public in real time, and Aurum does not pretend otherwise.",
+                "are not public in real time, and Aurum does not pretend otherwise. " +
+                "Points-after figures are today's arithmetic, not predictions.",
             style = MaterialTheme.typography.labelSmall,
             color = AurumColors.textDim
         )
+    }
+}
+
+@Composable
+private fun GradeActionRow(action: GradeAction, onOpenDetail: (String) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable {
+                onOpenDetail(action.buySymbol.ifEmpty { action.symbol })
+            }
+            .padding(vertical = 2.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            when (action.kind) {
+                GradeActionKind.SELL -> PillTag(text = "Sell", color = AurumColors.loss)
+                GradeActionKind.TRIM -> PillTag(text = "Trim", color = AurumColors.info)
+                GradeActionKind.ROTATE -> PillTag(text = "Rotate", color = AurumColors.gold)
+                GradeActionKind.BUY -> PillTag(text = "Buy", color = AurumColors.gain)
+                GradeActionKind.REVIEW -> PillTag(text = "Review", color = AurumColors.textDim)
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = action.title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = AurumColors.text,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "${action.pointsNow} → ${action.pointsAfter}/${action.maxPoints}",
+                style = MaterialTheme.typography.titleSmall,
+                color = if (action.pointsAfter > action.pointsNow) AurumColors.gain
+                else AurumColors.textDim
+            )
+        }
+        Spacer(Modifier.height(3.dp))
+        Text(
+            text = action.detail,
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+        if (action.buySymbol.isNotEmpty()) {
+            Spacer(Modifier.height(5.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PillTag(text = "Buy ${action.buySymbol}", color = AurumColors.gain)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = action.buyName +
+                        if (action.buyEntry > 0.0) " · entry ≈ ${Fmt.money(action.buyEntry)}" else "",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
     }
 }
 

@@ -488,7 +488,7 @@ class PortfolioAdvisor(
                 "Decision support, not financial advice.",
             unverified = unverified,
             marketNote = marketNote,
-            grade = PortfolioGrader.grade(verdicts, book, flow, pulse)
+            grade = PortfolioGradeEngine.evaluate(verdicts, book, flow, pulse, strategy)
         )
     }
 
