@@ -445,9 +445,10 @@ class WeeklyPicker(
         // surge read. The 20-day base also EXCLUDES the 5 days being
         // measured, or a genuine surge dilutes its own denominator.
         val volumes = candles.map { it.volume.toDouble() }
-        val lastIsToday =
-            com.aurum.invest.core.Dates.sameEtDay(candles.last().ts, System.currentTimeMillis())
-        val volEnd = if (lastIsToday && volumes.size >= 2) volumes.size - 1 else volumes.size
+        val lastIsIncomplete =
+            com.aurum.invest.core.Dates.isCurrentEtDailyBarIncomplete(candles.last().ts)
+        val volEnd =
+            if (lastIsIncomplete && volumes.size >= 2) volumes.size - 1 else volumes.size
         val vol5 = volumes.subList((volEnd - 5).coerceAtLeast(0), volEnd).average()
         val volBase = volumes.subList((volEnd - 25).coerceAtLeast(0), (volEnd - 5).coerceAtLeast(1))
         val volRatio = if (volBase.isNotEmpty() && volBase.average() > 0.0) vol5 / volBase.average() else 1.0

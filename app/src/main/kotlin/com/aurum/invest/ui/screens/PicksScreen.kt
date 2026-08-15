@@ -1,9 +1,5 @@
 package com.aurum.invest.ui.screens
 
-import android.content.Intent
-import android.provider.Settings
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,7 +20,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.QueryStats
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.CircularProgressIndicator
@@ -37,20 +32,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
-import com.aurum.invest.core.Notify
 import com.aurum.invest.data.model.EntryPick
 import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.PowerPick
@@ -63,6 +54,7 @@ import com.aurum.invest.analytics.UPick
 import com.aurum.invest.analytics.UState
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
+import com.aurum.invest.ui.components.AlertPermissionCard
 import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.EmptyState
 import com.aurum.invest.ui.components.ExtHoursChips
@@ -307,69 +299,12 @@ private fun androidx.compose.foundation.lazy.LazyListScope.uItems(
 /** Notification opt-in for buy-zone alerts; a quiet confirmation once granted. */
 @Composable
 private fun UAlertsCard() {
-    val context = LocalContext.current
-    var enabled by remember {
-        mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled())
-    }
-    val launcher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { _ ->
-        enabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
-    }
-    if (enabled) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = Icons.Rounded.NotificationsActive,
-                contentDescription = null,
-                tint = AurumColors.gain,
-                modifier = Modifier.size(14.dp)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = "Buy-zone alerts are on — checked every 15 minutes during the session.",
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.textDim
-            )
-        }
-        return
-    }
-    AurumCard(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = "Get pinged at the turn",
-            style = MaterialTheme.typography.titleSmall,
-            color = AurumColors.text
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = "Allow notifications and Aurum will alert you the moment a tracked " +
-                "name confirms its intraday turn and enters the buy zone.",
-            style = MaterialTheme.typography.bodySmall,
-            color = AurumColors.textDim
-        )
-        Spacer(modifier = Modifier.height(10.dp))
-        Text(
-            text = "Enable alerts",
-            style = MaterialTheme.typography.labelLarge,
-            color = AurumColors.gold,
-            modifier = Modifier
-                .clickable {
-                    if (android.os.Build.VERSION.SDK_INT >= 33) {
-                        launcher.launch(Notify.POST_PERMISSION)
-                    } else {
-                        // Pre-13 there is no runtime permission — the switch
-                        // lives in the system's notification settings.
-                        try {
-                            context.startActivity(
-                                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                                    .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-                            )
-                        } catch (_: Exception) {
-                        }
-                    }
-                }
-                .padding(vertical = 4.dp)
-        )
-    }
+    AlertPermissionCard(
+        enabledText = "Buy-zone alerts are on — checked every 15 minutes during the session.",
+        title = "Get pinged at the turn",
+        message = "Allow notifications and Aurum will alert you the moment a tracked " +
+            "name confirms its intraday turn and enters the buy zone."
+    )
 }
 
 // ---------------------------------------------------------------- power tab

@@ -18,7 +18,13 @@ import com.aurum.invest.analytics.WeeklyStrategy
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.db.CacheDao
 import com.aurum.invest.data.db.CacheEntity
+import com.aurum.invest.data.model.Position
+import com.aurum.invest.data.model.PositionView
+import com.aurum.invest.data.model.Quote
 import java.time.ZoneId
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -37,23 +43,60 @@ class WealthRepository(
 ) {
 
     companion object {
-        private const val PULSE_KEY = "marketpulse"
-        private const val TRENDS_KEY = "sectortrends"
-        private const val FLOW_KEY = "moneyflow"
-        private const val REVIEW_KEY = "portfolioreview"
-        private const val NEXT_SESSION_KEY = "nextsession"
+        private const val PULSE_KEY = "marketpulse:v2"
+        private const val TRENDS_KEY = "sectortrends:v2"
+        private const val FLOW_KEY = "moneyflow:v2"
+        private const val REVIEW_KEY = "portfolioreview:v2"
+        private const val NEXT_SESSION_KEY = "nextsession:v2"
         private const val NS_NOTIFIED_PREFIX = "nextsession:notified:"
-        private const val PREVIEW_KEY_PREFIX = "wealthplan:next:"
+        private const val PREVIEW_KEY_PREFIX = "wealthplan:next:v2:"
+
+        /** Stable identity for every ledger input that can change portfolio advice. */
+        fun portfolioFingerprint(open: List<Position>): String =
+            if (open.isEmpty()) {
+                "empty"
+            } else {
+                open.sortedBy { it.symbol }.joinToString("|") {
+                    "${it.symbol}:${it.shares.toBits()}:${it.avgCost.toBits()}:" +
+                        "${it.investedCost.toBits()}:${it.realizedPl.toBits()}"
+                }
+            }
     }
 
-    /** Open positions as symbol -> cost dollars, so engines can size around the book. */
-    suspend fun heldMap(): Map<String, Double> = try {
-        portfolio.positionsNow()
-            .filter { PortfolioRepository.isOpen(it) }
-            .associate { it.symbol to it.shares * it.avgCost }
+    private data class BookSnapshot(
+        val open: List<Position>,
+        val held: Map<String, Double>,
+        val fingerprint: String,
+        val portfolioAvailable: Boolean
+    )
+
+    private suspend fun bookSnapshot(): BookSnapshot? = try {
+        val open = portfolio.positionsNow().filter { PortfolioRepository.isOpen(it) }
+        BookSnapshot(
+            open = open,
+            held = open.associate { it.symbol to it.shares * it.avgCost },
+            fingerprint = portfolioFingerprint(open),
+            portfolioAvailable = true
+        )
     } catch (_: Exception) {
-        emptyMap()
+        null
     }
+
+    /**
+     * Market-wide engines still run when Room cannot read the ledger. Their
+     * output is explicitly marked as lacking portfolio context rather than
+     * silently suppressing scans or alerts.
+     */
+    private suspend fun marketBookSnapshot(): BookSnapshot =
+        bookSnapshot() ?: BookSnapshot(
+            open = emptyList(),
+            held = emptyMap(),
+            fingerprint = "portfolio-unavailable",
+            portfolioAvailable = false
+        )
+
+    /** Open positions as symbol -> cost dollars, so engines can size around the book. */
+    suspend fun heldMap(): Map<String, Double> = bookSnapshot()?.held.orEmpty()
 
     // ---- shared sector scan -------------------------------------------------
 
@@ -134,8 +177,9 @@ class WealthRepository(
      * the user no longer holds. Null when the book is empty.
      */
     suspend fun getPortfolioReview(maxAgeMs: Long = 1_800_000L): PortfolioReview? {
-        val fp = bookFingerprint()
-        if (fp.isEmpty()) return null
+        val snapshot = bookSnapshot() ?: return null
+        if (snapshot.open.isEmpty()) return null
+        val fp = snapshot.fingerprint
         val cached = getCache(REVIEW_KEY)
         val now = System.currentTimeMillis()
         if (cached != null && now - cached.updatedAt <= maxAgeMs) {
@@ -153,24 +197,30 @@ class WealthRepository(
 
     suspend fun recomputePortfolioReview(): PortfolioReview? {
         return try {
-            val open = portfolio.positionsNow().filter { PortfolioRepository.isOpen(it) }
+            val snapshot = bookSnapshot() ?: return null
+            val open = snapshot.open
             if (open.isEmpty()) return null
             val quotes = market.getQuotes(open.map { it.symbol })
-            val views = open.map { PortfolioRepository.toView(it, quotes[it.symbol]) }
+            val views = pricedViews(open, quotes)
+            // The advisor answers for the whole book or not at all. A partial
+            // review could tell the user to rebalance around a missing holding.
+            if (views.size != open.size) return null
             val sectors = market.getSectors(open.map { it.symbol })
             val flow = getMoneyFlow()
             val book = com.aurum.invest.analytics.PortfolioLens.build(views, sectors)
-            val strategy = try {
-                SectorStrategy(market, news).build(sectorTrendsCached(), book, 0.0, flow)
-            } catch (_: Exception) {
-                null
-            }
+            val strategy =
+                if (flow == null) null
+                else try {
+                    SectorStrategy(market, news).build(sectorTrendsCached(), book, 0.0, flow)
+                } catch (_: Exception) {
+                    null
+                }
             val review = PortfolioAdvisor(market, news).review(views, sectors, flow, strategy)
             if (review != null) {
                 putCache(
                     REVIEW_KEY,
                     JSONObject().apply {
-                        put("fp", bookFingerprint())
+                        put("fp", snapshot.fingerprint)
                         put("review", PortfolioReview.toJson(review))
                     }.toString()
                 )
@@ -181,13 +231,31 @@ class WealthRepository(
         }
     }
 
-    private suspend fun bookFingerprint(): String = try {
-        portfolio.positionsNow()
-            .filter { PortfolioRepository.isOpen(it) }
-            .sortedBy { it.symbol }
-            .joinToString("|") { "${it.symbol}:${it.shares}" }
-    } catch (_: Exception) {
-        ""
+    private suspend fun pricedViews(
+        positions: List<Position>,
+        quotes: Map<String, Quote>
+    ): List<PositionView> = coroutineScope {
+        positions.map { position ->
+            async {
+                val quote = quotes[position.symbol]?.takeIf { it.price > 0.0 } ?: try {
+                    val candles = market.getDailyCandles(position.symbol, 7)
+                    val latest = candles.lastOrNull() ?: return@async null
+                    if (latest.close <= 0.0) return@async null
+                    Quote(
+                        symbol = position.symbol,
+                        price = latest.close,
+                        prevClose = candles.getOrNull(candles.lastIndex - 1)?.close
+                            ?.takeIf { it > 0.0 } ?: latest.close,
+                        shortName = position.symbol,
+                        fetchedAt = latest.ts,
+                        lite = true
+                    )
+                } catch (_: Exception) {
+                    null
+                } ?: return@async null
+                PortfolioRepository.toView(position, quote)
+            }
+        }.awaitAll().filterNotNull()
     }
 
     // ---- market pulse -------------------------------------------------------
@@ -230,7 +298,7 @@ class WealthRepository(
     suspend fun getStrategy(book: BookContext): WeeklyStrategy? =
         try {
             val trends = sectorTrendsCached()
-            val flow = getMoneyFlow()
+            val flow = getMoneyFlow() ?: return null
             SectorStrategy(market, news).build(trends, book, 0.0, flow)
         } catch (_: Exception) {
             null
@@ -244,17 +312,43 @@ class WealthRepository(
      * watcher share one scan.
      */
     suspend fun getNextSession(maxAgeMs: Long = 1_200_000L): NextSessionReport? {
+        val snapshot = marketBookSnapshot()
         val cached = getCache(NEXT_SESSION_KEY)
         val now = System.currentTimeMillis()
-        if (cached != null && now - cached.updatedAt <= maxAgeMs) {
-            NextSessionReport.fromJson(cached.json)?.let { return it }
-        }
-        return recomputeNextSession() ?: cached?.let { NextSessionReport.fromJson(it.json) }
+        val base =
+            if (cached != null && now - cached.updatedAt <= maxAgeMs) {
+                NextSessionReport.fromJson(cached.json)
+            } else {
+                recomputeNextSessionBase()
+                    ?: cached?.let { NextSessionReport.fromJson(it.json) }
+            }
+        return base?.let { withPortfolioContext(it, snapshot) }
     }
 
     suspend fun recomputeNextSession(): NextSessionReport? {
+        val snapshot = marketBookSnapshot()
+        val base = recomputeNextSessionBase() ?: return null
+        return withPortfolioContext(base, snapshot)
+    }
+
+    private fun withPortfolioContext(
+        report: NextSessionReport,
+        snapshot: BookSnapshot
+    ): NextSessionReport {
+        val tagged = NextSessionEngine.withPortfolio(report, snapshot.held)
+        return if (snapshot.portfolioAvailable) {
+            tagged
+        } else {
+            tagged.copy(
+                notes = tagged.notes +
+                    "Portfolio context is temporarily unavailable; held-position tags are omitted."
+            )
+        }
+    }
+
+    private suspend fun recomputeNextSessionBase(): NextSessionReport? {
         return try {
-            val report = NextSessionEngine(market).compute(held = heldMap())
+            val report = NextSessionEngine(market).compute()
             if (report != null) {
                 putCache(NEXT_SESSION_KEY, NextSessionReport.toJson(report))
             }
@@ -290,10 +384,28 @@ class WealthRepository(
 
     private fun previewKey(weekStartIso: String) = PREVIEW_KEY_PREFIX + weekStartIso
 
+    private fun previewCacheJson(fingerprint: String, plan: NextWeekPlan): String =
+        JSONObject().apply {
+            put("fp", fingerprint)
+            put("plan", NextWeekPlanner.toJson(plan))
+        }.toString()
+
+    private fun previewFromCache(json: String, fingerprint: String): NextWeekPlan? = try {
+        val root = JSONObject(json)
+        if (root.optString("fp") != fingerprint) null
+        else NextWeekPlanner.fromJson(root.optString("plan"))
+    } catch (_: Exception) {
+        null
+    }
+
     /** The stored preview for the week [Dates.nextWeekPreview] points at, if any. */
     suspend fun getNextWeek(): NextWeekPlan? = try {
+        val snapshot = marketBookSnapshot()
         val (_, weekIso) = Dates.nextWeekPreview()
-        getCache(previewKey(weekIso))?.let { NextWeekPlanner.fromJson(it.json) }
+        val cached = getCache(previewKey(weekIso))?.let {
+            previewFromCache(it.json, snapshot.fingerprint)
+        }
+        cached ?: if (!snapshot.portfolioAvailable) recomputeNextWeek() else null
     } catch (_: Exception) {
         null
     }
@@ -306,20 +418,23 @@ class WealthRepository(
     suspend fun ensureNextWeek(maxAgeMs: Long = 7_200_000L): NextWeekPlan? {
         val (active, weekIso) = Dates.nextWeekPreview()
         if (!active) return getNextWeek()
+        val snapshot = marketBookSnapshot()
         val cached = getCache(previewKey(weekIso))
         val now = System.currentTimeMillis()
         if (cached != null && now - cached.updatedAt <= maxAgeMs) {
-            NextWeekPlanner.fromJson(cached.json)?.let { return it }
+            previewFromCache(cached.json, snapshot.fingerprint)?.let { return it }
         }
-        return recomputeNextWeek() ?: cached?.let { NextWeekPlanner.fromJson(it.json) }
+        return recomputeNextWeek()
+            ?: cached?.let { previewFromCache(it.json, snapshot.fingerprint) }
     }
 
     /** Rebuilds the preview from live data and stores it under its week key. */
     suspend fun recomputeNextWeek(): NextWeekPlan? {
         val (_, weekIso) = Dates.nextWeekPreview()
         return try {
-            val held = heldMap()
-            val plan = NextWeekPlanner(market, news).build(
+            val snapshot = marketBookSnapshot()
+            val held = snapshot.held
+            val base = NextWeekPlanner(market, news).build(
                 weekStart = weekIso,
                 // Next week's reference buying power is the invested book at
                 // cost; with no book the split is percentages only.
@@ -329,8 +444,21 @@ class WealthRepository(
                 pulse = getMarketPulse(),
                 flow = getMoneyFlow()
             )
-            if (plan != null) {
-                putCache(previewKey(weekIso), NextWeekPlanner.toJson(plan))
+            val plan =
+                if (base != null && !snapshot.portfolioAvailable) {
+                    base.copy(
+                        portfolioNote =
+                            "Portfolio context is temporarily unavailable; this is a market-only " +
+                                "plan with percentage allocations and no held-position overlay."
+                    )
+                } else {
+                    base
+                }
+            // Do not let a transient ledger outage overwrite the last
+            // portfolio-aware plan. The degraded market-only result is still
+            // returned to this caller.
+            if (plan != null && snapshot.portfolioAvailable) {
+                putCache(previewKey(weekIso), previewCacheJson(snapshot.fingerprint, plan))
             }
             plan
         } catch (_: Exception) {

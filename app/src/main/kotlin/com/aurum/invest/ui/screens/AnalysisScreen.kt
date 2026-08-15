@@ -181,7 +181,10 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
                         item {
                             OutlookCard(analysis = analysis, price = state.price)
                             Spacer(Modifier.height(14.dp))
-                            AccuracyCard(evaluation = state.evaluation)
+                            AccuracyCard(
+                                evaluation = state.evaluation,
+                                loading = state.evaluationLoading
+                            )
                             Spacer(Modifier.height(12.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
@@ -599,7 +602,7 @@ private fun accuracyLine(score: TechniqueScore): String = when {
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AccuracyCard(evaluation: TechniqueEvaluation?) {
+private fun AccuracyCard(evaluation: TechniqueEvaluation?, loading: Boolean) {
     AurumCard {
         Text(
             text = "Technique integrity · last 12 months",
@@ -608,10 +611,20 @@ private fun AccuracyCard(evaluation: TechniqueEvaluation?) {
         )
         Spacer(Modifier.height(8.dp))
         when {
-            evaluation == null -> {
+            evaluation == null && loading -> {
                 Text(
                     text = "Replaying the last year of sessions and grading every technique " +
                         "against the real 5-day moves that followed…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+            }
+            evaluation == null -> {
+                Text(
+                    text = "A complete 12-month grade needs at least " +
+                        "${TechniqueEvaluator.MIN_CANDLES_FOR_FULL_REPLAY} daily candles: " +
+                        "30 for indicator warm-up, 252 graded sessions, and 5 forward sessions. " +
+                        "The board remains unranked rather than presenting a shorter sample as a year.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )

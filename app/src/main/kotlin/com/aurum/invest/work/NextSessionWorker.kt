@@ -34,8 +34,8 @@ class NextSessionWorker(
             val notified = container.wealth.nsNotifiedToday()
             val fresh = alerts.filter { it.symbol !in notified }
             if (fresh.isNotEmpty()) {
-                Notify.nextSessionAlert(applicationContext, fresh)
-                container.wealth.markNsNotified(fresh.map { it.symbol }.toSet())
+                val delivered = Notify.nextSessionAlert(applicationContext, fresh)
+                container.wealth.markNsNotified(delivered)
             }
             Result.success()
         } catch (_: Exception) {

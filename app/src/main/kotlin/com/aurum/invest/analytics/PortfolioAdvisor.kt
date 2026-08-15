@@ -277,7 +277,7 @@ class PortfolioAdvisor(
             }
             results.filterNotNull().forEach { verdicts.add(it) }
         }
-        if (verdicts.isEmpty()) return null
+        if (verdicts.size != open.size) return null
         verdicts.sortByDescending { it.marketValue }
 
         // 2 — the allocation plan: current vs suggested weight per holding.
@@ -377,7 +377,7 @@ class PortfolioAdvisor(
             suggestedCashPct = round1(suggestedCashPct),
             sectorNotes = sectorNotes,
             rebalance = rebalance,
-            caveat = "Every verdict is computed from live prices, the 35-technique board, " +
+            caveat = "Every verdict is computed from the latest available market prices, the 35-technique board, " +
                 "each stock's own support structure and ATR, and public headlines. " +
                 "Decision support, not financial advice."
         )
@@ -397,25 +397,32 @@ class PortfolioAdvisor(
             } catch (_: Exception) {
                 emptyList()
             }
+            if (candles.size < 50) return null
             val price = view.quote?.price ?: candles.lastOrNull()?.close ?: return null
             if (price <= 0.0) return null
             val avgCost = view.position.avgCost
             val weight = book.heldWeights[symbol] ?: 0.0
-            val plPct = view.unrealizedPlPct
+            val marketValue = view.position.shares * price
+            val unrealizedPl = view.position.shares * (price - avgCost)
+            val plPct =
+                if (view.position.investedCost > 1e-9) {
+                    unrealizedPl / view.position.investedCost * 100.0
+                } else 0.0
 
-            val analysis = if (candles.size >= 30) Techniques.analyze(symbol, candles) else null
+            val analysis = Techniques.analyze(symbol, candles) ?: return null
+            if (analysis.results.size != Techniques.TECHNIQUE_COUNT) return null
             val closes = candles.map { it.close }
-            val rsi = Indicators.rsi(closes) ?: 50.0
-            val atr = Indicators.atr(candles) ?: (price * 0.02)
-            val sma50 = Indicators.sma(closes, 50)
+            val rsi = Indicators.rsi(closes) ?: return null
+            val atr = Indicators.atr(candles) ?: return null
+            val sma50 = Indicators.sma(closes, 50) ?: return null
 
-            val direction = analysis?.outlook?.direction ?: TechniqueVerdict.NEUTRAL
-            val confidence = analysis?.outlook?.confidence ?: 0
-            val bullish = analysis?.outlook?.bullishCount ?: 0
-            val total = analysis?.results?.size ?: 0
+            val direction = analysis.outlook.direction
+            val confidence = analysis.outlook.confidence
+            val bullish = analysis.outlook.bullishCount
+            val total = analysis.results.size
 
             // Forward levels from the stock's own structure, not round numbers.
-            val structural = analysis?.srData?.supports?.filter { it < price }?.maxOrNull()
+            val structural = analysis.srData.supports.filter { it < price }.maxOrNull()
             val stop = round2(
                 max(
                     structural?.let { min(it - 0.5 * atr, price - 1.5 * atr) }
@@ -424,7 +431,7 @@ class PortfolioAdvisor(
                 )
             )
             val target = round2(
-                max(analysis?.outlook?.expectedHigh ?: (price + 2.0 * atr), price + 1.2 * atr)
+                max(analysis.outlook.expectedHigh, price + 1.2 * atr)
             )
 
             val newsItems = try {
@@ -437,7 +444,7 @@ class PortfolioAdvisor(
                 ?.let { "${it.title} — ${it.source}" } ?: ""
 
             // ---- the decision, most defensive rule first ----
-            val below50 = sma50 != null && price < sma50
+            val below50 = price < sma50
             val action: HoldingAction
             val headline: String
             val whenText: String
@@ -483,8 +490,8 @@ class PortfolioAdvisor(
                 add(
                     String.format(
                         Locale.US,
-                        "P/L %+.1f%% (%s) on an average cost of %s; live price %s.",
-                        plPct, Fmt.signedMoney(view.unrealizedPl), Fmt.money(avgCost), Fmt.money(price)
+                        "P/L %+.1f%% (%s) on an average cost of %s; latest price %s.",
+                        plPct, Fmt.signedMoney(unrealizedPl), Fmt.money(avgCost), Fmt.money(price)
                     )
                 )
                 if (total > 0) {
@@ -492,15 +499,13 @@ class PortfolioAdvisor(
                         direction.name.lowercase(Locale.US) + " at $confidence% confidence.")
                 }
                 add(String.format(Locale.US, "RSI %.0f; 14-day ATR %s.", rsi, Fmt.money(atr)))
-                if (sma50 != null) {
-                    add(
-                        String.format(
-                            Locale.US, "Price %.1f%% %s the 50-day average %s.",
-                            abs(price / sma50 - 1.0) * 100.0,
-                            if (price >= sma50) "above" else "below", Fmt.money(sma50)
-                        )
+                add(
+                    String.format(
+                        Locale.US, "Price %.1f%% %s the 50-day average %s.",
+                        abs(price / sma50 - 1.0) * 100.0,
+                        if (price >= sma50) "above" else "below", Fmt.money(sma50)
                     )
-                }
+                )
                 add(String.format(Locale.US, "%.0f%% of the invested book.", weight))
                 if (newsScore != 0) add("News tone ${if (newsScore > 0) "+" else ""}$newsScore over 5 days.")
             }
@@ -515,9 +520,9 @@ class PortfolioAdvisor(
                 whyPoints = whyPoints,
                 price = round2(price),
                 avgCost = round2(avgCost),
-                marketValue = round2(view.marketValue),
+                marketValue = round2(marketValue),
                 weightPct = round1(weight),
-                unrealizedPl = round2(view.unrealizedPl),
+                unrealizedPl = round2(unrealizedPl),
                 unrealizedPlPct = round1(plPct),
                 target = target,
                 stop = stop,

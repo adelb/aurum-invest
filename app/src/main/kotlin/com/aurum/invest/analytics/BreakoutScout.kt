@@ -104,15 +104,15 @@ class BreakoutScout(
             if (high20 <= 0.0) return null
             val dist = ((high20 - last) / high20 * 100.0).coerceAtLeast(0.0)
 
-            // Today's in-progress bar carries partial volume — read the surge
-            // off the last completed session, like the sector trend scan does.
+            // A live bar carries partial volume; after the close today's full
+            // session belongs in the read.
             val volumes = candles.map { it.volume.toDouble() }
-            val lastIsToday = Dates.sameDay(candles.last().ts, System.currentTimeMillis())
+            val lastIsIncomplete = Dates.isCurrentEtDailyBarIncomplete(candles.last().ts)
             val volIdx =
-                if (lastIsToday && volumes.size >= 2) volumes.size - 2
+                if (lastIsIncomplete && volumes.size >= 2) volumes.size - 2
                 else volumes.size - 1
             val volBase = volumes
-                .subList((volIdx - 19).coerceAtLeast(0), volIdx + 1)
+                .subList((volIdx - 20).coerceAtLeast(0), volIdx)
                 .filter { it > 0.0 }
             val volRatio =
                 if (volBase.isNotEmpty() && volumes[volIdx] > 0.0) {

@@ -110,11 +110,12 @@ object Notify {
      * extreme-probability gate. The body states the measured facts — the
      * analog record, the board, the levels — never a promise.
      */
-    fun nextSessionAlert(context: Context, picks: List<NextSessionPick>) {
-        if (picks.isEmpty()) return
+    fun nextSessionAlert(context: Context, picks: List<NextSessionPick>): Set<String> {
+        if (picks.isEmpty()) return emptySet()
         val compat = NotificationManagerCompat.from(context)
-        if (!compat.areNotificationsEnabled()) return
+        if (!compat.areNotificationsEnabled()) return emptySet()
         ensureNsChannel(context)
+        val delivered = LinkedHashSet<String>()
         picks.forEach { p ->
             val open = PendingIntent.getActivity(
                 context,
@@ -153,9 +154,11 @@ object Notify {
                 .build()
             try {
                 compat.notify(("ns" + p.symbol).hashCode(), notification)
+                delivered += p.symbol
             } catch (_: SecurityException) {
                 // Permission revoked mid-flight — the in-app card still shows it.
             }
         }
+        return delivered
     }
 }

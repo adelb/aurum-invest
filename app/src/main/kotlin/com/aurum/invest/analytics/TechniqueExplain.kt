@@ -1315,18 +1315,18 @@ object TechniqueExplain {
         val v = a.dpoData.dpo.lastOrNull { it != null }
         return TechniqueDetail(
             key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
-            whatItIs = "The Detrended Price Oscillator subtracts a displaced 20-day average from " +
-                "price, deliberately removing the longer trend so what remains is the short " +
-                "CYCLE — the rhythm of swings a few weeks long. Cycle traders use it to time " +
-                "entries inside a trend the other tools own.",
+            whatItIs = "The Detrended Price Oscillator subtracts today's 20-day average from " +
+                "the price 11 bars ago, centering the read inside that lookback to remove the " +
+                "longer trend. What remains is the short CYCLE — useful for measuring swing " +
+                "rhythm, but deliberately lagged rather than a live momentum trigger.",
             drawn = listOf(
-                "Gold line — DPO(20): price minus the 20-day average from 11 bars back.",
+                "Gold line — DPO(20): price 11 bars ago minus the current 20-day average.",
                 "Dashed line — zero: the cycle's midpoint."
             ),
             reading = buildList {
                 add(r.summary)
                 if (v != null && price > 0.0) {
-                    add("The cycle swing is worth ${fmt1(abs(v) / price * 100.0)}% of price right now.")
+                    add("The latest centered cycle reading is ${fmt1(abs(v) / price * 100.0)}% of current price.")
                 }
             },
             levels = buildList {
@@ -1337,12 +1337,12 @@ object TechniqueExplain {
                 TechniqueVerdict.BULLISH -> listOf(
                     "A rising cycle from below zero is the swing-entry window — buy the upswing, not the peak.",
                     "Measure past DPO peaks: the cycle tends to top near the same amplitude.",
-                    "Trade the cycle only in the direction of the larger trend."
+                    "The read is centered 11 bars back; require a live trend tool to confirm it before trading."
                 )
                 TechniqueVerdict.BEARISH -> listOf(
                     "A falling cycle from above zero says the short swing is rolling down — poor timing for fresh buys.",
                     "The zero recross from above usually runs to the prior trough's amplitude.",
-                    "Wait for the downswing to trough before timing the next entry."
+                    "Because DPO is centered 11 bars back, wait for a live trend tool to confirm the downswing."
                 )
                 TechniqueVerdict.NEUTRAL -> listOf(
                     "The cycle sits at its midpoint with no push — timing edge is absent.",
@@ -1516,12 +1516,12 @@ object TechniqueExplain {
             },
             playbook = when (r.verdict) {
                 TechniqueVerdict.BULLISH -> listOf(
-                    "Longs stay on while price holds above the green line — that line is the stop, placed the day you buy.",
-                    "The exit only rises as new highs print; never move it down to 'give the trade room'.",
+                    "A confirmed long regime sits above both exits; the green long line becomes the trailing stop.",
+                    "The line recalculates from the 22-day high and ATR; never loosen it manually to 'give the trade room'.",
                     "A close below the exit is the trade over — LeBeau's whole point is not to negotiate with it."
                 )
                 TechniqueVerdict.BEARISH -> listOf(
-                    "Price under the short exit keeps the downtrend's stop overhead — longs here fight the exit math.",
+                    "A confirmed short regime sits below both exits; the red short line is the stop overhead.",
                     "A close back above the red line is the cover/turn signal.",
                     "Fresh longs wait until the long exit is reclaimed and can be placed at a sane distance."
                 )

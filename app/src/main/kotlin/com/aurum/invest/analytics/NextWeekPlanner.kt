@@ -207,46 +207,51 @@ class NextWeekPlanner(
         return try {
             if (investable < 0.0) return null
 
-            // 1 — sectors to look at next week, by measured money flow when
-            // available: inflows first, then the strongest of the rest.
+            // 1 — sectors to look at next week. When money flow is measured,
+            // only CONFIRMED inflows are investable; balanced/outflow sectors
+            // remain in the flow report, never a source of buy recommendations.
             val sectors: List<NextWeekSector>
             val topKeys: List<String>
             if (flow != null && flow.sectors.isNotEmpty()) {
-                val ordered = (flow.inflows + flow.sectors.filter { it.verdict != FlowVerdict.INFLOW })
-                    .distinctBy { it.key }
-                    .take(3)
+                val ordered = flow.inflows.distinctBy { it.key }.take(3)
                 sectors = ordered.map { s ->
-                    val verdictNote = when (s.verdict) {
-                        FlowVerdict.INFLOW -> "money is measurably flowing in"
-                        FlowVerdict.OUTFLOW -> "money is measurably leaving — watch, don't chase"
-                        FlowVerdict.NEUTRAL -> "flows are balanced"
-                    }
                     NextWeekSector(
                         key = s.key, label = s.label, etf = s.etf,
                         r5Pct = s.r5Pct, newsTone = s.newsTone,
-                        note = "Flow ${s.flowScore}/100 — $verdictNote. ${s.reason}."
+                        note = "Flow ${s.flowScore}/100 — money is measurably flowing in. ${s.reason}."
                     )
                 }
                 topKeys = ordered.map { it.key }
-            } else {
-                val trends = sectorTrends ?: SectorTrends(market, news).compute()
-                val topTrends = trends.take(3)
-                sectors = topTrends.map { t ->
-                    NextWeekSector(
-                        key = t.key, label = t.label, etf = t.etf,
-                        r5Pct = t.r5Pct, newsTone = t.newsTone,
-                        note = t.reason.ifBlank {
-                            String.format(Locale.US, "%+.1f%% in 5 days on %s.", t.r5Pct, t.etf)
-                        }
+                if (topKeys.isEmpty()) {
+                    return cashOnlyPlan(
+                        weekStart = weekStart,
+                        investable = investable,
+                        held = held,
+                        pulse = pulse,
+                        reason = "No sector has a confirmed inflow for next week.",
+                        flowMeasured = true
                     )
                 }
-                topKeys = topTrends.map { it.key }
+            } else {
+                return cashOnlyPlan(
+                    weekStart = weekStart,
+                    investable = investable,
+                    held = held,
+                    pulse = pulse,
+                    reason = "Money flow could not be verified for next week.",
+                    flowMeasured = false
+                )
             }
 
             // 2 — candidate pool: the whole market via the saved screens,
             // plus the leading themes' watch names so a trending theme is
             // represented even when no screen happens to surface it.
             val pool = LinkedHashMap<String, String>()
+            topKeys.flatMap { SectorTrends.WATCH[it].orEmpty() }
+                .forEach { (sym, name) -> pool.putIfAbsent(sym, name) }
+            StockCatalog.SECTORS.filter { it.themeKey in topKeys }
+                .flatMap { it.stocks }
+                .forEach { (sym, name) -> pool.putIfAbsent(sym, name) }
             for (chunk in EntryPicker.MARKET_SCREENS.chunked(4)) {
                 val results = coroutineScope {
                     chunk.map { scr ->
@@ -267,8 +272,6 @@ class NextWeekPlanner(
                     if (ok) pool.putIfAbsent(q.symbol, q.name)
                 }
             }
-            topKeys.flatMap { SectorTrends.WATCH[it].orEmpty() }
-                .forEach { (sym, name) -> pool.putIfAbsent(sym, name) }
             if (pool.isEmpty()) return null
 
             // Bound the cheap screen: the most liquid screen names already
@@ -368,10 +371,10 @@ class NextWeekPlanner(
                     "Place every stop with its buy. This preview is next Monday's plan " +
                         "taking shape — it re-ranks until the open, never a promise."
                 ),
-                caveat = "Built ${Dates.todayLabel()} from the whole-market screens, sector " +
-                    "momentum, news tone, the 35-technique board, and the latest pre/post-market " +
-                    "prints. Numbers refresh until Monday's open; projections are dampened " +
-                    "extrapolations, not promises."
+                caveat = "Built ${Dates.todayLabel()} from confirmed sector money flow, " +
+                    "whole-market screens, news tone, the 35-technique board, and the latest " +
+                    "pre/post-market prints. Numbers refresh until Monday's open; projections " +
+                    "are dampened extrapolations, not promises."
             )
         } catch (_: Exception) {
             null
@@ -407,8 +410,9 @@ class NextWeekPlanner(
         val rsi = Indicators.rsi(closes) ?: return null
 
         val volumes = candles.map { it.volume.toDouble() }
-        val lastIsToday = Dates.sameEtDay(candles.last().ts, System.currentTimeMillis())
-        val volEnd = if (lastIsToday && volumes.size >= 2) volumes.size - 1 else volumes.size
+        val lastIsIncomplete = Dates.isCurrentEtDailyBarIncomplete(candles.last().ts)
+        val volEnd =
+            if (lastIsIncomplete && volumes.size >= 2) volumes.size - 1 else volumes.size
         val vol5 = volumes.subList((volEnd - 5).coerceAtLeast(0), volEnd).average()
         val prior = volumes.subList((volEnd - 25).coerceAtLeast(0), (volEnd - 5).coerceAtLeast(1))
         val volumeRatio = if (prior.isNotEmpty() && prior.average() > 0.0) vol5 / prior.average() else 1.0
@@ -416,8 +420,9 @@ class NextWeekPlanner(
         val high20 = Indicators.recentHigh(closes, 20) ?: last
         val distFromHigh = if (high20 > 0.0) (high20 - last) / high20 * 100.0 else 0.0
 
-        val theme = SectorTrends.SYMBOL_THEME[symbol]
+        val theme = SectorTrends.SYMBOL_THEME[symbol] ?: StockCatalog.SYMBOL_THEME[symbol]
         val sectorKey = theme?.first
+        if (topKeys.isNotEmpty() && sectorKey !in topKeys) return null
         val sectorBoost = when (topKeys.indexOf(sectorKey)) {
             0 -> 8.0
             1 -> 5.0
@@ -475,6 +480,7 @@ class NextWeekPlanner(
             }
             val price = ext?.livePrice ?: quote?.price ?: candles.last().close
             if (price <= 0.0) return null
+            if (analysis.outlook.expectedHigh <= price * 1.005) return null
 
             val extNote = when {
                 ext?.preMarketPct != null && abs(ext.preMarketPct) >= 1.0 ->
@@ -522,6 +528,46 @@ class NextWeekPlanner(
         }
     }
 
+    private fun cashOnlyPlan(
+        weekStart: String,
+        investable: Double,
+        held: Map<String, Double>,
+        pulse: MarketRating?,
+        reason: String,
+        flowMeasured: Boolean
+    ): NextWeekPlan {
+        val marketNote = pulse?.let {
+            "Market pulse ${it.score}/100 — ${it.call}. ${it.headline}"
+        }.orEmpty()
+        return NextWeekPlan(
+            weekStart = weekStart,
+            builtOn = Dates.todayIso(),
+            updatedAt = System.currentTimeMillis(),
+            headline = "$reason Keep new buying power in cash.",
+            marketNote = marketNote,
+            sectors = emptyList(),
+            stocks = emptyList(),
+            investable = investable,
+            cashLeft = investable,
+            portfolioNote = if (held.isEmpty()) {
+                ""
+            } else {
+                "Your current positions stay under the portfolio review; this preview adds no new exposure."
+            },
+            actions = listOf(
+                "Do not force a Monday buy list when dollar volume, CMF, MFI, and OBV do not confirm an inflow.",
+                "Re-run the preview after the next completed session; a sector must clear the money-flow gate before its stocks can qualify."
+            ),
+            caveat = if (flowMeasured) {
+                "A cash result is a valid engine result, not missing data. The flow report " +
+                    "was measured, but no sector cleared the 3-of-4 confirmation rule."
+            } else {
+                "No sector or stock recommendation is issued until the S&P baseline and sector " +
+                    "money-flow inputs can all be measured."
+            }
+        )
+    }
+
     private fun toStock(
         d: Deep,
         amount: Double,
@@ -530,9 +576,9 @@ class NextWeekPlanner(
         heldDollars: Double?
     ): NextWeekStock {
         val entry = round2(d.price)
-        // Next-week objective: the technique board's 5-day expected high,
-        // never less than +1% above entry so the trade has a reason to exist.
-        val target = round2(max(d.expectedHigh, entry * 1.01))
+        // The deep-read gate already proved that the board's measured range
+        // offers upside; never manufacture a minimum target.
+        val target = round2(d.expectedHigh)
         val expectedPct = round1((target / entry - 1.0) * 100.0)
         val structural = d.supports.filter { it < entry }.maxOrNull()
         val stop = round2(

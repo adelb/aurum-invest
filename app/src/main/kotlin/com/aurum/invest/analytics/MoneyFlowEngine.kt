@@ -162,7 +162,9 @@ class MoneyFlowEngine(
             } catch (_: Exception) {
                 emptyList()
             }
-            val spyR20 = r20Of(spyCandles) ?: 0.0
+            // Relative strength is a core input. Without a measured S&P
+            // baseline, substituting zero would overstate every rising sector.
+            val spyR20 = r20Of(spyCandles) ?: return null
 
             // 1 — every sector ETF's raw flow read, in parallel.
             val raw = coroutineScope {
@@ -301,9 +303,10 @@ class MoneyFlowEngine(
             val r5 = if (closes[n - 6] > 0.0) (last / closes[n - 6] - 1.0) * 100.0 else 0.0
             val r20 = r20Of(candles) ?: return null
 
-            // Exclude today's partial bar from every volume-based read.
-            val lastIsToday = Dates.sameEtDay(candles.last().ts, System.currentTimeMillis())
-            val complete = if (lastIsToday && candles.size >= 2) candles.dropLast(1) else candles
+            // Exclude a live partial bar, but keep today's bar after the close.
+            val lastIsIncomplete = Dates.isCurrentEtDailyBarIncomplete(candles.last().ts)
+            val complete =
+                if (lastIsIncomplete && candles.size >= 2) candles.dropLast(1) else candles
 
             val cmf = cmf20(complete) ?: 0.0
             val mfi = mfi14(complete) ?: 50.0

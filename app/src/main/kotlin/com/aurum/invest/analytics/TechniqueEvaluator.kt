@@ -95,6 +95,9 @@ object TechniqueEvaluator {
     /** Forward horizon each verdict is graded against, matching the 5-day outlook. */
     const val HORIZON_DAYS = 5
 
+    /** 30 warm-up bars, the full replay, and five forward bars to grade it. */
+    const val MIN_CANDLES_FOR_FULL_REPLAY = LOOKBACK_DAYS + HORIZON_DAYS + 29
+
     /** Minimum move (percent) in the called direction to count as a hit. */
     const val MOVE_DEADBAND_PCT = 0.5
 
@@ -116,11 +119,12 @@ object TechniqueEvaluator {
     /**
      * Replays the last [LOOKBACK_DAYS] sessions of [candles] (daily, oldest
      * first — the same list the analysis screen already fetches) and grades
-     * every technique. Null when there is not enough history to replay a
-     * single day (needs 30 candles for the board plus the forward window).
+     * every technique. Null unless a complete 252-session replay can be
+     * graded after the board's warm-up and five-session forward window.
      */
     fun evaluate(symbol: String, candles: List<Candle>): TechniqueEvaluation? {
         val n = candles.size
+        if (n < MIN_CANDLES_FOR_FULL_REPLAY) return null
         val lastEval = n - 1 - HORIZON_DAYS
         // analyze() needs >= 30 candles, i.e. as-of index >= 29.
         val firstEval = max(29, lastEval - LOOKBACK_DAYS + 1)
@@ -130,9 +134,18 @@ object TechniqueEvaluator {
         var days = 0
         for (t in firstEval..lastEval) {
             val base = candles[t].close
-            if (base <= 0.0) continue
+            val forward = candles[t + HORIZON_DAYS].close
+            if (!base.isFinite() || base <= 0.0 || !forward.isFinite() || forward <= 0.0) {
+                continue
+            }
             val analysis = Techniques.analyze(symbol, candles.subList(0, t + 1)) ?: continue
-            val movePct = (candles[t + HORIZON_DAYS].close - base) / base * 100.0
+            if (
+                analysis.results.size != Techniques.TECHNIQUE_COUNT ||
+                analysis.results.map { it.key }.toSet().size != Techniques.TECHNIQUE_COUNT
+            ) {
+                continue
+            }
+            val movePct = (forward - base) / base * 100.0
             days++
             for (r in analysis.results) {
                 val tally = tallies.getOrPut(r.key) { Tally(r.name) }
@@ -151,7 +164,7 @@ object TechniqueEvaluator {
                 }
             }
         }
-        if (days == 0 || tallies.isEmpty()) return null
+        if (days != LOOKBACK_DAYS || tallies.size != Techniques.TECHNIQUE_COUNT) return null
 
         val scores = tallies.map { (key, t) ->
             val rate = if (t.signals > 0) (t.hits * 100.0 / t.signals).roundToInt() else 0
@@ -170,8 +183,25 @@ object TechniqueEvaluator {
             daysEvaluated = days,
             horizonDays = HORIZON_DAYS,
             scores = scores
-        )
+        ).takeIf { isComplete(it, symbol) }
     }
+
+    fun isComplete(evaluation: TechniqueEvaluation, symbol: String = evaluation.symbol): Boolean =
+        evaluation.symbol.isNotBlank() &&
+            evaluation.symbol.equals(symbol, ignoreCase = true) &&
+            evaluation.daysEvaluated == LOOKBACK_DAYS &&
+            evaluation.horizonDays == HORIZON_DAYS &&
+            evaluation.scores.size == Techniques.TECHNIQUE_COUNT &&
+            evaluation.scores.map { it.key }.toSet().size == Techniques.TECHNIQUE_COUNT &&
+            evaluation.scores.all {
+                it.key.isNotBlank() &&
+                    it.signals in 0..LOOKBACK_DAYS &&
+                    it.hits in 0..it.signals &&
+                    it.hitRate in 0..100 &&
+                    it.avgMovePct.isFinite() &&
+                    it.trusted ==
+                    (it.signals >= MIN_SIGNALS && it.hitRate >= TRUST_HIT_RATE)
+            }
 
     // ---- JSON (for the on-device cache) ------------------------------------
 
@@ -216,13 +246,12 @@ object TechniqueEvaluator {
                 )
             )
         }
-        if (scores.isEmpty()) null
-        else TechniqueEvaluation(
+        TechniqueEvaluation(
             symbol = root.getString("symbol"),
             daysEvaluated = root.optInt("days", 0),
             horizonDays = root.optInt("horizon", HORIZON_DAYS),
             scores = scores
-        )
+        ).takeIf { isComplete(it) }
     } catch (_: Exception) {
         null
     }

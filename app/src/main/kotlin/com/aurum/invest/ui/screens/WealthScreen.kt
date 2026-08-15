@@ -70,6 +70,7 @@ import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
+import com.aurum.invest.ui.components.AlertPermissionCard
 import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.PillTag
 import com.aurum.invest.ui.components.ScoreBar
@@ -178,8 +179,20 @@ private fun WealthContent(
                 state.bookLoaded && state.book.isEmpty -> {
                     item { ReviewEmptyCard() }
                 }
-                state.review == null -> {
+                state.review == null && state.reviewLoading -> {
                     item { LoadingCard("Reading every holding through the 35-technique board…") }
+                }
+                state.review == null -> {
+                    item {
+                        AurumCard {
+                            Text(
+                                text = "The portfolio review could not verify every holding from " +
+                                    "current market data. Pull down to retry; no stale verdict is shown.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AurumColors.textDim
+                            )
+                        }
+                    }
                 }
                 else -> {
                     val review = state.review
@@ -210,6 +223,14 @@ private fun WealthContent(
             ) { toggle("nextsession") }
         }
         if (open("nextsession")) {
+            item {
+                AlertPermissionCard(
+                    enabledText = "Extreme next-session alerts are on — checked after the close and pre-open.",
+                    title = "Get the extreme setup alert",
+                    message = "Allow notifications and Aurum will alert you when a stock clears " +
+                        "every score, analog-history, and 35-technique confidence gate."
+                )
+            }
             val ns = state.nextSession
             when {
                 ns == null && state.nextSessionLoading -> {

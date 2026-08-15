@@ -27,7 +27,8 @@ data class AnalysisState(
     val price: Double? = null,
     val plan: BuyPlan? = null,
     /** Measured 1-year track record per technique; null while it computes. */
-    val evaluation: TechniqueEvaluation? = null
+    val evaluation: TechniqueEvaluation? = null,
+    val evaluationLoading: Boolean = false
 )
 
 class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
@@ -43,7 +44,7 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
         /** Versioned: a grade stored for an older board must never score this one. */
-        private const val EVAL_KEY_PREFIX = "techeval:v3:"
+        private const val EVAL_KEY_PREFIX = "techeval:v5:"
 
         /** The back-test replays daily closes; a run stays valid for a session. */
         private const val EVAL_MAX_AGE_MS = 6L * 3_600_000L
@@ -72,7 +73,9 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
     private fun load(sym: String) {
         job?.cancel()
         job = viewModelScope.launch {
-            _state.update { it.copy(loading = true) }
+            _state.update {
+                it.copy(loading = true, evaluation = null, evaluationLoading = false)
+            }
             // Two years of dailies: the 200-day average, plus a full-year
             // integrity replay with honest warm-up for every replayed day.
             val candles = try {
@@ -98,7 +101,10 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
                     loading = false,
                     analysis = analysis,
                     price = price,
-                    plan = plan
+                    plan = plan,
+                    evaluationLoading =
+                        analysis != null &&
+                            candles.size >= TechniqueEvaluator.MIN_CANDLES_FOR_FULL_REPLAY
                 )
             }
 
@@ -107,20 +113,35 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
             // outlook is re-voted with each technique weighted by its own
             // measured hit rate on this stock, and the board reorders so the
             // top-ranked techniques lead.
-            if (analysis == null || candles.size < 40) return@launch
-            val evaluation = loadEvaluation(sym, candles) ?: return@launch
+            if (
+                analysis == null ||
+                candles.size < TechniqueEvaluator.MIN_CANDLES_FOR_FULL_REPLAY
+            ) {
+                return@launch
+            }
+            val evaluation = loadEvaluation(sym, candles)
+            if (evaluation == null) {
+                _state.update { st ->
+                    if (st.symbol != sym) st else st.copy(evaluationLoading = false)
+                }
+                return@launch
+            }
             val weighted = withContext(Dispatchers.Default) {
                 runCatching { Techniques.analyze(sym, candles, evaluation.weights()) }.getOrNull()
             }
             _state.update { st ->
                 // Ignore a result that raced a newer symbol load.
                 if (st.symbol != sym) st
-                else st.copy(evaluation = evaluation, analysis = weighted ?: st.analysis)
+                else st.copy(
+                    evaluation = evaluation,
+                    analysis = weighted ?: st.analysis,
+                    evaluationLoading = false
+                )
             }
         }
     }
 
-    /** Cached 3-month evaluation, recomputed off the main thread when stale. */
+    /** Cached 12-month evaluation, recomputed off the main thread when stale. */
     private suspend fun loadEvaluation(
         sym: String,
         candles: List<com.aurum.invest.data.model.Candle>
@@ -132,7 +153,9 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
             null
         }
         if (cached != null && System.currentTimeMillis() - cached.updatedAt <= EVAL_MAX_AGE_MS) {
-            TechniqueEvaluator.fromJson(cached.json)?.let { return it }
+            TechniqueEvaluator.fromJson(cached.json)
+                ?.takeIf { TechniqueEvaluator.isComplete(it, sym) }
+                ?.let { return it }
         }
         val fresh = withContext(Dispatchers.Default) {
             runCatching { TechniqueEvaluator.evaluate(sym, candles) }.getOrNull()
@@ -151,7 +174,7 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
             }
             return fresh
         }
-        // Fresh run failed — a stale stored grade beats nothing.
-        return cached?.let { TechniqueEvaluator.fromJson(it.json) }
+        // Never present an expired grade as if it measured the current board.
+        return null
     }
 }

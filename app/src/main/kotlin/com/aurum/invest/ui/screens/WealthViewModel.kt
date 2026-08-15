@@ -60,6 +60,8 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
 
     private var strategyJob: Job? = null
     private var reviewJob: Job? = null
+    private var nextSessionJob: Job? = null
+    private var previewJob: Job? = null
 
     init {
         // The money-flow report first — the strategy and review lean on it.
@@ -71,10 +73,6 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
             val pulse = wealth.getMarketPulse()
             _state.update { it.copy(pulse = pulse, pulseLoading = false) }
         }
-        viewModelScope.launch {
-            val ns = wealth.getNextSession()
-            _state.update { it.copy(nextSession = ns, nextSessionLoading = false) }
-        }
         // The user's book, kept live so the review survives new trades.
         viewModelScope.launch {
             container.portfolio.observePositions().collectLatest { positions ->
@@ -83,28 +81,37 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                     _state.update {
                         it.copy(
                             book = BookContext.EMPTY, bookLoaded = true,
-                            review = null, reviewLoading = false
+                            review = null, reviewLoading = false,
+                            strategy = null,
+                            nextSession = null, preview = null
                         )
                     }
                     refreshStrategy()
+                    refreshNextSession()
+                    refreshPreview()
                     return@collectLatest
                 }
                 val quotes = container.market.getQuotes(open.map { it.symbol })
                 val views = open.map { PortfolioRepository.toView(it, quotes[it.symbol]) }
                 val sectors = container.market.getSectors(open.map { it.symbol })
                 _state.update {
-                    it.copy(book = PortfolioLens.build(views, sectors), bookLoaded = true)
+                    it.copy(
+                        book = PortfolioLens.build(views, sectors),
+                        bookLoaded = true,
+                        // A ledger change invalidates every portfolio-aware
+                        // output. Never leave the prior book's advice visible.
+                        review = null,
+                        reviewLoading = true,
+                        strategy = null,
+                        nextSession = null,
+                        preview = null
+                    )
                 }
                 refreshStrategy()
                 refreshReview()
+                refreshNextSession()
+                refreshPreview()
             }
-        }
-        // The Thursday→Monday next-week preview, on its own clock.
-        viewModelScope.launch {
-            val (active, _) = Dates.nextWeekPreview()
-            _state.update { it.copy(previewWindowActive = active, previewLoading = active) }
-            val preview = wealth.ensureNextWeek()
-            _state.update { it.copy(preview = preview, previewLoading = false) }
         }
     }
 
@@ -130,33 +137,76 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Re-applies current holdings to the cached market scan without stale tags. */
+    private fun refreshNextSession() {
+        nextSessionJob?.cancel()
+        nextSessionJob = viewModelScope.launch {
+            _state.update { it.copy(nextSessionLoading = true) }
+            val nextSession = wealth.getNextSession()
+            _state.update {
+                it.copy(nextSession = nextSession ?: it.nextSession, nextSessionLoading = false)
+            }
+        }
+    }
+
+    /** The preview cache is fingerprinted to the current positions and cost basis. */
+    private fun refreshPreview() {
+        previewJob?.cancel()
+        previewJob = viewModelScope.launch {
+            val (active, _) = Dates.nextWeekPreview()
+            _state.update {
+                it.copy(previewWindowActive = active, previewLoading = active)
+            }
+            val preview = wealth.ensureNextWeek()
+            _state.update {
+                it.copy(preview = preview ?: it.preview, previewLoading = false)
+            }
+        }
+    }
+
     /** Re-runs every engine from live data. */
     fun refresh() {
         if (_state.value.refreshing) return
         _state.update { it.copy(refreshing = true) }
+        strategyJob?.cancel()
+        reviewJob?.cancel()
+        nextSessionJob?.cancel()
+        previewJob?.cancel()
         viewModelScope.launch {
-            _state.update { it.copy(flowLoading = true, pulseLoading = true) }
-            val flow = wealth.recomputeMoneyFlow()
-            _state.update { it.copy(flow = flow ?: it.flow, flowLoading = false) }
-            val pulse = wealth.recomputeMarketPulse()
-            _state.update { it.copy(pulse = pulse ?: it.pulse, pulseLoading = false) }
-            refreshStrategy()
+            try {
+                _state.update { it.copy(flowLoading = true, pulseLoading = true) }
+                val flow = wealth.recomputeMoneyFlow()
+                _state.update { it.copy(flow = flow ?: it.flow, flowLoading = false) }
+                val pulse = wealth.recomputeMarketPulse()
+                _state.update { it.copy(pulse = pulse ?: it.pulse, pulseLoading = false) }
 
-            _state.update { it.copy(reviewLoading = true) }
-            val review = wealth.recomputePortfolioReview()
-            _state.update { it.copy(review = review ?: it.review, reviewLoading = false) }
+                _state.update { it.copy(strategyLoading = true) }
+                val strategy = wealth.getStrategy(_state.value.book)
+                _state.update {
+                    it.copy(strategy = strategy ?: it.strategy, strategyLoading = false)
+                }
 
-            _state.update { it.copy(nextSessionLoading = true) }
-            val ns = wealth.recomputeNextSession()
-            _state.update { it.copy(nextSession = ns ?: it.nextSession, nextSessionLoading = false) }
+                _state.update { it.copy(reviewLoading = true) }
+                val review = wealth.recomputePortfolioReview()
+                _state.update { it.copy(review = review ?: it.review, reviewLoading = false) }
 
-            val (active, _) = Dates.nextWeekPreview()
-            if (active) {
-                _state.update { it.copy(previewWindowActive = true, previewLoading = true) }
-                val preview = wealth.recomputeNextWeek()
-                _state.update { it.copy(preview = preview ?: it.preview, previewLoading = false) }
+                _state.update { it.copy(nextSessionLoading = true) }
+                val ns = wealth.recomputeNextSession()
+                _state.update {
+                    it.copy(nextSession = ns ?: it.nextSession, nextSessionLoading = false)
+                }
+
+                val (active, _) = Dates.nextWeekPreview()
+                if (active) {
+                    _state.update { it.copy(previewWindowActive = true, previewLoading = true) }
+                    val preview = wealth.recomputeNextWeek()
+                    _state.update {
+                        it.copy(preview = preview ?: it.preview, previewLoading = false)
+                    }
+                }
+            } finally {
+                _state.update { it.copy(refreshing = false) }
             }
-            _state.update { it.copy(refreshing = false) }
         }
     }
 }

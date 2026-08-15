@@ -1,5 +1,6 @@
 package com.aurum.invest.analytics
 
+import com.aurum.invest.core.Dates
 import com.aurum.invest.data.repo.MarketRepository
 import com.aurum.invest.data.repo.NewsRepository
 import java.util.Locale
@@ -461,12 +462,16 @@ class SectorStrategy(
                 (price / closes[n - 4] - 1.0) * 100.0
             } else 0.0
 
-            // Latest completed session's volume vs its 20-day average. The
-            // newest bar can be a partial live session with almost no volume
-            // yet — fall back to the bar before it when that happens.
+            // Latest completed session's volume vs its prior 20-day average.
+            // Exclude a live partial bar, but keep today's bar after the close.
             val volumes = candles.map { it.volume }
             var volIdx = n - 1
-            if (volIdx > 0 && volumes[volIdx] <= 0L) volIdx--
+            if (
+                volIdx > 0 &&
+                (Dates.isCurrentEtDailyBarIncomplete(candles.last().ts) || volumes[volIdx] <= 0L)
+            ) {
+                volIdx--
+            }
             val volBase = volumes.subList((volIdx - 20).coerceAtLeast(0), volIdx)
                 .filter { it > 0L }
             val volumeRatio =

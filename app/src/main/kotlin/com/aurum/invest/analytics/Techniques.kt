@@ -144,7 +144,7 @@ data class ForceData(val force: List<Double?>)
 /** Chande Momentum Oscillator (14), -100..+100. */
 data class CmoData(val cmo: List<Double?>)
 
-/** Detrended Price Oscillator (20), non-centered: close minus the mid-shifted average. */
+/** DPO(20): the shifted historical close minus the current 20-session average. */
 data class DpoData(val dpo: List<Double?>)
 
 /** Martin Pring's Know Sure Thing: four weighted smoothed ROCs plus an SMA(9) signal. */
@@ -254,6 +254,8 @@ data class TechniqueAnalysis(
 
 object Techniques {
 
+    const val TECHNIQUE_COUNT = 35
+
     private const val MIN_CANDLES = 30
     private const val SERIES_MAX = 120
     private const val SR_LOOKBACK = 90
@@ -272,7 +274,7 @@ object Techniques {
     /**
      * Null when fewer than 30 daily candles are supplied. Uses the last <= 120 candles.
      *
-     * [accuracyWeights] — optional measured 3-month hit rate (0..100) per technique
+     * [accuracyWeights] — optional measured 12-month hit rate (0..100) per technique
      * key, from [TechniqueEvaluator]. When present, each technique's outlook vote
      * is scaled by its own track record on this stock, so proven techniques speak
      * louder and coin-flip ones quieter. Verdicts and strengths are unchanged.
@@ -370,7 +372,7 @@ object Techniques {
             vortexResult(n, vortexData),
             forceResult(n, forceData, price),
             cmoResult(n, cmoData),
-            dpoResult(n, price, dpoData),
+            dpoResult(n, closes, dpoData),
             kstResult(n, kstData),
             hullResult(price, hullData),
             supertrendResult(price, supertrendData),
@@ -1767,7 +1769,7 @@ object Techniques {
         if (k == null || d == null) {
             return TechniqueResult(
                 "stochrsi", name, TechniqueVerdict.NEUTRAL, 20,
-                "Needs 33 daily candles for StochRSI(14,14,3,3); $n available."
+                "Needs 32 daily candles for StochRSI(14,14,3,3); $n available."
             )
         }
         return when {
@@ -1872,7 +1874,7 @@ object Techniques {
         if (t == null || s == null) {
             return TechniqueResult(
                 "trix", name, TechniqueVerdict.NEUTRAL, 20,
-                "Needs 55 daily candles for TRIX(15) and its signal; $n available."
+                "Needs 52 daily candles for TRIX(15) and its signal; $n available."
             )
         }
         val prev = if (data.trix.size >= 2) data.trix[data.trix.size - 2] else null
@@ -2160,49 +2162,53 @@ object Techniques {
 
     // -- technique 28: Detrended Price Oscillator ----------------------------
 
-    /** Non-centered DPO(20): close minus the SMA(20) from (20/2 + 1) bars back. */
+    /** DPO(20): price (20/2 + 1) bars ago minus today's SMA(20). */
     private fun dpoSeries(closes: List<Double>, period: Int): List<Double?> {
         val n = closes.size
         val out = arrayOfNulls<Double>(n)
         val shift = period / 2 + 1
         val sma = smaSeries(closes, period)
-        for (i in 0 until n) {
-            val idx = i - shift
-            if (idx >= 0) {
-                val m = sma[idx]
-                if (m != null) out[i] = closes[i] - m
+        for (smaIndex in period - 1 until n) {
+            val priceIndex = smaIndex - shift
+            if (priceIndex >= 0) {
+                val m = sma[smaIndex]
+                if (m != null) out[priceIndex] = closes[priceIndex] - m
             }
         }
         return out.toList()
     }
 
-    private fun dpoResult(n: Int, price: Double, data: DpoData): TechniqueResult {
+    private fun dpoResult(n: Int, closes: List<Double>, data: DpoData): TechniqueResult {
         val name = "Detrended Price"
-        val d = data.dpo.last()
-            ?: return TechniqueResult(
+        val lastIndex = data.dpo.indexOfLast { it != null }
+        if (lastIndex < 0) {
+            return TechniqueResult(
                 "dpo", name, TechniqueVerdict.NEUTRAL, 20,
-                "Needs 31 daily candles for DPO(20); $n available."
+                "Needs 20 daily candles for DPO(20); $n available."
             )
-        val prev = if (data.dpo.size >= 2) data.dpo[data.dpo.size - 2] else null
+        }
+        val d = data.dpo[lastIndex]!!
+        val prev = (lastIndex - 1 downTo 0).firstNotNullOfOrNull { data.dpo[it] }
         val rising = prev != null && d > prev
         val falling = prev != null && d < prev
-        val pct = if (price > 0.0) d / price * 100.0 else 0.0
+        val centeredPrice = closes.getOrNull(lastIndex) ?: 0.0
+        val pct = if (centeredPrice > 0.0) d / centeredPrice * 100.0 else 0.0
         return when {
             d > 0.0 && rising -> TechniqueResult(
                 "dpo", name, TechniqueVerdict.BULLISH,
                 (55.0 + min(20.0, abs(pct) * 6.0)).roundToInt().coerceIn(55, 85),
-                "DPO(20) at ${fmtSig(d)} (${fmt1(pct)}% of price), positive and rising — " +
-                    "the short cycle is on its upswing."
+                "DPO(20), centered 11 bars back, is ${fmtSig(d)} (${fmt1(pct)}% of price), " +
+                    "positive and rising — the measured cycle component is on an upswing."
             )
             d < 0.0 && falling -> TechniqueResult(
                 "dpo", name, TechniqueVerdict.BEARISH,
                 (55.0 + min(20.0, abs(pct) * 6.0)).roundToInt().coerceIn(55, 85),
-                "DPO(20) at ${fmtSig(d)} (${fmt1(pct)}% of price), negative and falling — " +
-                    "the short cycle is on its downswing."
+                "DPO(20), centered 11 bars back, is ${fmtSig(d)} (${fmt1(pct)}% of price), " +
+                    "negative and falling — the measured cycle component is on a downswing."
             )
             else -> TechniqueResult(
                 "dpo", name, TechniqueVerdict.NEUTRAL, 30,
-                "DPO(20) at ${fmtSig(d)} with no cycle push — price hugs its detrended average."
+                "DPO(20), centered 11 bars back, is ${fmtSig(d)} with no cycle push."
             )
         }
     }
@@ -2294,7 +2300,7 @@ object Techniques {
         if (h == null || prev == null) {
             return TechniqueResult(
                 "hull", name, TechniqueVerdict.NEUTRAL, 20,
-                "Needs 25 daily candles for HMA(20); $n available."
+                "Needs 23 daily candles for HMA(20); $n available."
             )
         }
         val rising = h > prev
@@ -2433,23 +2439,27 @@ object Techniques {
                 "Needs 23 daily candles for the 22-bar, 3x ATR exits; ${data.closes.size} available."
             )
         }
+        val lowerExit = min(long, short)
+        val upperExit = max(long, short)
         return when {
-            price > long -> {
-                val cushion = if (price > 0.0) (price - long) / price * 100.0 else 0.0
+            price > upperExit -> {
+                val cushion = if (price > 0.0) (price - upperExit) / price * 100.0 else 0.0
                 TechniqueResult(
                     "chandelier", name, TechniqueVerdict.BULLISH,
                     (55.0 + min(25.0, cushion * 3.0)).roundToInt().coerceIn(55, 88),
-                    "Close ${Fmt.money(price)} holds ${fmt1(cushion)}% above the long exit " +
-                        "${Fmt.money(long)} — LeBeau's trailing stop has not fired; longs stay on."
+                    "Close ${Fmt.money(price)} cleared both exits, including the short exit " +
+                        "${Fmt.money(short)}, by ${fmt1(cushion)}% — the long regime is confirmed; " +
+                        "the long stop is ${Fmt.money(long)}."
                 )
             }
-            price < short -> {
-                val cushion = if (price > 0.0) (short - price) / price * 100.0 else 0.0
+            price < lowerExit -> {
+                val cushion = if (price > 0.0) (lowerExit - price) / price * 100.0 else 0.0
                 TechniqueResult(
                     "chandelier", name, TechniqueVerdict.BEARISH,
                     (55.0 + min(25.0, cushion * 3.0)).roundToInt().coerceIn(55, 88),
-                    "Close ${Fmt.money(price)} sits ${fmt1(cushion)}% below the short exit " +
-                        "${Fmt.money(short)} — the downtrend's trailing stop has not fired either way up."
+                    "Close ${Fmt.money(price)} broke both exits, including the long exit " +
+                        "${Fmt.money(long)}, by ${fmt1(cushion)}% — the short regime is confirmed; " +
+                        "the short stop is ${Fmt.money(short)}."
                 )
             }
             else -> TechniqueResult(
@@ -2703,7 +2713,7 @@ object Techniques {
         val bearishCount = results.count { it.verdict == TechniqueVerdict.BEARISH }
         val neutralCount = results.count { it.verdict == TechniqueVerdict.NEUTRAL }
 
-        // Vote weight = strength, scaled by the technique's measured 3-month
+        // Vote weight = strength, scaled by the technique's measured 12-month
         // hit rate on this stock when available: a 75%-accurate technique
         // speaks at 1.25x, a 25% one at 0.75x. Without evaluation data every
         // technique keeps its plain strength.
@@ -2766,7 +2776,7 @@ object Techniques {
 
         val voteBasis =
             if (accuracyWeights.isNullOrEmpty()) "strength-weighted votes."
-            else "votes, weighted by strength and each technique's measured 3-month accuracy on this stock."
+            else "votes, weighted by strength and each technique's measured 12-month accuracy on this stock."
         val summary = listOf(
             "$bullishCount of ${results.size} techniques read bullish, $bearishCount bearish, $neutralCount neutral.",
             "The leading side holds $confidence% of the $voteBasis",

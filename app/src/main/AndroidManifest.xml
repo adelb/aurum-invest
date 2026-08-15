@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- U-pattern buy-zone alerts (runtime-granted on Android 13+). -->
+    <!-- U-pattern and next-session alerts (runtime-granted on Android 13+). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application

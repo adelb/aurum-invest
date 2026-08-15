@@ -196,19 +196,23 @@ class SectorTrends(
                             if (last <= 0.0 || c5 <= 0.0 || c20 <= 0.0) return@async null
                             val r5 = (last / c5 - 1.0) * 100.0
                             val r20 = (last / c20 - 1.0) * 100.0
-                            // Today's in-progress bar has partial volume — read
-                            // the surge off the last COMPLETED session instead.
+                            // A live bar has partial volume. After the close,
+                            // today's completed bar must remain in the read.
                             val volumes = candles.map { it.volume.toDouble() }
-                            val lastIsToday = com.aurum.invest.core.Dates.sameDay(
-                                candles.last().ts, System.currentTimeMillis()
-                            )
+                            val lastIsIncomplete =
+                                com.aurum.invest.core.Dates.isCurrentEtDailyBarIncomplete(
+                                    candles.last().ts
+                                )
                             val volIdx =
-                                if (lastIsToday && volumes.size >= 2) volumes.size - 2
+                                if (lastIsIncomplete && volumes.size >= 2) volumes.size - 2
                                 else volumes.size - 1
-                            val vol20 = volumes
-                                .subList((volIdx - 19).coerceAtLeast(0), volIdx + 1)
-                                .average()
-                            val volRatio = if (vol20 > 0.0) volumes[volIdx] / vol20 else 1.0
+                            val volBase = volumes
+                                .subList((volIdx - 20).coerceAtLeast(0), volIdx)
+                                .filter { it > 0.0 }
+                            val volRatio =
+                                if (volBase.isNotEmpty() && volumes[volIdx] > 0.0) {
+                                    volumes[volIdx] / volBase.average()
+                                } else 1.0
                             Partial(key, label, etf, r5, r20, volRatio)
                         } catch (_: Exception) {
                             null

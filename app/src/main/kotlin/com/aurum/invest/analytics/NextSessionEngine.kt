@@ -176,6 +176,42 @@ class NextSessionEngine(private val market: MarketRepository) {
         private const val SHORTLIST = 26
         private const val DEEP_CHUNK = 5
         private const val ANALOG_LOOKBACK = 130
+
+        fun qualifiesForAlert(
+            score: Int,
+            analogDays: Int,
+            probUpPct: Int,
+            direction: TechniqueVerdict,
+            confidence: Int
+        ): Boolean =
+            score >= ALERT_SCORE &&
+                analogDays >= ALERT_MIN_ANALOGS &&
+                probUpPct >= ALERT_PROB &&
+                direction == TechniqueVerdict.BULLISH &&
+                confidence >= ALERT_CONFIDENCE
+
+        /**
+         * Applies the current portfolio to a cached market report. Holdings do
+         * not change the measured market score, so this keeps awareness live
+         * without re-running the whole-market scan after every trade.
+         */
+        fun withPortfolio(
+            report: NextSessionReport,
+            held: Map<String, Double>
+        ): NextSessionReport = report.copy(
+            picks = report.picks.map { pick ->
+                pick.copy(heldNote = heldNote(pick.symbol, held[pick.symbol]))
+            }
+        )
+
+        private fun heldNote(symbol: String, cost: Double?): String =
+            cost?.let {
+                String.format(
+                    Locale.US,
+                    "Already in your book (~%s at cost) — manage the position, don't double it.",
+                    com.aurum.invest.core.Fmt.money(it)
+                )
+            }.orEmpty()
     }
 
     /** [held] maps open-position symbols to cost dollars for the held tags. */
@@ -380,11 +416,13 @@ class NextSessionEngine(private val market: MarketRepository) {
             }.coerceAtLeast(0.8)
             val target = round2(entry * (1.0 + targetPct / 100.0))
 
-            val alert = score >= ALERT_SCORE &&
-                analogs.count >= ALERT_MIN_ANALOGS &&
-                analogs.probUp >= ALERT_PROB &&
-                direction == TechniqueVerdict.BULLISH &&
-                confidence >= ALERT_CONFIDENCE
+            val alert = qualifiesForAlert(
+                score = score,
+                analogDays = analogs.count,
+                probUpPct = analogs.probUp,
+                direction = direction,
+                confidence = confidence
+            )
 
             val reasonParts = mutableListOf<String>()
             reasonParts += String.format(Locale.US, "%+.1f%% last session", q.dayChangePct)
@@ -426,13 +464,7 @@ class NextSessionEngine(private val market: MarketRepository) {
                 volumeRatio = round1(volPace),
                 closePosPct = round1(closePos),
                 extNote = extNote,
-                heldNote = held[q.symbol]?.let {
-                    String.format(
-                        Locale.US,
-                        "Already in your book (~%s at cost) — manage the position, don't double it.",
-                        com.aurum.invest.core.Fmt.money(it)
-                    )
-                } ?: "",
+                heldNote = heldNote(q.symbol, held[q.symbol]),
                 alert = alert,
                 reason = reasonParts.joinToString(", ")
             )

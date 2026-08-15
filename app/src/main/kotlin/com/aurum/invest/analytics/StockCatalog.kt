@@ -338,4 +338,15 @@ object StockCatalog {
             )
         )
     )
+
+    /** Every catalog symbol's tracked theme and shelf label, first shelf wins. */
+    val SYMBOL_THEME: Map<String, Pair<String, String>> by lazy {
+        buildMap {
+            SECTORS.forEach { shelf ->
+                shelf.stocks.forEach { (symbol, _) ->
+                    putIfAbsent(symbol, shelf.themeKey to shelf.name)
+                }
+            }
+        }
+    }
 }
