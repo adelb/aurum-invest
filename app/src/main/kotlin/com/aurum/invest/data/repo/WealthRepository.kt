@@ -14,6 +14,7 @@ import com.aurum.invest.analytics.PortfolioReview
 import com.aurum.invest.analytics.SectorStrategy
 import com.aurum.invest.analytics.SectorTrend
 import com.aurum.invest.analytics.SectorTrends
+import com.aurum.invest.analytics.UnverifiedHolding
 import com.aurum.invest.analytics.WeeklyStrategy
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.db.CacheDao
@@ -46,7 +47,7 @@ class WealthRepository(
         private const val PULSE_KEY = "marketpulse:v2"
         private const val TRENDS_KEY = "sectortrends:v2"
         private const val FLOW_KEY = "moneyflow:v2"
-        private const val REVIEW_KEY = "portfolioreview:v2"
+        private const val REVIEW_KEY = "portfolioreview:v3"
         private const val NEXT_SESSION_KEY = "nextsession:v2"
         private const val NS_NOTIFIED_PREFIX = "nextsession:notified:"
         private const val PREVIEW_KEY_PREFIX = "wealthplan:next:v2:"
@@ -174,7 +175,9 @@ class WealthRepository(
      * The portfolio-evaluation engine's answer for the CURRENT book. The
      * cached copy carries a fingerprint of the positions it was computed
      * from — any trade invalidates it, so the review never describes a book
-     * the user no longer holds. Null when the book is empty.
+     * the user no longer holds. Null when the book is empty or when nothing
+     * at all could be measured (the fingerprint-matching stale copy, with its
+     * honest computedAt stamp, is the last resort before that).
      */
     suspend fun getPortfolioReview(maxAgeMs: Long = 1_800_000L): PortfolioReview? {
         val snapshot = bookSnapshot() ?: return null
@@ -183,16 +186,21 @@ class WealthRepository(
         val cached = getCache(REVIEW_KEY)
         val now = System.currentTimeMillis()
         if (cached != null && now - cached.updatedAt <= maxAgeMs) {
-            try {
-                val o = JSONObject(cached.json)
-                if (o.optString("fp") == fp) {
-                    PortfolioReview.fromJson(o.optString("review"))?.let { return it }
-                }
-            } catch (_: Exception) {
-                // fall through to recompute
-            }
+            cachedReview(cached.json, fp)?.let { return it }
         }
         return recomputePortfolioReview()
+    }
+
+    /** The stored review, only when it was computed from exactly this book. */
+    private fun cachedReview(json: String, fingerprint: String): PortfolioReview? = try {
+        val o = JSONObject(json)
+        if (o.optString("fp") == fingerprint) {
+            PortfolioReview.fromJson(o.optString("review"))
+        } else {
+            null
+        }
+    } catch (_: Exception) {
+        null
     }
 
     suspend fun recomputePortfolioReview(): PortfolioReview? {
@@ -201,21 +209,31 @@ class WealthRepository(
             val open = snapshot.open
             if (open.isEmpty()) return null
             val quotes = market.getQuotes(open.map { it.symbol })
-            val views = pricedViews(open, quotes)
-            // The advisor answers for the whole book or not at all. A partial
-            // review could tell the user to rebalance around a missing holding.
-            if (views.size != open.size) return null
-            val sectors = market.getSectors(open.map { it.symbol })
+            val (views, unpriced) = pricedViews(open, quotes)
+            if (views.isEmpty()) {
+                // Nothing could be priced this run (network down?) — serve the
+                // last review of exactly this book rather than a blank screen.
+                return getCache(REVIEW_KEY)?.let { cachedReview(it.json, snapshot.fingerprint) }
+            }
+            val sectors = market.getSectors(views.map { it.position.symbol })
             val flow = getMoneyFlow()
+            val pulse = getMarketPulse()
             val book = com.aurum.invest.analytics.PortfolioLens.build(views, sectors)
+            // The strategy scan only matters when a rebalance is even possible —
+            // an overweight sector exists and the flow report is present.
+            val overweightExists = book.slices.any {
+                it.sector != com.aurum.invest.analytics.PortfolioLens.UNCLASSIFIED &&
+                    it.weightPct >= PortfolioAdvisor.SECTOR_OVERWEIGHT_PCT
+            }
             val strategy =
-                if (flow == null) null
+                if (flow == null || !overweightExists) null
                 else try {
                     SectorStrategy(market, news).build(sectorTrendsCached(), book, 0.0, flow)
                 } catch (_: Exception) {
                     null
                 }
-            val review = PortfolioAdvisor(market, news).review(views, sectors, flow, strategy)
+            val review = PortfolioAdvisor(market, news)
+                .review(views, sectors, flow, strategy, pulse, unpriced)
             if (review != null) {
                 putCache(
                     REVIEW_KEY,
@@ -226,36 +244,56 @@ class WealthRepository(
                 )
             }
             review
+                ?: getCache(REVIEW_KEY)?.let { cachedReview(it.json, snapshot.fingerprint) }
         } catch (_: Exception) {
             null
         }
     }
 
+    /**
+     * Prices every open position from the live quotes, falling back to the
+     * latest daily close. Positions with no verifiable price at all come back
+     * in the second list, named — never silently dropped.
+     */
     private suspend fun pricedViews(
         positions: List<Position>,
         quotes: Map<String, Quote>
-    ): List<PositionView> = coroutineScope {
-        positions.map { position ->
+    ): Pair<List<PositionView>, List<UnverifiedHolding>> = coroutineScope {
+        val results = positions.map { position ->
             async {
                 val quote = quotes[position.symbol]?.takeIf { it.price > 0.0 } ?: try {
                     val candles = market.getDailyCandles(position.symbol, 7)
-                    val latest = candles.lastOrNull() ?: return@async null
-                    if (latest.close <= 0.0) return@async null
-                    Quote(
-                        symbol = position.symbol,
-                        price = latest.close,
-                        prevClose = candles.getOrNull(candles.lastIndex - 1)?.close
-                            ?.takeIf { it > 0.0 } ?: latest.close,
-                        shortName = position.symbol,
-                        fetchedAt = latest.ts,
-                        lite = true
-                    )
+                    val latest = candles.lastOrNull()?.takeIf { it.close > 0.0 }
+                    latest?.let {
+                        Quote(
+                            symbol = position.symbol,
+                            price = it.close,
+                            prevClose = candles.getOrNull(candles.lastIndex - 1)?.close
+                                ?.takeIf { c -> c > 0.0 } ?: it.close,
+                            shortName = position.symbol,
+                            fetchedAt = it.ts,
+                            lite = true
+                        )
+                    }
                 } catch (_: Exception) {
                     null
-                } ?: return@async null
-                PortfolioRepository.toView(position, quote)
+                }
+                if (quote == null) {
+                    position to null
+                } else {
+                    position to PortfolioRepository.toView(position, quote)
+                }
             }
-        }.awaitAll().filterNotNull()
+        }.awaitAll()
+        val views = results.mapNotNull { (_, view) -> view }
+        val unpriced = results.filter { (_, view) -> view == null }.map { (position, _) ->
+            UnverifiedHolding(
+                symbol = position.symbol,
+                shares = position.shares,
+                reason = "no verifiable price from live quotes or recent daily candles"
+            )
+        }
+        views to unpriced
     }
 
     // ---- market pulse -------------------------------------------------------

@@ -65,6 +65,14 @@ object PortfolioLens {
     )
 
     /**
+     * Trend themes whose sector mapping includes [sector]. Several themes can
+     * map to the same Yahoo sector (Technology -> semis + software); callers
+     * must treat a multi-theme answer as ambiguous, never pick one silently.
+     */
+    fun themesForSector(sector: String): List<String> =
+        THEME_SECTORS.filterValues { sector in it }.keys.toList()
+
+    /**
      * Share of the book sitting in [themeKey]'s sectors, or null when the
      * theme has no unambiguous sector mapping (AI, quantum, nuclear, solar) —
      * callers must then measure coverage some other honest way rather than

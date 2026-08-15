@@ -65,6 +65,7 @@ import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.analytics.PortfolioReview
 import com.aurum.invest.analytics.RebalanceMove
 import com.aurum.invest.analytics.SectorFlow
+import com.aurum.invest.analytics.UnverifiedHolding
 import com.aurum.invest.analytics.WeeklyStrategy
 import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
@@ -176,7 +177,7 @@ private fun WealthContent(
         }
         if (open("review")) {
             when {
-                state.bookLoaded && state.book.isEmpty -> {
+                state.bookLoaded && !state.hasPositions -> {
                     item { ReviewEmptyCard() }
                 }
                 state.review == null && state.reviewLoading -> {
@@ -186,8 +187,9 @@ private fun WealthContent(
                     item {
                         AurumCard {
                             Text(
-                                text = "The portfolio review could not verify every holding from " +
-                                    "current market data. Pull down to retry; no stale verdict is shown.",
+                                text = "The engine could not verify a single holding from live " +
+                                    "market data — most likely a network problem. Pull down to " +
+                                    "retry; nothing is guessed in the meantime.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = AurumColors.textDim
                             )
@@ -203,6 +205,9 @@ private fun WealthContent(
                             onOpenAnalysis = onOpenAnalysis,
                             onOpenDetail = onOpenDetail
                         )
+                    }
+                    if (review.unverified.isNotEmpty()) {
+                        item { UnverifiedHoldingsCard(review.unverified, onOpenDetail) }
                     }
                     item { AllocationPlanCard(review) }
                     if (review.rebalance.isNotEmpty()) {
@@ -511,6 +516,14 @@ private fun ReviewSummaryCard(review: PortfolioReview) {
             style = MaterialTheme.typography.titleMedium,
             color = AurumColors.text
         )
+        if (review.marketNote.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = review.marketNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
         Spacer(Modifier.height(10.dp))
         Row(modifier = Modifier.fillMaxWidth()) {
             StatTile(
@@ -519,8 +532,9 @@ private fun ReviewSummaryCard(review: PortfolioReview) {
                 modifier = Modifier.weight(1f)
             )
             StatTile(
-                label = "Holdings",
-                value = "${review.verdicts.size}",
+                label = if (review.unverified.isEmpty()) "Holdings" else "Verified",
+                value = if (review.unverified.isEmpty()) "${review.verdicts.size}"
+                else "${review.verdicts.size} of ${review.verdicts.size + review.unverified.size}",
                 modifier = Modifier.weight(1f)
             )
             StatTile(
@@ -605,6 +619,19 @@ private fun HoldingCard(
                     style = MaterialTheme.typography.labelSmall,
                     color = AurumColors.deltaColor(verdict.unrealizedPl)
                 )
+                verdict.sessionMovePct?.let { move ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        DeltaPct(
+                            value = move,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                        Text(
+                            text = " session",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AurumColors.textDim
+                        )
+                    }
+                }
             }
             Spacer(Modifier.width(10.dp))
             ActionPill(verdict.action)
@@ -689,6 +716,57 @@ private fun HoldingCard(
                 style = MaterialTheme.typography.labelMedium,
                 color = AurumColors.gold
             )
+        }
+    }
+}
+
+@Composable
+private fun UnverifiedHoldingsCard(
+    unverified: List<UnverifiedHolding>,
+    onOpenDetail: (String) -> Unit
+) {
+    AurumCard {
+        Text(
+            text = "Not verified this run",
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "These holdings could not be measured from live market data, so they are " +
+                "excluded from the weights and the allocation plan — nothing about them is " +
+                "guessed. Pull down to retry.",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+        Spacer(Modifier.height(8.dp))
+        unverified.forEach { u ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .padding(vertical = 4.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { onOpenDetail(u.symbol) }
+            ) {
+                Text(
+                    text = u.symbol,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text,
+                    modifier = Modifier.width(64.dp)
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = String.format(Locale.US, "%s shares", Fmt.qty(u.shares)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                    Text(
+                        text = u.reason,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
         }
     }
 }

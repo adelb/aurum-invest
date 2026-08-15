@@ -15,11 +15,13 @@ import com.aurum.invest.analytics.WeeklyStrategy
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.repo.PortfolioRepository
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 data class WealthState(
@@ -30,6 +32,12 @@ data class WealthState(
     val book: BookContext = BookContext.EMPTY,
     /** True once the first positions read landed (so "no book" is a fact, not a race). */
     val bookLoaded: Boolean = false,
+    /**
+     * True when the ledger holds open positions — distinct from [book], which
+     * can be EMPTY on a quote outage even while positions exist. Only this
+     * flag may drive the "no positions yet" message.
+     */
+    val hasPositions: Boolean = false,
     /** Whole-market rating; null while loading or when the market is unreachable. */
     val pulse: MarketRating? = null,
     val pulseLoading: Boolean = true,
@@ -52,6 +60,16 @@ data class WealthState(
 
 class WealthViewModel(app: Application) : AndroidViewModel(app) {
 
+    companion object {
+        /**
+         * The portfolio review re-runs on this cadence while the screen lives.
+         * Quotes are the only network cost of a re-run — candles, news, flow
+         * and sectors are all served from their own caches — so the verdicts
+         * track the live tape without hammering the market API.
+         */
+        private const val LIVE_REVIEW_MS = 120_000L
+    }
+
     private val container = (app as AurumApp).container
     private val wealth = container.wealth
 
@@ -64,6 +82,20 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
     private var previewJob: Job? = null
 
     init {
+        // The live loop: keeps the review current between manual refreshes.
+        // Paused whenever nothing collects the state (screen not visible).
+        viewModelScope.launch {
+            while (isActive) {
+                delay(LIVE_REVIEW_MS)
+                if (_state.subscriptionCount.value == 0) continue
+                val s = _state.value
+                if (s.refreshing || !s.hasPositions || reviewJob?.isActive == true) continue
+                val fresh = wealth.getPortfolioReview(maxAgeMs = LIVE_REVIEW_MS)
+                if (fresh != null) {
+                    _state.update { it.copy(review = fresh, reviewLoading = false) }
+                }
+            }
+        }
         // The money-flow report first — the strategy and review lean on it.
         viewModelScope.launch {
             val flow = wealth.getMoneyFlow()
@@ -81,6 +113,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                     _state.update {
                         it.copy(
                             book = BookContext.EMPTY, bookLoaded = true,
+                            hasPositions = false,
                             review = null, reviewLoading = false,
                             strategy = null,
                             nextSession = null, preview = null
@@ -98,6 +131,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                     it.copy(
                         book = PortfolioLens.build(views, sectors),
                         bookLoaded = true,
+                        hasPositions = true,
                         // A ledger change invalidates every portfolio-aware
                         // output. Never leave the prior book's advice visible.
                         review = null,
