@@ -7,10 +7,12 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * Standalone back-testing engine for the technique board. It replays the last
- * ~3 months day by day: for each session it re-runs [Techniques.analyze] on
- * only the candles that existed that day, records every technique's verdict,
- * and grades it against the REAL move of the following 5 trading days.
+ * The technique-integrity engine: a standalone back-tester that replays the
+ * last YEAR of sessions day by day. For each session it re-runs
+ * [Techniques.analyze] on only the candles that existed that day, records
+ * every technique's verdict, and grades it against the REAL move of the
+ * following 5 trading days — so every verdict the app shows carries its own
+ * measured, verifiable record on that exact stock.
  *
  * A directional call is a hit when the stock then moved at least
  * [MOVE_DEADBAND_PCT] in the called direction. Neutral verdicts are not
@@ -21,10 +23,14 @@ import kotlin.math.roundToInt
  * [TRUST_HIT_RATE]% or better. Trusted techniques get the gold border on the
  * analysis screen and extra vote weight in the 5-day outlook.
  *
+ * [TechniqueEvaluation.ranked] orders the whole 35-technique board by that
+ * measured record, so the app can surface the [TOP_TECHNIQUES] that have
+ * actually worked on this stock and fold the rest away.
+ *
  * Pure Kotlin, deterministic, never throws.
  */
 
-/** One technique's measured 3-month track record on one stock. */
+/** One technique's measured 1-year track record on one stock. */
 data class TechniqueScore(
     val key: String,
     val name: String,
@@ -58,12 +64,33 @@ data class TechniqueEvaluation(
     fun weights(): Map<String, Int> = scores
         .filter { it.signals >= TechniqueEvaluator.MIN_WEIGHT_SIGNALS }
         .associate { it.key to it.hitRate }
+
+    /**
+     * The whole board ordered by measured merit on THIS stock: trusted
+     * techniques first (by hit rate, then evidence), then graded-but-untrusted
+     * ones by hit rate, then techniques with too few calls to grade — each
+     * tier honestly separated so a 2-for-2 fluke never outranks a 15-for-20
+     * record.
+     */
+    fun ranked(): List<TechniqueScore> = scores.sortedWith(
+        compareByDescending<TechniqueScore> { it.trusted }
+            .thenByDescending { it.signals >= TechniqueEvaluator.MIN_WEIGHT_SIGNALS }
+            .thenByDescending { it.hitRate }
+            .thenByDescending { it.signals }
+    )
+
+    /** Rank position (1-based) per technique key, following [ranked]. */
+    fun rankByKey(): Map<String, Int> =
+        ranked().mapIndexed { i, s -> s.key to i + 1 }.toMap()
 }
 
 object TechniqueEvaluator {
 
-    /** Trading days replayed — ~3 months. */
-    const val LOOKBACK_DAYS = 63
+    /** Trading days replayed — a full year of sessions. */
+    const val LOOKBACK_DAYS = 252
+
+    /** How many techniques the analysis screen surfaces by default, best first. */
+    const val TOP_TECHNIQUES = 20
 
     /** Forward horizon each verdict is graded against, matching the 5-day outlook. */
     const val HORIZON_DAYS = 5

@@ -72,7 +72,7 @@ object BuyPlanEngine {
 
     /**
      * [candles] is the full daily history available (ideally ~1 year so the
-     * 200-day average exists); [analysis] the 20-technique read; [price] the
+     * 200-day average exists); [analysis] the 35-technique read; [price] the
      * latest quote.
      */
     fun build(

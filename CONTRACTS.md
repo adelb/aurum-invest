@@ -392,3 +392,38 @@ All summaries terse with concrete numbers, sentence case. Existing five techniqu
 ## Phase 3 — diagram viewport (TechniqueCharts.kt, coordinator-owned)
 
 Every diagram gains `timestamps: List<Long>` + `viewport: DiagramViewport` and renders only the visible window with 3 date labels (first/mid/last visible, Fmt.dateShort) along the bottom. `rememberDiagramViewport(total)` + gestures: two-finger pinch zooms (up to ~8x, min 15 points), single-finger horizontal drag pans (vertical drags still scroll the page), double-tap steps zoom 1x -> 2x -> 4x -> reset. Six new diagram composables for the Phase-3 data classes.
+
+---
+
+# Phase 5 — the enterprise engine suite (v5.0)
+
+The Wealth section was rebuilt around five standalone, portfolio-aware engines. The 4-month goal plan (`WealthPlanner`) and its setup form were REMOVED — `SettingsRepository.wealthBase/wealthTarget` remain in DataStore but nothing reads them.
+
+## E1 — 35-technique board (`analytics/Techniques.kt`)
+
+`Techniques.analyze` returns EXACTLY 35 results, the original 20 followed by: `stochrsi` (StochRSI 14,14,3,3), `roc` (ROC 12), `trix` (TRIX 15 + EMA9 signal), `uo` (Ultimate Oscillator 7/14/28), `vortex` (VI 14), `efi` (Force Index EMA13), `cmo` (Chande 14), `dpo` (non-centered DPO 20), `kst` (Pring KST + SMA9), `hull` (HMA 20), `supertrend` (10, 3x ATR), `chandelier` (22, 3x ATR), `vwap` (rolling 20-day VWAP), `ad` (Chaikin A/D line), `pivot` (monthly floor-trader pivots from the last COMPLETED ET month). Each has a data class on `TechniqueAnalysis`, a diagram mapping in `AnalysisScreen`, and a full write-up in `TechniqueExplain`.
+
+## E2 — integrity engine (`analytics/TechniqueEvaluator.kt`)
+
+`LOOKBACK_DAYS = 252` (a full year), `TOP_TECHNIQUES = 20`. `TechniqueEvaluation.ranked()` orders the board by measured merit (trusted > graded > ungraded, then hit rate, then evidence); `rankByKey()` gives 1-based ranks. The analysis screen sorts cards by rank, shows the top 20 with a fold toggle for the rest, and prints each card's 12-month record. `AnalysisViewModel` fetches 550 daily candles (Yahoo range "2y", added in `YahooClient`) and caches evals under `techeval:v3:SYM` (6 h).
+
+## E3 — money-flow engine (`analytics/MoneyFlowEngine.kt`)
+
+`MoneyFlowEngine(market, news).compute(): MoneyFlowReport?` — per sector ETF: up-day dollar-volume share (10 sessions), CMF(20), MFI(14), OBV slope normalized by average volume, relative strength vs SPY (20d), volume pace, member breadth (top 8 themes only; -1 = not measured), news tone (top 6). Fixed 0..100 `flowScore`; `FlowVerdict.INFLOW/OUTFLOW` requires >= 3 of the 4 money signals to agree, else `NEUTRAL`. Cached under `moneyflow` (30 min) in `WealthRepository`.
+
+## E4 — portfolio advisor (`analytics/PortfolioAdvisor.kt`)
+
+`PortfolioAdvisor(market, news).review(views, sectors, flow, strategy): PortfolioReview?` — per holding a `HoldingVerdict` (`HOLD/TAKE_PROFIT/TRIM/SELL/CUT_LOSS` + headline + whenText + measured whyPoints + forward target/stop from the stock's own supports and ATR), an `AllocationLine` plan (current vs suggested weight; caps: 30% trim line, 22% suggested ceiling), sector notes, and `RebalanceMove`s (sector >= 35% -> sell its weakest name back to 30%, buy the board-approved lead pick of the strongest inflowing theme the book is light in; no passing candidate -> hold cash, said out loud). Cached under `portfolioreview` with a positions fingerprint — any trade invalidates it.
+
+## E5 — next-session engine (`analytics/NextSessionEngine.kt`)
+
+`NextSessionEngine(market).compute(held): NextSessionReport?` — whole-market screener pool -> liquidity + continuation gates -> 26-name shortlist -> deep read (35-board, bearish disqualifies; analog-day study over ~130 completed sessions: same-direction move within ±2pp, close position within ±25pp; probUp = share of analogs that closed higher next day, -1 below `MIN_ANALOGS`=6). Fixed-scale score; 10 picks with entry/target (analog average, ATR-capped)/stop (structural). `alert` fires only when score >= 78 AND probUp >= 65 over >= 8 analogs AND bullish board >= 60%. `NextSessionWorker` (30-min cadence, acts POST 16:00–20:00 ET and PRE from 7:00 ET) refreshes the report and posts `Notify.nextSessionAlert` once per symbol per ET day (tracked under `nextsession:notified:<date>`). Report cached under `nextsession` (20 min).
+
+## Rewired modules
+
+- `SectorStrategy.build(trends, book, investable, flow)` — themes ranked by flow when present; OUTFLOW themes get no allocation; per-theme pool = WATCH + matching `StockCatalog` shelf (cap 14); `SectorGap` gains `flowScore`/`flowVerdict`.
+- `NextWeekPlanner.build(..., flow)` — sectors chosen by flow (inflows first); `investable` = invested book at cost (0 -> percentage-only split, `allocationPct` from weight shares).
+- `MarketPulse` — `nextDay` is now always empty; the next-session read belongs to E5. `bestYesterday` and the 0-100 rating unchanged.
+- `WealthRepository(cacheDao, market, news, portfolio)` — dropped inputs/plan APIs; added `getMoneyFlow/recomputeMoneyFlow`, `getPortfolioReview/recomputePortfolioReview`, `getNextSession/recomputeNextSession`, `nsNotifiedToday/markNsNotified`, `recomputeWeekly` (called by `WeeklyPicksWorker`), `getStrategy(book)`.
+- `WealthScreen` sections: portfolio verdicts (open), next session (open), next week, market pulse, money flow, your book, sector gaps, theme lens, movers — goal and this-week-plan sections are gone.
+- `TechniqueCharts.kt` gains generic `OscillatorDiagram`, `TwoLineDiagram`, `OverlayDiagram`(+`OverlaySeries`), and `ObvDiagram` gains a trailing `label` param.

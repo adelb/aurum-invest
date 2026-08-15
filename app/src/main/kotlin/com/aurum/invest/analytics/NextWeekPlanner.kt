@@ -18,13 +18,14 @@ import org.json.JSONObject
 /**
  * The next-week preview: built Thursday through Monday, it answers "what
  * should I be looking at when the new week opens?" with sectors, stocks, and
- * a suggested split of the same Wealth base — a preview of next Monday's
- * redeploy, never extra money on top of this week's plan.
+ * a suggested split of next week's buying power (the invested book at cost;
+ * percentages only when the book is empty).
  *
- * Reads the whole market (Yahoo's saved screens), the trending sectors, each
- * finalist's news tone, the 20-technique board, and the latest pre/post-market
- * prints — and it knows the user's book, so an already-held name is marked as
- * an add, not a fresh discovery.
+ * Reads the whole market (Yahoo's saved screens), the sector MONEY FLOWS
+ * (dollar volume, CMF, MFI, OBV, relative strength — via [MoneyFlowEngine]),
+ * each finalist's news tone, the 35-technique board, and the latest
+ * pre/post-market prints — and it knows the user's book, so an already-held
+ * name is marked as an add, not a fresh discovery.
  */
 
 data class NextWeekSector(
@@ -187,34 +188,60 @@ class NextWeekPlanner(
     }
 
     /**
-     * [weekStart] is the ISO Monday being previewed; [investable] the Wealth
-     * base (the preview re-deploys the SAME money, it never adds more);
-     * [held] maps open-position symbols to cost dollars; [sectorTrends] and
-     * [pulse] let the caller share scans already paid for.
+     * [weekStart] is the ISO Monday being previewed; [investable] is next
+     * week's reference buying power — the user's invested book value when
+     * there is one; pass 0 to get a percentage-only split. [held] maps
+     * open-position symbols to cost dollars; [sectorTrends], [pulse] and
+     * [flow] let the caller share scans already paid for. When [flow] is
+     * present, next week's sectors are chosen by MEASURED money flow, not
+     * price momentum alone.
      */
     suspend fun build(
         weekStart: String,
         investable: Double,
         held: Map<String, Double> = emptyMap(),
         sectorTrends: List<SectorTrend>? = null,
-        pulse: MarketRating? = null
+        pulse: MarketRating? = null,
+        flow: MoneyFlowReport? = null
     ): NextWeekPlan? {
         return try {
-            if (investable <= 0.0) return null
+            if (investable < 0.0) return null
 
-            // 1 — sectors to look at next week.
-            val trends = sectorTrends ?: SectorTrends(market, news).compute()
-            val topTrends = trends.take(3)
-            val sectors = topTrends.map { t ->
-                NextWeekSector(
-                    key = t.key, label = t.label, etf = t.etf,
-                    r5Pct = t.r5Pct, newsTone = t.newsTone,
-                    note = t.reason.ifBlank {
-                        String.format(Locale.US, "%+.1f%% in 5 days on %s.", t.r5Pct, t.etf)
+            // 1 — sectors to look at next week, by measured money flow when
+            // available: inflows first, then the strongest of the rest.
+            val sectors: List<NextWeekSector>
+            val topKeys: List<String>
+            if (flow != null && flow.sectors.isNotEmpty()) {
+                val ordered = (flow.inflows + flow.sectors.filter { it.verdict != FlowVerdict.INFLOW })
+                    .distinctBy { it.key }
+                    .take(3)
+                sectors = ordered.map { s ->
+                    val verdictNote = when (s.verdict) {
+                        FlowVerdict.INFLOW -> "money is measurably flowing in"
+                        FlowVerdict.OUTFLOW -> "money is measurably leaving — watch, don't chase"
+                        FlowVerdict.NEUTRAL -> "flows are balanced"
                     }
-                )
+                    NextWeekSector(
+                        key = s.key, label = s.label, etf = s.etf,
+                        r5Pct = s.r5Pct, newsTone = s.newsTone,
+                        note = "Flow ${s.flowScore}/100 — $verdictNote. ${s.reason}."
+                    )
+                }
+                topKeys = ordered.map { it.key }
+            } else {
+                val trends = sectorTrends ?: SectorTrends(market, news).compute()
+                val topTrends = trends.take(3)
+                sectors = topTrends.map { t ->
+                    NextWeekSector(
+                        key = t.key, label = t.label, etf = t.etf,
+                        r5Pct = t.r5Pct, newsTone = t.newsTone,
+                        note = t.reason.ifBlank {
+                            String.format(Locale.US, "%+.1f%% in 5 days on %s.", t.r5Pct, t.etf)
+                        }
+                    )
+                }
+                topKeys = topTrends.map { it.key }
             }
-            val topKeys = topTrends.map { it.key }
 
             // 2 — candidate pool: the whole market via the saved screens,
             // plus the leading themes' watch names so a trending theme is
@@ -278,22 +305,23 @@ class NextWeekPlanner(
             val kept = deep.sortedByDescending { it.finalScore }.take(POSITIONS)
             if (kept.isEmpty()) return null
 
-            // 5 — split the base across the keepers; held names take smaller
-            // adds; the caps leave the rest in cash.
-            val perNameCap = investable * 0.35
+            // 5 — split next week's buying power across the keepers; held
+            // names take smaller adds; the caps leave the rest in cash. With
+            // no reference amount the split is expressed as percentages only.
             val scoreFloor = kept.minOf { it.finalScore } - 1.0
             val weightsRaw = kept.map { d ->
                 val w = (d.finalScore - scoreFloor).coerceAtLeast(1.0)
                 if (held.containsKey(d.s.symbol)) w * 0.6 else w
             }
             val weightSum = weightsRaw.sum()
-            val amounts = kept.indices.map { i ->
-                round2(min(investable * 0.9 * weightsRaw[i] / weightSum, perNameCap))
+            val shares = kept.indices.map { i ->
+                min(0.9 * weightsRaw[i] / weightSum, 0.35)
             }
+            val amounts = kept.indices.map { i -> round2(investable * shares[i]) }
             val cashLeft = round2(investable - amounts.sum())
 
             val stocks = kept.mapIndexed { i, d ->
-                toStock(d, amounts[i], investable, held[d.s.symbol])
+                toStock(d, amounts[i], shares[i], investable, held[d.s.symbol])
             }
 
             // 6 — copy.
@@ -337,12 +365,11 @@ class NextWeekPlanner(
                     "Monday at the open: buy only the names trading NEAR their entry. A gap of " +
                         "3%+ above entry is a missed bus, not an invitation — the next scan " +
                         "finds another.",
-                    "Place every stop with its buy. This preview re-deploys the same Wealth " +
-                        "base — it is next Monday's plan taking shape, never money on top of " +
-                        "this week's."
+                    "Place every stop with its buy. This preview is next Monday's plan " +
+                        "taking shape — it re-ranks until the open, never a promise."
                 ),
                 caveat = "Built ${Dates.todayLabel()} from the whole-market screens, sector " +
-                    "momentum, news tone, the 20-technique board, and the latest pre/post-market " +
+                    "momentum, news tone, the 35-technique board, and the latest pre/post-market " +
                     "prints. Numbers refresh until Monday's open; projections are dampened " +
                     "extrapolations, not promises."
             )
@@ -495,7 +522,13 @@ class NextWeekPlanner(
         }
     }
 
-    private fun toStock(d: Deep, amount: Double, investable: Double, heldDollars: Double?): NextWeekStock {
+    private fun toStock(
+        d: Deep,
+        amount: Double,
+        share: Double,
+        investable: Double,
+        heldDollars: Double?
+    ): NextWeekStock {
         val entry = round2(d.price)
         // Next-week objective: the technique board's 5-day expected high,
         // never less than +1% above entry so the trade has a reason to exist.
@@ -536,7 +569,7 @@ class NextWeekPlanner(
             rewardRisk = rewardRisk,
             expectedPct = expectedPct,
             amount = amount,
-            allocationPct = if (investable > 0.0) round1(amount / investable * 100.0) else 0.0,
+            allocationPct = allocationShare(amount, share, investable),
             techBullish = d.bullishCount,
             techTotal = d.techTotal,
             newsScore = d.newsScore,
@@ -548,6 +581,9 @@ class NextWeekPlanner(
             reason = reasonParts.joinToString(", ")
         )
     }
+
+    private fun allocationShare(amount: Double, share: Double, investable: Double): Double =
+        if (investable > 0.0) round1(amount / investable * 100.0) else round1(share * 100.0)
 
     // ------------------------------------------------------------ helpers
 

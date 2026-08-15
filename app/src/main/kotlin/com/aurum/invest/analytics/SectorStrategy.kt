@@ -47,7 +47,11 @@ data class SectorGap(
     val status: GapStatus,
     /** True when coverage came from exact holdings membership, not a sector map. */
     val coverageFromHoldings: Boolean,
-    val picks: List<SectorPick>
+    val picks: List<SectorPick>,
+    /** Money-flow score 0..100 from [MoneyFlowEngine]; -1 when flow was unavailable. */
+    val flowScore: Int = -1,
+    /** Which way the money is measurably moving; null when flow was unavailable. */
+    val flowVerdict: FlowVerdict? = null
 )
 
 /** One line of the weekly deployment plan. */
@@ -101,6 +105,9 @@ class SectorStrategy(
         /** How many stocks each theme proposes — the 3 strongest that pass. */
         private const val PICKS_PER_THEME = 3
 
+        /** Candidates scanned per theme (watch list + catalog shelf, deduped). */
+        private const val POOL_CAP = 14
+
         /** Headlines that read as a report, analyst action, or insider move. */
         private val REPORT_KEYWORDS = listOf(
             "insider", "upgrade", "downgrade", "price target", "earnings",
@@ -126,6 +133,8 @@ class SectorStrategy(
                         put("target", g.targetPct)
                         put("status", g.status.name)
                         put("fromHoldings", g.coverageFromHoldings)
+                        put("flowScore", g.flowScore)
+                        g.flowVerdict?.let { put("flowVerdict", it.name) }
                         put("picks", JSONArray().apply { g.picks.forEach { put(pickJson(it)) } })
                     })
                 }
@@ -208,7 +217,10 @@ class SectorStrategy(
                             status = runCatching { GapStatus.valueOf(g.optString("status")) }
                                 .getOrDefault(GapStatus.MISSING),
                             coverageFromHoldings = g.optBoolean("fromHoldings", false),
-                            picks = picks
+                            picks = picks,
+                            flowScore = g.optInt("flowScore", -1),
+                            flowVerdict = g.optString("flowVerdict", "").takeIf { it.isNotEmpty() }
+                                ?.let { runCatching { FlowVerdict.valueOf(it) }.getOrNull() }
                         )
                     )
                 }
@@ -251,25 +263,50 @@ class SectorStrategy(
 
     /**
      * [trends] ranked themes for the week, [book] the user's live portfolio,
-     * [investable] the money to deploy this week.
+     * [investable] the money to deploy this week. When [flow] is present the
+     * themes are ranked by MEASURED money flow (dollar volume, CMF, MFI, OBV,
+     * relative strength) instead of price momentum alone, and every gap
+     * carries its flow verdict.
      */
     suspend fun build(
         trends: List<SectorTrend>,
         book: BookContext,
-        investable: Double
+        investable: Double,
+        flow: MoneyFlowReport? = null
     ): WeeklyStrategy? {
-        if (trends.isEmpty()) return null
+        if (trends.isEmpty() && flow == null) return null
         return try {
-            val top = trends.take(TOP_THEMES)
+            // Rank themes by money flow when measured; momentum otherwise.
+            val ranked: List<ThemeRank> =
+                if (flow != null && flow.sectors.isNotEmpty()) {
+                    flow.sectors.map { s ->
+                        ThemeRank(
+                            key = s.key, label = s.label, etf = s.etf,
+                            r5 = s.r5Pct, r20 = s.r20Pct,
+                            strength = s.flowScore.toDouble(),
+                            flowScore = s.flowScore, flowVerdict = s.verdict
+                        )
+                    }
+                } else {
+                    trends.map { t ->
+                        ThemeRank(
+                            key = t.key, label = t.label, etf = t.etf,
+                            r5 = t.r5Pct, r20 = t.r20Pct,
+                            strength = t.score, flowScore = -1, flowVerdict = null
+                        )
+                    }
+                }
+            val top = ranked.take(TOP_THEMES)
+            if (top.isEmpty()) return null
 
             // Coverage per theme, measured two ways depending on what is honest.
             val coverage = top.associate { it.key to coverageOf(it.key, book) }
 
-            // Targets: trend strength shared across the top themes, capped so no
+            // Targets: theme strength shared across the top themes, capped so no
             // single theme is ever proposed as more than a third of the book.
-            val scoreSum = top.sumOf { it.score.coerceAtLeast(0.1) }
+            val scoreSum = top.sumOf { it.strength.coerceAtLeast(0.1) }
             val targets = top.associate { t ->
-                val share = t.score.coerceAtLeast(0.1) / scoreSum
+                val share = t.strength.coerceAtLeast(0.1) / scoreSum
                 t.key to (share * 100.0).coerceAtMost(33.0)
             }
 
@@ -285,8 +322,8 @@ class SectorStrategy(
                     themeKey = t.key,
                     label = t.label,
                     etf = t.etf,
-                    r5Pct = round1(t.r5Pct),
-                    r20Pct = round1(t.r20Pct),
+                    r5Pct = round1(t.r5),
+                    r20Pct = round1(t.r20),
                     heldPct = round1(heldPct),
                     targetPct = round1(target),
                     status = when {
@@ -296,21 +333,25 @@ class SectorStrategy(
                         else -> GapStatus.COVERED
                     },
                     coverageFromHoldings = fromHoldings,
-                    picks = picksByTheme[t.key].orEmpty()
+                    picks = picksByTheme[t.key].orEmpty(),
+                    flowScore = t.flowScore,
+                    flowVerdict = t.flowVerdict
                 )
             }.sortedWith(
                 // Missing-and-trending first: that is the actionable end.
                 compareBy({ it.status.ordinal }, { -it.r5Pct })
             )
 
-            // This week's money: trend strength scaled by remaining room, so
-            // themes the book already covers pull less new cash.
+            // This week's money: theme strength scaled by remaining room, so
+            // themes the book already covers pull less new cash. A theme the
+            // money is measurably LEAVING gets no new cash at all.
             val weights = gaps.mapNotNull { gap ->
                 val lead = gap.picks.firstOrNull() ?: return@mapNotNull null
-                val trend = top.first { it.key == gap.themeKey }
+                if (gap.flowVerdict == FlowVerdict.OUTFLOW) return@mapNotNull null
+                val theme = top.first { it.key == gap.themeKey }
                 val room = if (gap.targetPct <= 0.0) 0.0
                 else ((gap.targetPct - gap.heldPct) / gap.targetPct).coerceIn(0.0, 1.0)
-                val weight = trend.score.coerceAtLeast(0.1) * (0.2 + 0.8 * room)
+                val weight = theme.strength.coerceAtLeast(0.1) * (0.2 + 0.8 * room)
                 Triple(gap, lead, weight)
             }
             val weightSum = weights.sumOf { it.third }
@@ -344,6 +385,18 @@ class SectorStrategy(
         }
     }
 
+    /** One theme in this week's ranking, from money flow when measured. */
+    private class ThemeRank(
+        val key: String,
+        val label: String,
+        val etf: String,
+        val r5: Double,
+        val r20: Double,
+        val strength: Double,
+        val flowScore: Int,
+        val flowVerdict: FlowVerdict?
+    )
+
     // --------------------------------------------------------------- coverage
 
     /**
@@ -363,18 +416,25 @@ class SectorStrategy(
     // ------------------------------------------------------------ stock picks
 
     /**
-     * The theme's representative names, ranked; only technique-approved ones
-     * survive, and the [PICKS_PER_THEME] strongest are proposed. "Strongest"
-     * is measured, not guessed: the last 3 trading days' move, the latest
-     * session's volume against its 20-day average, the 20-technique board,
-     * RSI, and the last 5 days of headlines (reports, analyst actions,
-     * insider flow) all feed the score.
+     * The theme's candidate pool, ranked; only technique-approved names
+     * survive, and the [PICKS_PER_THEME] strongest are proposed. The pool is
+     * the theme's watch list WIDENED with the whole matching StockCatalog
+     * shelf (capped at [POOL_CAP] names), so the engine chooses the best
+     * stock in the sector, not merely the best of four. "Strongest" is
+     * measured, not guessed: the last 3 trading days' move, the latest
+     * session's volume against its 20-day average, the technique board, RSI,
+     * and the last 5 days of headlines all feed the score.
      */
     private suspend fun bestPicks(themeKey: String): List<SectorPick> {
-        val watch = SectorTrends.WATCH[themeKey].orEmpty()
-        if (watch.isEmpty()) return emptyList()
+        val pool = LinkedHashMap<String, String>()
+        SectorTrends.WATCH[themeKey].orEmpty().forEach { (sym, name) -> pool.putIfAbsent(sym, name) }
+        StockCatalog.SECTORS.filter { it.themeKey == themeKey }.forEach { shelf ->
+            shelf.stocks.forEach { (sym, name) -> pool.putIfAbsent(sym, name) }
+        }
+        if (pool.isEmpty()) return emptyList()
+        val candidates = pool.entries.take(POOL_CAP)
         val scored = ArrayList<Pair<SectorPick, Double>>()
-        for (chunk in watch.chunked(CANDLE_CHUNK)) {
+        for (chunk in candidates.chunked(CANDLE_CHUNK)) {
             val results = coroutineScope {
                 chunk.map { (symbol, name) -> async { scorePick(symbol, name) } }.awaitAll()
             }
@@ -525,6 +585,13 @@ class SectorStrategy(
             out += "Amounts split this week's money by theme strength scaled by how much room " +
                 "your book still has — they are a starting split, not a promise."
         }
+        if (gaps.any { it.flowScore >= 0 }) {
+            out += "Themes are ranked by MEASURED money flow — dollar volume on up days, " +
+                "Chaikin Money Flow, the Money Flow Index, OBV slope, and strength vs the " +
+                "S&P 500 — and a theme the money is leaving gets no new cash."
+        }
+        out += "Each theme's pick is chosen from its full sector shelf (up to 14 liquid " +
+            "names), not a fixed short list."
         return out
     }
 

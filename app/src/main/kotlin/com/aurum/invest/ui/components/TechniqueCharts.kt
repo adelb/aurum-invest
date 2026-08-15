@@ -1136,7 +1136,8 @@ fun ObvDiagram(
     timestamps: List<Long>,
     viewport: DiagramViewport,
     modifier: Modifier = Modifier,
-    onTap: (() -> Unit)? = null
+    onTap: (() -> Unit)? = null,
+    label: String = "OBV"
 ) {
     val textMeasurer = rememberTextMeasurer()
     Column(modifier = modifier) {
@@ -1161,7 +1162,7 @@ fun ObvDiagram(
             drawTimeAxis(textMeasurer, timestamps.win(viewport))
             scrubAt(viewport, obv.size, size.width)?.let { sc ->
                 val lines = buildList {
-                    obv.getOrNull(sc.idx)?.let { add("OBV ${Fmt.compact(it)}" to AurumColors.gold) }
+                    obv.getOrNull(sc.idx)?.let { add("$label ${Fmt.compact(it)}" to AurumColors.gold) }
                     px.getOrNull(sc.idx)?.let { add("Close ${Fmt.money(it)}" to priceLineColor) }
                 }
                 drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
@@ -1169,7 +1170,7 @@ fun ObvDiagram(
         }
         LegendRow(
             entries = listOf(
-                "OBV" to AurumColors.gold,
+                label to AurumColors.gold,
                 "Price (scaled)" to priceLineColor.copy(alpha = 0.55f)
             ),
             modifier = Modifier.padding(top = 8.dp)
@@ -1754,6 +1755,222 @@ fun AroonDiagram(
 // ---------- private formatting ----------
 
 /** Adaptive precision for small MACD magnitudes. */
+// ---------- generic diagrams for the phase-4 techniques ----------
+
+/**
+ * Single-line oscillator pane. Optional [upper]/[lower] guide levels shade the
+ * neutral band between them; [zeroLine] draws a dashed zero. When [fixedMin]
+ * and [fixedMax] are set the pane locks to that range (e.g. 0..100), otherwise
+ * it fits the visible data. [compact] formats crosshair values with K/M/B
+ * suffixes for volume-scale series.
+ */
+@Composable
+fun OscillatorDiagram(
+    values: List<Double?>,
+    label: String,
+    timestamps: List<Long>,
+    viewport: DiagramViewport,
+    modifier: Modifier = Modifier,
+    upper: Double? = null,
+    lower: Double? = null,
+    zeroLine: Boolean = false,
+    fixedMin: Double? = null,
+    fixedMax: Double? = null,
+    compact: Boolean = false,
+    onTap: (() -> Unit)? = null
+) {
+    val textMeasurer = rememberTextMeasurer()
+    fun fmtVal(v: Double): String =
+        if (compact) (if (v >= 0.0) "+" else "-") + Fmt.compact(abs(v))
+        else String.format(java.util.Locale.US, "%.1f", v)
+    Canvas(
+        modifier = modifier.fillMaxWidth().height(158.dp).diagramGestures(viewport, onTap)
+    ) {
+        val series = values.win(viewport)
+        if (series.count { it != null } < 2) return@Canvas
+        val defined = series.filterNotNull()
+        val bounds = ArrayList<Double>(defined.size + 4)
+        bounds.addAll(defined)
+        upper?.let { bounds.add(it) }
+        lower?.let { bounds.add(it) }
+        if (zeroLine) bounds.add(0.0)
+        val minV = fixedMin ?: bounds.min()
+        val maxV = fixedMax ?: bounds.max()
+        val pane = Pane(minV, maxV, size.width, size.height - AXIS_H, 10f, series.size)
+        val dim = chartLabelStyle(AurumColors.textDim)
+        val lineColor = AurumColors.textDim.copy(alpha = 0.55f)
+
+        if (upper != null && lower != null) {
+            val yU = pane.y(upper)
+            val yL = pane.y(lower)
+            drawRect(
+                color = AurumColors.surfaceHigh,
+                topLeft = Offset(0f, yU),
+                size = Size(size.width, yL - yU)
+            )
+        }
+        upper?.let { u ->
+            val y = pane.y(u)
+            dashedLevel(y, lineColor)
+            val t = fmtVal(u)
+            val m = textMeasurer.measure(AnnotatedString(t), dim)
+            drawText(textMeasurer, t, topLeft = Offset(4f, y - m.size.height - 2f), style = dim)
+        }
+        lower?.let { l ->
+            val y = pane.y(l)
+            dashedLevel(y, lineColor)
+            drawText(textMeasurer, fmtVal(l), topLeft = Offset(4f, y + 2f), style = dim)
+        }
+        if (zeroLine && minV < 0.0 && maxV > 0.0) {
+            dashedLevel(pane.y(0.0), lineColor)
+        }
+
+        strokeSeries(seriesPoints(series, pane), AurumColors.gold, 2.5f)
+
+        val lastIdx = series.indexOfLast { it != null }
+        if (lastIdx >= 0) {
+            series[lastIdx]?.let { v ->
+                val txt = "$label ${fmtVal(v)}"
+                val goldStyle = chartLabelStyle(AurumColors.gold)
+                val m = textMeasurer.measure(AnnotatedString(txt), goldStyle)
+                val ty = (pane.y(v) - m.size.height - 4f)
+                    .coerceIn(2f, size.height - AXIS_H - m.size.height - 2f)
+                drawText(
+                    textMeasurer, txt,
+                    topLeft = Offset(size.width - m.size.width - 4f, ty),
+                    style = goldStyle
+                )
+            }
+        }
+        drawTimeAxis(textMeasurer, timestamps.win(viewport))
+        scrubAt(viewport, series.size, size.width)?.let { sc ->
+            val lines = buildList {
+                series.getOrNull(sc.idx)?.let { add("$label ${fmtVal(it)}" to AurumColors.gold) }
+            }
+            drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+        }
+    }
+}
+
+/**
+ * Two-line pane (e.g. TRIX vs signal, VI+ vs VI-). Auto-fits the visible
+ * range; [refLevel] draws one dashed reference line, [zeroLine] a dashed zero.
+ */
+@Composable
+fun TwoLineDiagram(
+    a: List<Double?>,
+    b: List<Double?>,
+    aLabel: String,
+    bLabel: String,
+    timestamps: List<Long>,
+    viewport: DiagramViewport,
+    modifier: Modifier = Modifier,
+    aColor: Color = AurumColors.gold,
+    bColor: Color = AurumColors.info,
+    refLevel: Double? = null,
+    zeroLine: Boolean = false,
+    onTap: (() -> Unit)? = null
+) {
+    val textMeasurer = rememberTextMeasurer()
+    Column(modifier = modifier) {
+        Canvas(
+            modifier = Modifier.fillMaxWidth().height(158.dp).diagramGestures(viewport, onTap)
+        ) {
+            val sa = a.win(viewport)
+            val sb = b.win(viewport)
+            if (sa.count { it != null } < 2) return@Canvas
+            val bounds = ArrayList<Double>()
+            sa.forEach { if (it != null) bounds.add(it) }
+            sb.forEach { if (it != null) bounds.add(it) }
+            refLevel?.let { bounds.add(it) }
+            if (zeroLine) bounds.add(0.0)
+            if (bounds.size < 2) return@Canvas
+            val minV = bounds.min()
+            val maxV = bounds.max()
+            val pane = Pane(minV, maxV, size.width, size.height - AXIS_H, 10f, sa.size)
+            val lineColor = AurumColors.textDim.copy(alpha = 0.55f)
+            refLevel?.let { dashedLevel(pane.y(it), lineColor) }
+            if (zeroLine && minV < 0.0 && maxV > 0.0) dashedLevel(pane.y(0.0), lineColor)
+
+            strokeSeries(seriesPoints(sb, pane), bColor, 2f)
+            strokeSeries(seriesPoints(sa, pane), aColor, 2.5f)
+            drawTimeAxis(textMeasurer, timestamps.win(viewport))
+            scrubAt(viewport, sa.size, size.width)?.let { sc ->
+                val lines = buildList {
+                    sa.getOrNull(sc.idx)?.let { add("$aLabel ${sig(it)}" to aColor) }
+                    sb.getOrNull(sc.idx)?.let { add("$bLabel ${sig(it)}" to bColor) }
+                }
+                drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+            }
+        }
+        LegendRow(
+            entries = listOf(aLabel to aColor, bLabel to bColor),
+            modifier = Modifier.padding(top = 8.dp)
+        )
+    }
+}
+
+/** One overlay series drawn on a price pane. */
+data class OverlaySeries(
+    val label: String,
+    val color: Color,
+    val values: List<Double?>,
+    val dashed: Boolean = false
+)
+
+/**
+ * Price (line or candles) with up to a few overlay series on the same price
+ * scale — Hull MA, Supertrend, Chandelier stops, rolling VWAP.
+ */
+@Composable
+fun OverlayDiagram(
+    closes: List<Double>,
+    overlays: List<OverlaySeries>,
+    timestamps: List<Long>,
+    viewport: DiagramViewport,
+    modifier: Modifier = Modifier,
+    ohlc: List<Candle>? = null,
+    style: PriceStyle = PriceStyle.LINE,
+    onTap: (() -> Unit)? = null
+) {
+    val textMeasurer = rememberTextMeasurer()
+    Column(modifier = modifier) {
+        Canvas(
+            modifier = Modifier.fillMaxWidth().height(170.dp).diagramGestures(viewport, onTap)
+        ) {
+            val px = closes.win(viewport)
+            if (px.size < 2) return@Canvas
+            val candlesW = ohlc?.win(viewport)
+            val overlaysW = overlays.map { it to it.values.win(viewport) }
+            val vals = ArrayList<Double>(px.size * (overlays.size + 1))
+            vals.addAll(px)
+            overlaysW.forEach { (_, series) -> series.forEach { if (it != null) vals.add(it) } }
+            vals.includeOhlcRange(candlesW, style)
+            val minV = vals.min()
+            val maxV = vals.max()
+            val pane = Pane(minV, maxV, size.width, size.height - AXIS_H, 8f, px.size)
+            drawPriceGrid(textMeasurer, pane, minV, maxV)
+            drawPriceSeries(px, candlesW, style, pane)
+            overlaysW.forEach { (o, series) ->
+                if (o.dashed) dashedSeries(seriesPoints(series, pane), o.color, 2f)
+                else strokeSeries(seriesPoints(series, pane), o.color, 2.5f)
+            }
+            drawTimeAxis(textMeasurer, timestamps.win(viewport))
+            scrubAt(viewport, px.size, size.width)?.let { sc ->
+                val lines = priceScrubLines(sc.idx, px, candlesW, style).toMutableList()
+                overlaysW.forEach { (o, series) ->
+                    series.getOrNull(sc.idx)?.let { lines += "${o.label} ${Fmt.money(it)}" to o.color }
+                }
+                drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
+            }
+        }
+        LegendRow(
+            entries = listOf("Price" to priceLineColor) + overlays.map { it.label to it.color },
+            modifier = Modifier.padding(top = 8.dp)
+        )
+    }
+}
+
 private fun sig(v: Double): String =
     if (abs(v) < 0.05) String.format(java.util.Locale.US, "%.3f", v)
     else String.format(java.util.Locale.US, "%.2f", v)

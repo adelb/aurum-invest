@@ -274,7 +274,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.uItems(
                     text = "Stocks that habitually dip after the open and climb back through " +
                         "the close — found by a whole-market scan, proven on ~21 sessions of " +
                         "5-minute bars each (U-day rate, parabola curvature, VWAP-reclaim " +
-                        "rule replay), confirmed by the 20-technique board, and tracked " +
+                        "rule replay), confirmed by the 35-technique board, and tracked " +
                         "live so each card says whether NOW is the time to buy.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
@@ -415,7 +415,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.powerItems(
                     text = "The 10 strongest candidates to buy in the last 90 minutes and hold " +
                         "into tomorrow: the whole market screened for names finishing near " +
                         "their daily high on hot volume after 4 strong trading days, confirmed " +
-                        "by the 20-technique board. Refresh inside the window for the live read.",
+                        "by the 35-technique board. Refresh inside the window for the live read.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
@@ -668,7 +668,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
                 Text(
                     text = "The best entry setups across 8 market-wide screens: kept only when " +
                         "the long trend is intact, the price has pulled back toward support, " +
-                        "the 20-technique board does not read the dip as a falling knife, and " +
+                        "the 35-technique board does not read the dip as a falling knife, and " +
                         "the week's news does not explain the dip away.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
@@ -1064,7 +1064,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.weeklyItems(
     item {
         Text(
             text = "The week's strongest sustained setups — momentum, volume, and the " +
-                "20-technique board over the fixed universe plus the market-wide screens. " +
+                "35-technique board over the fixed universe plus the market-wide screens. " +
                 "Every pick now carries its stop and first target in the reason line: a " +
                 "pick without an exit is not a plan.",
             style = MaterialTheme.typography.bodySmall,

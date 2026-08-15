@@ -15,7 +15,7 @@ import kotlinx.coroutines.coroutineScope
  * own average, within reach of the high — never "the best of a weak list";
  * a shelf with no setup returns an empty list.
  *
- * The survivors get a deeper look: the 20-technique board (a BEARISH board
+ * The survivors get a deeper look: the 35-technique board (a BEARISH board
  * disqualifies) and the last days of headlines, where analyst actions and
  * insider-flavored stories add conviction and are quoted on the card.
  * Never throws; symbols that fail to fetch are skipped.
@@ -142,7 +142,7 @@ class BreakoutScout(
             if (candles.size >= 30) {
                 val analysis = Techniques.analyze(s.symbol, candles)
                 val direction = analysis?.outlook?.direction ?: TechniqueVerdict.NEUTRAL
-                // A setup against a bearish 20-technique board is a trap, not a call.
+                // A setup against a bearish 35-technique board is a trap, not a call.
                 if (direction == TechniqueVerdict.BEARISH) return null
                 bullish = analysis?.outlook?.bullishCount ?: 0
                 total = analysis?.results?.size ?: 0

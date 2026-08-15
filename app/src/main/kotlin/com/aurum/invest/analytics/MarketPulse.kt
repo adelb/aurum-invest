@@ -82,7 +82,7 @@ data class MarketRating(
  * Score >= 60 -> INVEST, >= 42 -> SELECTIVE, else DEFENSIVE. Alongside the
  * verdict it collects the last session's best performers (liquidity-gated so
  * a halted micro-cap spike can't rank) and scans for names positioned for the
- * next session, each confirmed by the 20-technique board with an honest
+ * next session, each confirmed by the 35-technique board with an honest
  * ATR-based range. Never throws — null on total failure.
  */
 class MarketPulse(private val market: MarketRepository) {
@@ -271,7 +271,9 @@ class MarketPulse(private val market: MarketRepository) {
 
             val reasons = buildReasons(indexes, breadth, advancers, measurable.size, vix)
             val best = bestYesterday(pool)
-            val next = tomorrowPicks(pool)
+            // Next-session positioning is owned by the standalone
+            // NextSessionEngine now — the pulse carries the market rating.
+            val next = emptyList<TomorrowPick>()
 
             MarketRating(
                 date = dateIso,
@@ -454,151 +456,6 @@ class MarketPulse(private val market: MarketRepository) {
                 )
             }
             .toList()
-
-    /**
-     * Names positioned for the next session: strong-but-not-blow-off day,
-     * closing near the high, above the 50-day, volume running hot — then the
-     * ~18 best are confirmed against RSI, ATR and the 20-technique board.
-     */
-    private suspend fun tomorrowPicks(pool: List<ScreenerQuote>): List<TomorrowPick> {
-        val shortlist = pool.asSequence()
-            .filter {
-                it.price in 2.0..2500.0 &&
-                    it.avgVolume3M >= 1_000_000L &&
-                    it.price * it.avgVolume3M >= 20_000_000.0 &&
-                    it.marketCap >= 500_000_000.0 &&
-                    it.fiftyDayAvg > 0.0 &&
-                    it.symbol.all { ch -> ch.isLetterOrDigit() }
-            }
-            .mapNotNull { q -> preScore(q)?.let { q to it } }
-            .sortedByDescending { it.second }
-            .take(SHORTLIST)
-            .toList()
-        if (shortlist.isEmpty()) return emptyList()
-
-        val deep = ArrayList<TomorrowPick>()
-        for (chunk in shortlist.chunked(CANDLE_CHUNK)) {
-            val results = coroutineScope {
-                chunk.map { (q, pre) -> async { deepRead(q, pre) } }.awaitAll()
-            }
-            results.filterNotNull().forEach { deep.add(it) }
-        }
-        if (deep.isEmpty()) return emptyList()
-
-        val ranked = deep.sortedByDescending { it.score }.take(5)
-        val minS = ranked.minOf { it.score }
-        val maxS = ranked.maxOf { it.score }
-        val span = maxS - minS
-        return ranked.map { p ->
-            val scaled = if (span > 0.0) 55.0 + (p.score - minS) / span * 45.0 else 70.0
-            p.copy(score = round1(scaled))
-        }
-    }
-
-    /** Cheap next-session case from screener fields alone; null = no case. */
-    private fun preScore(q: ScreenerQuote): Double? {
-        val vs50 = (q.price / q.fiftyDayAvg - 1.0) * 100.0
-        if (vs50 < -1.0) return null                       // trend must be intact
-        if (q.dayChangePct < -0.5 || q.dayChangePct > 12.0) return null
-
-        val closePos = if (q.dayHigh > q.dayLow && q.dayLow > 0.0) {
-            (q.price - q.dayLow) / (q.dayHigh - q.dayLow)
-        } else 0.5
-        if (closePos < 0.5) return null                    // fading closes carry over
-
-        val above200 = q.twoHundredDayAvg > 0.0 && q.price > q.twoHundredDayAvg
-        val volPace = if (q.avgVolume3M > 0L) q.dayVolume.toDouble() / q.avgVolume3M else 0.0
-
-        val strength = when {
-            q.dayChangePct in 1.0..8.0 -> 8.0 + (4.0 - abs(q.dayChangePct - 4.0))
-            q.dayChangePct > 8.0 -> 5.0
-            else -> 3.0
-        }
-        val closeScore = ((closePos - 0.5) * 22.0).coerceIn(0.0, 11.0)
-        val volScore = ((volPace - 0.8) * 6.0).coerceIn(0.0, 9.0)
-        val trendScore = (vs50 * 0.3).coerceIn(0.0, 6.0) + (if (above200) 3.0 else 0.0)
-        val ratingScore = q.analystRating?.let { (3.0 - it) * 2.0 }?.coerceIn(0.0, 4.0) ?: 0.0
-        return strength + closeScore + volScore + trendScore + ratingScore
-    }
-
-    /** Technique-board confirmation + honest ATR range; null drops the name. */
-    private suspend fun deepRead(q: ScreenerQuote, pre: Double): TomorrowPick? {
-        return try {
-            val candles = try {
-                market.getDailyCandles(q.symbol, 180)
-            } catch (_: Exception) {
-                emptyList()
-            }
-            if (candles.size < 30) return null
-            val closes = candles.map { it.close }
-            val rsi = Indicators.rsi(closes) ?: return null
-            if (rsi > 78.0) return null                    // too hot to chase tomorrow
-            val atr = Indicators.atr(candles) ?: return null
-            val atrPct = atr / q.price * 100.0
-
-            val analysis = Techniques.analyze(q.symbol, candles)
-            val direction = analysis?.outlook?.direction ?: TechniqueVerdict.NEUTRAL
-            if (direction == TechniqueVerdict.BEARISH) return null
-            val bullish = analysis?.outlook?.bullishCount ?: 0
-            val techTotal = analysis?.results?.size ?: 0
-            val confidence = analysis?.outlook?.confidence ?: 0
-
-            val rsiScore = (10.0 - abs(rsi - 62.0) / 2.5).coerceIn(0.0, 10.0)
-            val boardScore =
-                if (direction == TechniqueVerdict.BULLISH) confidence * 0.12 else 2.0
-            val score = pre * 0.7 + rsiScore + boardScore
-
-            // Honest next-session potential from volatility capacity — a range,
-            // never a promise. Extended RSI earns a pullback entry instead of
-            // a chase at the open.
-            val volPace = if (q.avgVolume3M > 0L) q.dayVolume.toDouble() / q.avgVolume3M else 0.0
-            val catalyst = ((volPace - 1.2).coerceAtLeast(0.0) * 0.8).coerceAtMost(1.5)
-            var hiPct = (atrPct * 1.3 + catalyst).coerceIn(1.5, 10.0)
-            val loPct = (atrPct * 0.8).coerceIn(0.8, 6.0)
-            if (hiPct < loPct + 0.7) hiPct = min(10.0, loPct + 0.7)
-            val entry = if (rsi >= 68.0) q.price - atr * 0.35 else q.price
-
-            TomorrowPick(
-                symbol = q.symbol,
-                name = q.name.ifEmpty { q.symbol },
-                price = round2(q.price),
-                dayChangePct = round1(q.dayChangePct),
-                score = score,
-                entry = round2(entry),
-                expectedLowPct = -round1(loPct),
-                expectedHighPct = round1(hiPct),
-                rsi = round1(rsi),
-                techBullish = bullish,
-                techTotal = techTotal,
-                reason = buildPickReason(q, volPace, rsi, bullish, techTotal, entry)
-            )
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun buildPickReason(
-        q: ScreenerQuote,
-        volPace: Double,
-        rsi: Double,
-        bullish: Int,
-        techTotal: Int,
-        entry: Double
-    ): String {
-        val parts = mutableListOf<String>()
-        parts += String.format(Locale.US, "%+.1f%% last session", q.dayChangePct)
-        if (volPace >= 1.2) parts += String.format(Locale.US, "%.1fx volume", volPace)
-        if (q.dayHigh > q.dayLow && q.dayLow > 0.0) {
-            val closePos = (q.price - q.dayLow) / (q.dayHigh - q.dayLow) * 100.0
-            parts += String.format(Locale.US, "closed at %.0f%% of the range", closePos)
-        }
-        if (techTotal > 0) parts += "$bullish of $techTotal techniques bullish"
-        parts += String.format(Locale.US, "RSI %.0f", rsi)
-        if (entry < q.price) {
-            parts += String.format(Locale.US, "extended — wait for a dip to $%.2f", entry)
-        }
-        return parts.joinToString(", ")
-    }
 
     private fun round1(v: Double): Double = round(v * 10.0) / 10.0
     private fun round2(v: Double): Double = round(v * 100.0) / 100.0

@@ -36,7 +36,7 @@ import org.json.JSONObject
  *     low; exit 15:45 ET") is replayed over every fingerprint session, U-days
  *     and failures alike. The record — fired / won / average return — is
  *     printed on the card and gates the pick: no measured edge, no listing.
- *  4. TECHNIQUE BOARD — finalists run the 20-technique daily board; a
+ *  4. TECHNIQUE BOARD — finalists run the 35-technique daily board; a
  *     BEARISH board disqualifies (a U inside a downtrend is a trap).
  *  5. LIVE STATE — during the session each pick is tracked bar by bar:
  *     no-dip-yet → in-the-dip → BUY ZONE (VWAP reclaimed on a higher low,
@@ -731,7 +731,7 @@ class UPatternEngine(
         session: Dates.MarketSession
     ): UPick? {
         return try {
-            // The 20-technique daily board: a bearish read disqualifies.
+            // The 35-technique daily board: a bearish read disqualifies.
             var techBullish = 0
             var techTotal = 0
             try {

@@ -261,7 +261,7 @@ fun PositionDetailScreen(
                             Spacer(Modifier.padding(start = 12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "20-technique analysis",
+                                    text = "35-technique analysis",
                                     style = MaterialTheme.typography.titleSmall,
                                     color = AurumColors.text
                                 )

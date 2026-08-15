@@ -10,11 +10,13 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
- * Twenty-technique chart analysis over daily candles. Pure Kotlin — no Android
- * dependencies, never throws. All rolling series are index-aligned with the
- * (last <= 120) candles the analysis ran on: entry i belongs to candle i, and
- * is null until enough history exists at that index. [TechniqueAnalysis.timestamps]
- * carries the epoch millis of those same candles, one per index.
+ * Thirty-five-technique chart analysis over daily candles — the well-known
+ * playbook of professional desks, one verdict per technique. Pure Kotlin — no
+ * Android dependencies, never throws. All rolling series are index-aligned with
+ * the (last <= 120) candles the analysis ran on: entry i belongs to candle i,
+ * and is null until enough history exists at that index.
+ * [TechniqueAnalysis.timestamps] carries the epoch millis of those same
+ * candles, one per index.
  */
 
 enum class TechniqueVerdict { BULLISH, BEARISH, NEUTRAL }
@@ -121,6 +123,71 @@ data class CmfData(val cmf: List<Double?>)
 /** Tushar Chande's Aroon(25): up/down lines, each 0..100. */
 data class AroonData(val up: List<Double?>, val down: List<Double?>)
 
+/** Chande & Kroll's Stochastic RSI (14,14,3,3), 0..100. */
+data class StochRsiData(val k: List<Double?>, val d: List<Double?>)
+
+/** 12-day Rate of Change, in percent. */
+data class RocData(val roc: List<Double?>)
+
+/** TRIX(15): 1-bar % change of a triple-smoothed EMA, with an EMA(9) signal. */
+data class TrixData(val trix: List<Double?>, val signal: List<Double?>)
+
+/** Larry Williams' Ultimate Oscillator (7,14,28), 0..100. */
+data class UltimateData(val uo: List<Double?>)
+
+/** Botes & Siepman's Vortex Indicator (14): VI+ and VI- around the 1.0 line. */
+data class VortexData(val plus: List<Double?>, val minus: List<Double?>)
+
+/** Elder's Force Index, EMA(13)-smoothed, in price x volume units. */
+data class ForceData(val force: List<Double?>)
+
+/** Chande Momentum Oscillator (14), -100..+100. */
+data class CmoData(val cmo: List<Double?>)
+
+/** Detrended Price Oscillator (20), non-centered: close minus the mid-shifted average. */
+data class DpoData(val dpo: List<Double?>)
+
+/** Martin Pring's Know Sure Thing: four weighted smoothed ROCs plus an SMA(9) signal. */
+data class KstData(val kst: List<Double?>, val signal: List<Double?>)
+
+/** Alan Hull's moving average (20) overlay. */
+data class HullData(val closes: List<Double>, val hull: List<Double?>)
+
+/** Supertrend (10, 3x ATR): the flip line and the regime it prints. */
+data class SupertrendData(
+    val closes: List<Double>,
+    val line: List<Double?>,
+    val bullish: List<Boolean?>
+)
+
+/** Chuck LeBeau's Chandelier Exit (22, 3x ATR): long and short trailing stops. */
+data class ChandelierData(
+    val closes: List<Double>,
+    val longStop: List<Double?>,
+    val shortStop: List<Double?>
+)
+
+/** Rolling 20-day volume-weighted average price — the institutional cost basis. */
+data class VwapData(val closes: List<Double>, val vwap: List<Double?>)
+
+/** Marc Chaikin's Accumulation/Distribution line (cumulative). */
+data class AdLineData(val ad: List<Double>)
+
+/**
+ * Classic floor-trader pivots computed from the last COMPLETED calendar
+ * month's high, low and close. [valid] is false when the window holds no
+ * completed month.
+ */
+data class PivotData(
+    val closes: List<Double>,
+    val valid: Boolean,
+    val pivot: Double,
+    val r1: Double,
+    val r2: Double,
+    val s1: Double,
+    val s2: Double
+)
+
 data class TechniqueResult(
     val key: String,
     val name: String,
@@ -167,7 +234,22 @@ data class TechniqueAnalysis(
     val cciData: CciData,
     val keltnerData: KeltnerData,
     val cmfData: CmfData,
-    val aroonData: AroonData
+    val aroonData: AroonData,
+    val stochRsiData: StochRsiData,
+    val rocData: RocData,
+    val trixData: TrixData,
+    val uoData: UltimateData,
+    val vortexData: VortexData,
+    val forceData: ForceData,
+    val cmoData: CmoData,
+    val dpoData: DpoData,
+    val kstData: KstData,
+    val hullData: HullData,
+    val supertrendData: SupertrendData,
+    val chandelierData: ChandelierData,
+    val vwapData: VwapData,
+    val adData: AdLineData,
+    val pivotData: PivotData
 )
 
 object Techniques {
@@ -235,6 +317,21 @@ object Techniques {
         val keltnerData = keltnerData(cs, closes)
         val cmfData = CmfData(cmfSeries(cs, 20))
         val aroonData = aroonData(cs, 25)
+        val stochRsiData = stochRsiData(closes)
+        val rocData = RocData(rocSeries(closes, 12))
+        val trixData = trixData(closes)
+        val uoData = UltimateData(ultimateSeries(cs))
+        val vortexData = vortexData(cs, 14)
+        val forceData = ForceData(forceSeries(cs, 13))
+        val cmoData = CmoData(cmoSeries(closes, 14))
+        val dpoData = DpoData(dpoSeries(closes, 20))
+        val kstData = kstData(closes)
+        val hullData = HullData(closes, hullSeries(closes, 20))
+        val supertrendData = supertrendData(cs, closes)
+        val chandelierData = chandelierData(cs, closes)
+        val vwapData = VwapData(closes, vwapSeries(cs, 20))
+        val adData = AdLineData(adLineSeries(cs))
+        val pivotData = pivotData(cs, closes)
         // Golden cross needs history beyond the display window: compute the
         // 50/200 averages over the FULL candle list, then trim to the window.
         val fullCloses = candles.map { it.close }
@@ -265,7 +362,22 @@ object Techniques {
             cciResult(n, cciData),
             keltnerResult(price, keltnerData),
             cmfResult(n, cmfData),
-            aroonResult(n, aroonData)
+            aroonResult(n, aroonData),
+            stochRsiResult(n, stochRsiData),
+            rocResult(n, rocData),
+            trixResult(n, trixData),
+            uoResult(n, uoData),
+            vortexResult(n, vortexData),
+            forceResult(n, forceData, price),
+            cmoResult(n, cmoData),
+            dpoResult(n, price, dpoData),
+            kstResult(n, kstData),
+            hullResult(price, hullData),
+            supertrendResult(price, supertrendData),
+            chandelierResult(price, chandelierData),
+            vwapResult(price, vwapData),
+            adResult(closes, adData.ad),
+            pivotResult(price, pivotData)
         )
 
         val outlook = buildOutlook(cs, price, results, supports, resistances, accuracyWeights)
@@ -295,7 +407,22 @@ object Techniques {
             cciData = cciData,
             keltnerData = keltnerData,
             cmfData = cmfData,
-            aroonData = aroonData
+            aroonData = aroonData,
+            stochRsiData = stochRsiData,
+            rocData = rocData,
+            trixData = trixData,
+            uoData = uoData,
+            vortexData = vortexData,
+            forceData = forceData,
+            cmoData = cmoData,
+            dpoData = dpoData,
+            kstData = kstData,
+            hullData = hullData,
+            supertrendData = supertrendData,
+            chandelierData = chandelierData,
+            vwapData = vwapData,
+            adData = adData,
+            pivotData = pivotData
         )
     }
 
@@ -1601,6 +1728,945 @@ object Techniques {
         }
     }
 
+    // -- technique 21: Stochastic RSI ----------------------------------------
+
+    /** Stochastic(14) of the RSI(14) series, smoothed 3/3 like the slow stochastic. */
+    private fun stochRsiData(closes: List<Double>): StochRsiData {
+        val rsi = rsiSeries(closes, 14)
+        val n = rsi.size
+        val raw = arrayOfNulls<Double>(n)
+        for (i in 0 until n) {
+            var lo = Double.MAX_VALUE
+            var hi = -Double.MAX_VALUE
+            var ok = i >= 13
+            if (ok) {
+                for (j in i - 13..i) {
+                    val v = rsi[j]
+                    if (v == null) {
+                        ok = false
+                        break
+                    }
+                    if (v < lo) lo = v
+                    if (v > hi) hi = v
+                }
+            }
+            if (ok) {
+                val span = hi - lo
+                raw[i] = if (span > 1e-9) (rsi[i]!! - lo) / span * 100.0 else 50.0
+            }
+        }
+        val k = sma3Nullable(raw.toList())
+        val d = sma3Nullable(k)
+        return StochRsiData(k, d)
+    }
+
+    private fun stochRsiResult(n: Int, data: StochRsiData): TechniqueResult {
+        val name = "Stochastic RSI"
+        val k = data.k.last()
+        val d = data.d.last()
+        if (k == null || d == null) {
+            return TechniqueResult(
+                "stochrsi", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 33 daily candles for StochRSI(14,14,3,3); $n available."
+            )
+        }
+        return when {
+            k < 20.0 && k >= d -> TechniqueResult(
+                "stochrsi", name, TechniqueVerdict.BULLISH,
+                (68.0 + (20.0 - k)).roundToInt().coerceIn(68, 90),
+                "StochRSI %K ${fmt0(k)} turning up over %D ${fmt0(d)} in the sub-20 zone — " +
+                    "momentum of momentum is bottoming."
+            )
+            k > 80.0 && k <= d -> TechniqueResult(
+                "stochrsi", name, TechniqueVerdict.BEARISH,
+                (68.0 + (k - 80.0)).roundToInt().coerceIn(68, 90),
+                "StochRSI %K ${fmt0(k)} rolling under %D ${fmt0(d)} in the over-80 zone — " +
+                    "momentum of momentum is topping."
+            )
+            else -> {
+                val zone = when {
+                    k < 20.0 -> " pinned in the oversold zone, no turn yet"
+                    k > 80.0 -> " pinned in the overbought zone, no turn yet"
+                    else -> " mid-range"
+                }
+                TechniqueResult(
+                    "stochrsi", name, TechniqueVerdict.NEUTRAL, 30,
+                    "StochRSI %K ${fmt0(k)} vs %D ${fmt0(d)},$zone."
+                )
+            }
+        }
+    }
+
+    // -- technique 22: Rate of Change ----------------------------------------
+
+    /** Percent change vs the close [period] bars back; defined from index [period]. */
+    private fun rocSeries(closes: List<Double>, period: Int): List<Double?> {
+        val n = closes.size
+        val out = arrayOfNulls<Double>(n)
+        for (i in period until n) {
+            val base = closes[i - period]
+            if (base > 0.0) out[i] = (closes[i] / base - 1.0) * 100.0
+        }
+        return out.toList()
+    }
+
+    private fun rocResult(n: Int, data: RocData): TechniqueResult {
+        val name = "Rate of Change"
+        val r = data.roc.last()
+            ?: return TechniqueResult(
+                "roc", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 13 daily candles for ROC(12); $n available."
+            )
+        val prev = if (data.roc.size >= 2) data.roc[data.roc.size - 2] else null
+        val crossedUp = prev != null && prev <= 0.0 && r > 0.0
+        val crossedDown = prev != null && prev >= 0.0 && r < 0.0
+        return when {
+            r >= 2.0 -> TechniqueResult(
+                "roc", name, TechniqueVerdict.BULLISH,
+                (55.0 + r * 2.0 + (if (crossedUp) 10.0 else 0.0)).roundToInt().coerceIn(55, 92),
+                "ROC(12) at ${fmt1(r)}% — price runs ${fmt1(r)}% above its close 12 bars ago; " +
+                    "momentum is positive${if (crossedUp) " and just crossed the zero line" else ""}."
+            )
+            r <= -2.0 -> TechniqueResult(
+                "roc", name, TechniqueVerdict.BEARISH,
+                (55.0 - r * 2.0 + (if (crossedDown) 10.0 else 0.0)).roundToInt().coerceIn(55, 92),
+                "ROC(12) at ${fmt1(r)}% — price sits ${fmt1(-r)}% below its close 12 bars ago; " +
+                    "momentum is negative${if (crossedDown) " and just crossed under zero" else ""}."
+            )
+            crossedUp -> TechniqueResult(
+                "roc", name, TechniqueVerdict.BULLISH, 60,
+                "ROC(12) crossed up through zero to ${fmt1(r)}% — the momentum turn traders buy."
+            )
+            crossedDown -> TechniqueResult(
+                "roc", name, TechniqueVerdict.BEARISH, 60,
+                "ROC(12) crossed down through zero to ${fmt1(r)}% — the momentum turn traders sell."
+            )
+            else -> TechniqueResult(
+                "roc", name, TechniqueVerdict.NEUTRAL, 30,
+                "ROC(12) at ${fmt1(r)}%, inside the ±2% noise band around zero."
+            )
+        }
+    }
+
+    // -- technique 23: TRIX ---------------------------------------------------
+
+    /** TRIX(15): 1-bar % change of the triple EMA(15), with an EMA(9) signal. */
+    private fun trixData(closes: List<Double>): TrixData {
+        val n = closes.size
+        val e1 = emaSeries(closes, 15)
+        val e2 = emaNullable(e1, 15)
+        val e3 = emaNullable(e2, 15)
+        val trix = arrayOfNulls<Double>(n)
+        for (i in 1 until n) {
+            val a = e3[i]
+            val b = e3[i - 1]
+            if (a != null && b != null && b != 0.0) trix[i] = (a / b - 1.0) * 100.0
+        }
+        return TrixData(trix.toList(), emaNullable(trix.toList(), 9))
+    }
+
+    private fun trixResult(n: Int, data: TrixData): TechniqueResult {
+        val name = "TRIX"
+        val t = data.trix.last()
+        val s = data.signal.last()
+        if (t == null || s == null) {
+            return TechniqueResult(
+                "trix", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 55 daily candles for TRIX(15) and its signal; $n available."
+            )
+        }
+        val prev = if (data.trix.size >= 2) data.trix[data.trix.size - 2] else null
+        val rising = prev != null && t > prev
+        val falling = prev != null && t < prev
+        return when {
+            t > s && rising -> TechniqueResult(
+                "trix", name, TechniqueVerdict.BULLISH,
+                (58.0 + min(20.0, abs(t) * 60.0) + (if (t > 0.0) 8.0 else 0.0))
+                    .roundToInt().coerceIn(58, 92),
+                "TRIX ${fmtSig(t)} rising above its signal ${fmtSig(s)} — the triple-smoothed " +
+                    "trend filter reads up with the noise stripped out."
+            )
+            t < s && falling -> TechniqueResult(
+                "trix", name, TechniqueVerdict.BEARISH,
+                (58.0 + min(20.0, abs(t) * 60.0) + (if (t < 0.0) 8.0 else 0.0))
+                    .roundToInt().coerceIn(58, 92),
+                "TRIX ${fmtSig(t)} falling below its signal ${fmtSig(s)} — the triple-smoothed " +
+                    "trend filter reads down."
+            )
+            else -> TechniqueResult(
+                "trix", name, TechniqueVerdict.NEUTRAL, 30,
+                "TRIX ${fmtSig(t)} vs signal ${fmtSig(s)} with no push either way."
+            )
+        }
+    }
+
+    // -- technique 24: Ultimate Oscillator -----------------------------------
+
+    /** Williams' UO: buying pressure over true range, blended 7/14/28 as 4:2:1. */
+    private fun ultimateSeries(candles: List<Candle>): List<Double?> {
+        val n = candles.size
+        val out = arrayOfNulls<Double>(n)
+        if (n < 29) return out.toList()
+        val bp = DoubleArray(n)
+        val tr = DoubleArray(n)
+        for (i in 1 until n) {
+            val c = candles[i]
+            val pc = candles[i - 1].close
+            val trueLow = min(c.low, pc)
+            val trueHigh = max(c.high, pc)
+            bp[i] = c.close - trueLow
+            tr[i] = trueHigh - trueLow
+        }
+        fun avg(i: Int, period: Int): Double? {
+            var sb = 0.0
+            var st = 0.0
+            for (j in i - period + 1..i) {
+                sb += bp[j]
+                st += tr[j]
+            }
+            return if (st > 1e-12) sb / st else null
+        }
+        for (i in 28 until n) {
+            val a7 = avg(i, 7) ?: continue
+            val a14 = avg(i, 14) ?: continue
+            val a28 = avg(i, 28) ?: continue
+            out[i] = 100.0 * (4.0 * a7 + 2.0 * a14 + a28) / 7.0
+        }
+        return out.toList()
+    }
+
+    private fun uoResult(n: Int, data: UltimateData): TechniqueResult {
+        val name = "Ultimate Oscillator"
+        val u = data.uo.last()
+            ?: return TechniqueResult(
+                "uo", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 29 daily candles for the 7/14/28 blend; $n available."
+            )
+        val prev5 = if (data.uo.size >= 6) data.uo[data.uo.size - 6] else null
+        val trendNote = prev5?.let { " Five bars ago it was ${fmt0(it)}." } ?: ""
+        return when {
+            u < 30.0 -> TechniqueResult(
+                "uo", name, TechniqueVerdict.BULLISH,
+                (58.0 + (30.0 - u) * 2.0).roundToInt().coerceIn(58, 90),
+                "Ultimate Oscillator at ${fmt0(u)}, under the 30 line — buying pressure is " +
+                    "washed out across all three timeframes.$trendNote"
+            )
+            u > 70.0 -> TechniqueResult(
+                "uo", name, TechniqueVerdict.BEARISH,
+                (58.0 + (u - 70.0) * 2.0).roundToInt().coerceIn(58, 90),
+                "Ultimate Oscillator at ${fmt0(u)}, over the 70 line — buying pressure is " +
+                    "stretched across all three timeframes.$trendNote"
+            )
+            else -> TechniqueResult(
+                "uo", name, TechniqueVerdict.NEUTRAL, 30,
+                "Ultimate Oscillator at ${fmt0(u)}, inside the 30–70 band.$trendNote"
+            )
+        }
+    }
+
+    // -- technique 25: Vortex Indicator --------------------------------------
+
+    /** VI+ = sum14|high - prevLow| / sum14 TR; VI- mirrored on lows vs prev highs. */
+    private fun vortexData(candles: List<Candle>, period: Int): VortexData {
+        val n = candles.size
+        val plus = arrayOfNulls<Double>(n)
+        val minus = arrayOfNulls<Double>(n)
+        if (n < period + 1) return VortexData(plus.toList(), minus.toList())
+        val vmP = DoubleArray(n)
+        val vmM = DoubleArray(n)
+        val tr = DoubleArray(n)
+        for (i in 1 until n) {
+            val c = candles[i]
+            val p = candles[i - 1]
+            vmP[i] = abs(c.high - p.low)
+            vmM[i] = abs(c.low - p.high)
+            tr[i] = max(c.high - c.low, max(abs(c.high - p.close), abs(c.low - p.close)))
+        }
+        for (i in period until n) {
+            var sp = 0.0
+            var sm = 0.0
+            var st = 0.0
+            for (j in i - period + 1..i) {
+                sp += vmP[j]
+                sm += vmM[j]
+                st += tr[j]
+            }
+            if (st > 1e-12) {
+                plus[i] = sp / st
+                minus[i] = sm / st
+            }
+        }
+        return VortexData(plus.toList(), minus.toList())
+    }
+
+    private fun vortexResult(n: Int, data: VortexData): TechniqueResult {
+        val name = "Vortex Indicator"
+        val p = data.plus.last()
+        val m = data.minus.last()
+        if (p == null || m == null) {
+            return TechniqueResult(
+                "vortex", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 15 daily candles for VI(14); $n available."
+            )
+        }
+        // Most recent VI+/VI- cross within the last 5 bars, if any.
+        var crossAgo: Int? = null
+        var i = data.plus.size - 1
+        var steps = 0
+        while (i >= 1 && steps < 5) {
+            val a = data.plus[i]
+            val b = data.minus[i]
+            val pa = data.plus[i - 1]
+            val pb = data.minus[i - 1]
+            if (a != null && b != null && pa != null && pb != null) {
+                if ((a - b != 0.0) && (pa - pb != 0.0) && ((a > b) != (pa > pb))) {
+                    crossAgo = data.plus.size - 1 - i
+                    break
+                }
+            }
+            i--
+            steps++
+        }
+        val gap = abs(p - m)
+        val crossNote = crossAgo?.let {
+            " The lines crossed ${if (it == 0) "this bar" else "$it ${bars(it)} ago"} — a fresh signal."
+        } ?: ""
+        return when {
+            p > m && p >= 1.0 -> TechniqueResult(
+                "vortex", name, TechniqueVerdict.BULLISH,
+                (58.0 + gap * 100.0 + (if (crossAgo != null) 10.0 else 0.0)).roundToInt().coerceIn(58, 92),
+                "VI+ ${fmt2(p)} over VI- ${fmt2(m)} with VI+ above 1.0 — upward range " +
+                    "expansion dominates.$crossNote"
+            )
+            m > p && m >= 1.0 -> TechniqueResult(
+                "vortex", name, TechniqueVerdict.BEARISH,
+                (58.0 + gap * 100.0 + (if (crossAgo != null) 10.0 else 0.0)).roundToInt().coerceIn(58, 92),
+                "VI- ${fmt2(m)} over VI+ ${fmt2(p)} with VI- above 1.0 — downward range " +
+                    "expansion dominates.$crossNote"
+            )
+            else -> TechniqueResult(
+                "vortex", name, TechniqueVerdict.NEUTRAL, 30,
+                "VI+ ${fmt2(p)} vs VI- ${fmt2(m)}, both near the 1.0 line — no vortex has formed."
+            )
+        }
+    }
+
+    // -- technique 26: Elder's Force Index -----------------------------------
+
+    /** Force = daily close change x volume, smoothed with EMA(13). */
+    private fun forceSeries(candles: List<Candle>, period: Int): List<Double?> {
+        val n = candles.size
+        val out = arrayOfNulls<Double>(n)
+        if (n < period + 1) return out.toList()
+        val raw = ArrayList<Double>(n - 1)
+        for (i in 1 until n) {
+            raw.add((candles[i].close - candles[i - 1].close) * candles[i].volume.toDouble())
+        }
+        val ema = emaSeries(raw, period)
+        for (j in ema.indices) out[j + 1] = ema[j]
+        return out.toList()
+    }
+
+    private fun forceResult(n: Int, data: ForceData, price: Double): TechniqueResult {
+        val name = "Force Index"
+        val f = data.force.last()
+            ?: return TechniqueResult(
+                "efi", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 14 daily candles for Force Index EMA(13); $n available."
+            )
+        val prev = if (data.force.size >= 2) data.force[data.force.size - 2] else null
+        val rising = prev != null && f > prev
+        val falling = prev != null && f < prev
+        // Normalize against the average absolute force so strength is comparable
+        // across a $4 stock and a $400 one.
+        val defined = data.force.filterNotNull()
+        val avgAbs = if (defined.isNotEmpty()) defined.sumOf { abs(it) } / defined.size else 0.0
+        val rel = if (avgAbs > 1e-9) abs(f) / avgAbs else 0.0
+        val netTxt = (if (f >= 0.0) "+" else "-") + Fmt.compact(abs(f))
+        return when {
+            f > 0.0 && rising -> TechniqueResult(
+                "efi", name, TechniqueVerdict.BULLISH,
+                (58.0 + min(25.0, rel * 12.0)).roundToInt().coerceIn(58, 90),
+                "Force Index $netTxt, positive and rising — Elder's read: the bulls are " +
+                    "pushing price with real volume behind them."
+            )
+            f < 0.0 && falling -> TechniqueResult(
+                "efi", name, TechniqueVerdict.BEARISH,
+                (58.0 + min(25.0, rel * 12.0)).roundToInt().coerceIn(58, 90),
+                "Force Index $netTxt, negative and falling — the bears are pressing with " +
+                    "real volume behind them."
+            )
+            else -> TechniqueResult(
+                "efi", name, TechniqueVerdict.NEUTRAL, 30,
+                "Force Index $netTxt with no sustained push — buying and selling force " +
+                    "roughly balance."
+            )
+        }
+    }
+
+    // -- technique 27: Chande Momentum Oscillator ----------------------------
+
+    /** CMO = 100 x (sum up-moves - sum down-moves) / (sum up + sum down) over [period]. */
+    private fun cmoSeries(closes: List<Double>, period: Int): List<Double?> {
+        val n = closes.size
+        val out = arrayOfNulls<Double>(n)
+        if (n < period + 1) return out.toList()
+        for (i in period until n) {
+            var up = 0.0
+            var down = 0.0
+            for (j in i - period + 1..i) {
+                val d = closes[j] - closes[j - 1]
+                if (d > 0.0) up += d else down -= d
+            }
+            val total = up + down
+            out[i] = if (total > 1e-12) 100.0 * (up - down) / total else 0.0
+        }
+        return out.toList()
+    }
+
+    private fun cmoResult(n: Int, data: CmoData): TechniqueResult {
+        val name = "Chande Momentum"
+        val c = data.cmo.last()
+            ?: return TechniqueResult(
+                "cmo", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 15 daily candles for CMO(14); $n available."
+            )
+        return when {
+            c <= -50.0 -> TechniqueResult(
+                "cmo", name, TechniqueVerdict.BULLISH,
+                (58.0 + (-c - 50.0) * 0.6).roundToInt().coerceIn(58, 90),
+                "CMO(14) at ${fmt0(c)}, under Chande's -50 oversold line — down-moves have " +
+                    "dominated to the point of exhaustion."
+            )
+            c >= 50.0 -> TechniqueResult(
+                "cmo", name, TechniqueVerdict.BEARISH,
+                (58.0 + (c - 50.0) * 0.6).roundToInt().coerceIn(58, 90),
+                "CMO(14) at ${fmt0(c)}, over Chande's +50 overbought line — up-moves have " +
+                    "dominated to the point of stretch."
+            )
+            else -> {
+                val lean = when {
+                    c > 15.0 -> ", leaning positive"
+                    c < -15.0 -> ", leaning negative"
+                    else -> ""
+                }
+                TechniqueResult(
+                    "cmo", name, TechniqueVerdict.NEUTRAL, 30,
+                    "CMO(14) at ${fmt0(c)}, inside the ±50 band$lean."
+                )
+            }
+        }
+    }
+
+    // -- technique 28: Detrended Price Oscillator ----------------------------
+
+    /** Non-centered DPO(20): close minus the SMA(20) from (20/2 + 1) bars back. */
+    private fun dpoSeries(closes: List<Double>, period: Int): List<Double?> {
+        val n = closes.size
+        val out = arrayOfNulls<Double>(n)
+        val shift = period / 2 + 1
+        val sma = smaSeries(closes, period)
+        for (i in 0 until n) {
+            val idx = i - shift
+            if (idx >= 0) {
+                val m = sma[idx]
+                if (m != null) out[i] = closes[i] - m
+            }
+        }
+        return out.toList()
+    }
+
+    private fun dpoResult(n: Int, price: Double, data: DpoData): TechniqueResult {
+        val name = "Detrended Price"
+        val d = data.dpo.last()
+            ?: return TechniqueResult(
+                "dpo", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 31 daily candles for DPO(20); $n available."
+            )
+        val prev = if (data.dpo.size >= 2) data.dpo[data.dpo.size - 2] else null
+        val rising = prev != null && d > prev
+        val falling = prev != null && d < prev
+        val pct = if (price > 0.0) d / price * 100.0 else 0.0
+        return when {
+            d > 0.0 && rising -> TechniqueResult(
+                "dpo", name, TechniqueVerdict.BULLISH,
+                (55.0 + min(20.0, abs(pct) * 6.0)).roundToInt().coerceIn(55, 85),
+                "DPO(20) at ${fmtSig(d)} (${fmt1(pct)}% of price), positive and rising — " +
+                    "the short cycle is on its upswing."
+            )
+            d < 0.0 && falling -> TechniqueResult(
+                "dpo", name, TechniqueVerdict.BEARISH,
+                (55.0 + min(20.0, abs(pct) * 6.0)).roundToInt().coerceIn(55, 85),
+                "DPO(20) at ${fmtSig(d)} (${fmt1(pct)}% of price), negative and falling — " +
+                    "the short cycle is on its downswing."
+            )
+            else -> TechniqueResult(
+                "dpo", name, TechniqueVerdict.NEUTRAL, 30,
+                "DPO(20) at ${fmtSig(d)} with no cycle push — price hugs its detrended average."
+            )
+        }
+    }
+
+    // -- technique 29: Know Sure Thing ---------------------------------------
+
+    /** Pring's KST: SMA-smoothed ROCs of 10/15/20/30 weighted 1:2:3:4, signal SMA(9). */
+    private fun kstData(closes: List<Double>): KstData {
+        val n = closes.size
+        val r1 = smaNullable(rocSeries(closes, 10), 10)
+        val r2 = smaNullable(rocSeries(closes, 15), 10)
+        val r3 = smaNullable(rocSeries(closes, 20), 10)
+        val r4 = smaNullable(rocSeries(closes, 30), 15)
+        val kst = arrayOfNulls<Double>(n)
+        for (i in 0 until n) {
+            val a = r1[i]
+            val b = r2[i]
+            val c = r3[i]
+            val d = r4[i]
+            if (a != null && b != null && c != null && d != null) {
+                kst[i] = a + 2.0 * b + 3.0 * c + 4.0 * d
+            }
+        }
+        return KstData(kst.toList(), smaNullable(kst.toList(), 9))
+    }
+
+    private fun kstResult(n: Int, data: KstData): TechniqueResult {
+        val name = "Know Sure Thing"
+        val k = data.kst.last()
+        val s = data.signal.last()
+        if (k == null || s == null) {
+            return TechniqueResult(
+                "kst", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 53 daily candles for Pring's KST and its signal; $n available."
+            )
+        }
+        val gap = abs(k - s)
+        return when {
+            k > s && k > 0.0 -> TechniqueResult(
+                "kst", name, TechniqueVerdict.BULLISH,
+                (58.0 + min(22.0, gap * 2.0) + 6.0).roundToInt().coerceIn(58, 92),
+                "KST ${fmt1(k)} above its signal ${fmt1(s)} and above zero — all four " +
+                    "smoothed momentum cycles point up."
+            )
+            k > s -> TechniqueResult(
+                "kst", name, TechniqueVerdict.BULLISH, 58,
+                "KST ${fmt1(k)} crossed over its signal ${fmt1(s)} below zero — an early turn, " +
+                    "not yet a confirmed uptrend."
+            )
+            k < s && k < 0.0 -> TechniqueResult(
+                "kst", name, TechniqueVerdict.BEARISH,
+                (58.0 + min(22.0, gap * 2.0) + 6.0).roundToInt().coerceIn(58, 92),
+                "KST ${fmt1(k)} below its signal ${fmt1(s)} and below zero — all four " +
+                    "smoothed momentum cycles point down."
+            )
+            k < s -> TechniqueResult(
+                "kst", name, TechniqueVerdict.BEARISH, 58,
+                "KST ${fmt1(k)} rolled under its signal ${fmt1(s)} above zero — momentum is " +
+                    "fading from a high level."
+            )
+            else -> TechniqueResult(
+                "kst", name, TechniqueVerdict.NEUTRAL, 30,
+                "KST ${fmt1(k)} sits on its signal ${fmt1(s)} — no cycle verdict."
+            )
+        }
+    }
+
+    // -- technique 30: Hull Moving Average -----------------------------------
+
+    /** HMA(n) = WMA(2 x WMA(n/2) - WMA(n), sqrt(n)). */
+    private fun hullSeries(closes: List<Double>, period: Int): List<Double?> {
+        val n = closes.size
+        val half = wmaSeries(closes, period / 2)
+        val full = wmaSeries(closes, period)
+        val diff = arrayOfNulls<Double>(n)
+        for (i in 0 until n) {
+            val h = half[i]
+            val f = full[i]
+            if (h != null && f != null) diff[i] = 2.0 * h - f
+        }
+        return wmaNullable(diff.toList(), sqrt(period.toDouble()).roundToInt().coerceAtLeast(2))
+    }
+
+    private fun hullResult(price: Double, data: HullData): TechniqueResult {
+        val name = "Hull Moving Average"
+        val n = data.closes.size
+        val h = data.hull.last()
+        val prev = if (data.hull.size >= 2) data.hull[data.hull.size - 2] else null
+        if (h == null || prev == null) {
+            return TechniqueResult(
+                "hull", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 25 daily candles for HMA(20); $n available."
+            )
+        }
+        val rising = h > prev
+        val distPct = if (h > 0.0) (price - h) / h * 100.0 else 0.0
+        return when {
+            price > h && rising -> TechniqueResult(
+                "hull", name, TechniqueVerdict.BULLISH,
+                (58.0 + min(20.0, distPct * 5.0) + 8.0).roundToInt().coerceIn(58, 92),
+                "Close ${Fmt.money(price)} rides ${fmt1(distPct)}% above a rising HMA(20) " +
+                    "${Fmt.money(h)} — Hull's fast, smooth average confirms the up-move."
+            )
+            price < h && !rising -> TechniqueResult(
+                "hull", name, TechniqueVerdict.BEARISH,
+                (58.0 + min(20.0, -distPct * 5.0) + 8.0).roundToInt().coerceIn(58, 92),
+                "Close ${Fmt.money(price)} sits ${fmt1(-distPct)}% below a falling HMA(20) " +
+                    "${Fmt.money(h)} — the fast average confirms the down-move."
+            )
+            else -> TechniqueResult(
+                "hull", name, TechniqueVerdict.NEUTRAL, 32,
+                "Close ${Fmt.money(price)} and the HMA(20) ${Fmt.money(h)} disagree on " +
+                    "direction — the turn is not confirmed."
+            )
+        }
+    }
+
+    // -- technique 31: Supertrend --------------------------------------------
+
+    /** Supertrend(10, 3): ratcheted ATR bands off the bar midpoint; flips on closes. */
+    private fun supertrendData(candles: List<Candle>, closes: List<Double>): SupertrendData {
+        val n = candles.size
+        val line = arrayOfNulls<Double>(n)
+        val bull = arrayOfNulls<Boolean>(n)
+        val atr = atrSeries(candles, 10)
+        var up = true
+        var finalUpper = 0.0
+        var finalLower = 0.0
+        var seeded = false
+        for (i in 0 until n) {
+            val a = atr[i] ?: continue
+            val mid = (candles[i].high + candles[i].low) / 2.0
+            val basicUpper = mid + 3.0 * a
+            val basicLower = mid - 3.0 * a
+            if (!seeded) {
+                finalUpper = basicUpper
+                finalLower = basicLower
+                up = candles[i].close >= mid
+                seeded = true
+            } else {
+                val prevClose = candles[i - 1].close
+                finalUpper =
+                    if (basicUpper < finalUpper || prevClose > finalUpper) basicUpper else finalUpper
+                finalLower =
+                    if (basicLower > finalLower || prevClose < finalLower) basicLower else finalLower
+                up = when {
+                    up && candles[i].close < finalLower -> false
+                    !up && candles[i].close > finalUpper -> true
+                    else -> up
+                }
+            }
+            line[i] = if (up) finalLower else finalUpper
+            bull[i] = up
+        }
+        return SupertrendData(closes, line.toList(), bull.toList())
+    }
+
+    private fun supertrendResult(price: Double, data: SupertrendData): TechniqueResult {
+        val name = "Supertrend"
+        val lastIdx = data.line.indexOfLast { it != null }
+        if (lastIdx < 1) {
+            return TechniqueResult(
+                "supertrend", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 11 daily candles for Supertrend(10, 3); ${data.closes.size} available."
+            )
+        }
+        val line = data.line[lastIdx]!!
+        val up = data.bullish[lastIdx] == true
+        var run = 0
+        var i = lastIdx
+        while (i >= 0 && data.bullish[i] == data.bullish[lastIdx]) {
+            run++
+            i--
+        }
+        val fresh = run <= 3
+        val flippedAgo = run - 1
+        val freshNote =
+            if (fresh) {
+                " Flipped ${if (flippedAgo == 0) "this bar" else "$flippedAgo ${bars(flippedAgo)} ago"} — a fresh signal."
+            } else {
+                " The regime has held $run ${bars(run)}."
+            }
+        val distPct = if (price > 0.0) abs(price - line) / price * 100.0 else 0.0
+        return if (up) {
+            TechniqueResult(
+                "supertrend", name, TechniqueVerdict.BULLISH,
+                (58.0 + (if (fresh) 14.0 else 5.0) + min(12.0, distPct * 2.0)).roundToInt().coerceIn(58, 92),
+                "Supertrend line ${Fmt.money(line)} trails ${fmt1(distPct)}% below price — " +
+                    "the 3x ATR(10) ratchet keeps the uptrend intact.$freshNote"
+            )
+        } else {
+            TechniqueResult(
+                "supertrend", name, TechniqueVerdict.BEARISH,
+                (58.0 + (if (fresh) 14.0 else 5.0) + min(12.0, distPct * 2.0)).roundToInt().coerceIn(58, 92),
+                "Supertrend line ${Fmt.money(line)} caps price from ${fmt1(distPct)}% above — " +
+                    "the 3x ATR(10) ratchet keeps the downtrend intact.$freshNote"
+            )
+        }
+    }
+
+    // -- technique 32: Chandelier Exit ---------------------------------------
+
+    /** LeBeau's exits: HH(22) - 3 x ATR(22) for longs, LL(22) + 3 x ATR(22) for shorts. */
+    private fun chandelierData(candles: List<Candle>, closes: List<Double>): ChandelierData {
+        val n = candles.size
+        val atr = atrSeries(candles, 22)
+        val hh = highSeries(candles, 22)
+        val ll = lowSeries(candles, 22)
+        val longStop = arrayOfNulls<Double>(n)
+        val shortStop = arrayOfNulls<Double>(n)
+        for (i in 0 until n) {
+            val a = atr[i]
+            if (a != null) {
+                hh[i]?.let { longStop[i] = it - 3.0 * a }
+                ll[i]?.let { shortStop[i] = it + 3.0 * a }
+            }
+        }
+        return ChandelierData(closes, longStop.toList(), shortStop.toList())
+    }
+
+    private fun chandelierResult(price: Double, data: ChandelierData): TechniqueResult {
+        val name = "Chandelier Exit"
+        val long = data.longStop.last()
+        val short = data.shortStop.last()
+        if (long == null || short == null) {
+            return TechniqueResult(
+                "chandelier", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 23 daily candles for the 22-bar, 3x ATR exits; ${data.closes.size} available."
+            )
+        }
+        return when {
+            price > long -> {
+                val cushion = if (price > 0.0) (price - long) / price * 100.0 else 0.0
+                TechniqueResult(
+                    "chandelier", name, TechniqueVerdict.BULLISH,
+                    (55.0 + min(25.0, cushion * 3.0)).roundToInt().coerceIn(55, 88),
+                    "Close ${Fmt.money(price)} holds ${fmt1(cushion)}% above the long exit " +
+                        "${Fmt.money(long)} — LeBeau's trailing stop has not fired; longs stay on."
+                )
+            }
+            price < short -> {
+                val cushion = if (price > 0.0) (short - price) / price * 100.0 else 0.0
+                TechniqueResult(
+                    "chandelier", name, TechniqueVerdict.BEARISH,
+                    (55.0 + min(25.0, cushion * 3.0)).roundToInt().coerceIn(55, 88),
+                    "Close ${Fmt.money(price)} sits ${fmt1(cushion)}% below the short exit " +
+                        "${Fmt.money(short)} — the downtrend's trailing stop has not fired either way up."
+                )
+            }
+            else -> TechniqueResult(
+                "chandelier", name, TechniqueVerdict.NEUTRAL, 30,
+                "Close ${Fmt.money(price)} sits between the long exit ${Fmt.money(long)} and " +
+                    "short exit ${Fmt.money(short)} — neither side's trailing stop holds."
+            )
+        }
+    }
+
+    // -- technique 33: rolling VWAP ------------------------------------------
+
+    /** Rolling 20-day VWAP on the typical price — a moving institutional cost basis. */
+    private fun vwapSeries(candles: List<Candle>, period: Int): List<Double?> {
+        val n = candles.size
+        val out = arrayOfNulls<Double>(n)
+        if (n < period) return out.toList()
+        for (i in period - 1 until n) {
+            var pv = 0.0
+            var v = 0.0
+            for (j in i - period + 1..i) {
+                val c = candles[j]
+                val tp = (c.high + c.low + c.close) / 3.0
+                val vol = c.volume.toDouble()
+                pv += tp * vol
+                v += vol
+            }
+            if (v > 0.0) out[i] = pv / v
+        }
+        return out.toList()
+    }
+
+    private fun vwapResult(price: Double, data: VwapData): TechniqueResult {
+        val name = "Rolling VWAP"
+        val v = data.vwap.last()
+            ?: return TechniqueResult(
+                "vwap", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs 20 daily candles with volume for the 20-day VWAP; ${data.closes.size} available."
+            )
+        val prev = if (data.vwap.size >= 2) data.vwap[data.vwap.size - 2] else null
+        val rising = prev != null && v > prev
+        val distPct = if (v > 0.0) (price - v) / v * 100.0 else 0.0
+        return when {
+            abs(distPct) <= 0.5 -> TechniqueResult(
+                "vwap", name, TechniqueVerdict.NEUTRAL, 35,
+                "Close ${Fmt.money(price)} sits at the 20-day VWAP ${Fmt.money(v)} — price is " +
+                    "trading right at the volume-weighted cost basis; the next push decides."
+            )
+            distPct > 0.0 -> TechniqueResult(
+                "vwap", name, TechniqueVerdict.BULLISH,
+                (55.0 + min(22.0, distPct * 4.0) + (if (rising) 6.0 else 0.0)).roundToInt().coerceIn(55, 90),
+                "Close ${Fmt.money(price)} is ${fmt1(distPct)}% above the " +
+                    "${if (rising) "rising " else ""}20-day VWAP ${Fmt.money(v)} — the average " +
+                    "dollar in this stock is in profit, which keeps holders patient."
+            )
+            else -> TechniqueResult(
+                "vwap", name, TechniqueVerdict.BEARISH,
+                (55.0 + min(22.0, -distPct * 4.0) + (if (!rising) 6.0 else 0.0)).roundToInt().coerceIn(55, 90),
+                "Close ${Fmt.money(price)} is ${fmt1(-distPct)}% below the 20-day VWAP " +
+                    "${Fmt.money(v)} — the average dollar is underwater, and rallies into the " +
+                    "VWAP tend to meet break-even sellers."
+            )
+        }
+    }
+
+    // -- technique 34: Accumulation/Distribution line ------------------------
+
+    /** Chaikin's A/D line: cumulative close-location volume. */
+    private fun adLineSeries(candles: List<Candle>): List<Double> {
+        val out = ArrayList<Double>(candles.size)
+        var ad = 0.0
+        for (c in candles) {
+            val range = c.high - c.low
+            val mult = if (range > 1e-12) ((c.close - c.low) - (c.high - c.close)) / range else 0.0
+            ad += mult * c.volume.toDouble()
+            out.add(ad)
+        }
+        return out
+    }
+
+    private fun adResult(closes: List<Double>, ad: List<Double>): TechniqueResult {
+        val name = "Accum/Distribution"
+        val n = closes.size
+        val window = min(OBV_WINDOW, n)
+        if (window < 3) {
+            return TechniqueResult(
+                "ad", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs more history for the $OBV_WINDOW-bar A/D read; $n available."
+            )
+        }
+        val slope = lsSlope(ad.takeLast(window))
+        val ref = closes[n - window]
+        val priceChgPct = if (ref > 0.0) (closes.last() - ref) / ref * 100.0 else 0.0
+        val adDelta = ad.last() - ad[n - window]
+        val netTxt = (if (adDelta >= 0.0) "+" else "-") + Fmt.compact(abs(adDelta))
+        val priceTxt = when {
+            priceChgPct > 0.05 -> "up ${fmt1(priceChgPct)}%"
+            priceChgPct < -0.05 -> "down ${fmt1(-priceChgPct)}%"
+            else -> "flat"
+        }
+        return when {
+            slope > 0.0 && priceChgPct <= 0.0 -> TechniqueResult(
+                "ad", name, TechniqueVerdict.BULLISH,
+                (68.0 + min(15.0, abs(priceChgPct) * 2.0)).roundToInt().coerceIn(68, 85),
+                "A/D line climbing over $window bars (net $netTxt) while price is $priceTxt — " +
+                    "closes keep landing high in their ranges: quiet accumulation."
+            )
+            slope < 0.0 && priceChgPct > 0.0 -> TechniqueResult(
+                "ad", name, TechniqueVerdict.BEARISH,
+                (68.0 + min(15.0, priceChgPct * 2.0)).roundToInt().coerceIn(68, 85),
+                "A/D line falling over $window bars (net $netTxt) while price is $priceTxt — " +
+                    "closes keep landing low in their ranges: quiet distribution."
+            )
+            priceChgPct > 0.0 && slope > 0.0 -> TechniqueResult(
+                "ad", name, TechniqueVerdict.BULLISH, 50,
+                "A/D line and price both up over $window bars ($priceTxt) — intraday " +
+                    "positioning confirms the advance."
+            )
+            priceChgPct < 0.0 && slope < 0.0 -> TechniqueResult(
+                "ad", name, TechniqueVerdict.BEARISH, 50,
+                "A/D line and price both down over $window bars ($priceTxt) — intraday " +
+                    "positioning confirms the slide."
+            )
+            else -> TechniqueResult(
+                "ad", name, TechniqueVerdict.NEUTRAL, 30,
+                "A/D line near flat over $window bars — no positioning signal."
+            )
+        }
+    }
+
+    // -- technique 35: monthly pivot points ----------------------------------
+
+    /** Floor-trader pivots from the last COMPLETED calendar month's H/L/C (ET months). */
+    private fun pivotData(candles: List<Candle>, closes: List<Double>): PivotData {
+        val invalid = PivotData(closes, false, 0.0, 0.0, 0.0, 0.0, 0.0)
+        if (candles.isEmpty()) return invalid
+        val et = java.time.ZoneId.of("America/New_York")
+        fun monthKey(ts: Long): Int {
+            val d = java.time.Instant.ofEpochMilli(ts).atZone(et).toLocalDate()
+            return d.year * 100 + d.monthValue
+        }
+        val lastKey = monthKey(candles.last().ts)
+        var bestKey = -1
+        for (c in candles) {
+            val k = monthKey(c.ts)
+            if (k < lastKey && k > bestKey) bestKey = k
+        }
+        if (bestKey < 0) return invalid
+        var high = -Double.MAX_VALUE
+        var low = Double.MAX_VALUE
+        var close = 0.0
+        for (c in candles) {
+            if (monthKey(c.ts) == bestKey) {
+                if (c.high > high) high = c.high
+                if (c.low < low) low = c.low
+                close = c.close
+            }
+        }
+        if (high <= 0.0 || low <= 0.0 || close <= 0.0) return invalid
+        val p = (high + low + close) / 3.0
+        return PivotData(
+            closes = closes,
+            valid = true,
+            pivot = p,
+            r1 = 2.0 * p - low,
+            r2 = p + (high - low),
+            s1 = 2.0 * p - high,
+            s2 = p - (high - low)
+        )
+    }
+
+    private fun pivotResult(price: Double, data: PivotData): TechniqueResult {
+        val name = "Monthly pivots"
+        if (!data.valid) {
+            return TechniqueResult(
+                "pivot", name, TechniqueVerdict.NEUTRAL, 20,
+                "Needs a completed calendar month in the window to anchor the pivots."
+            )
+        }
+        val p = data.pivot
+        val distPct = if (p > 0.0) (price - p) / p * 100.0 else 0.0
+        fun near(level: Double): Boolean = level > 0.0 && abs(price - level) / level * 100.0 <= 1.0
+        return when {
+            near(data.r2) -> TechniqueResult(
+                "pivot", name, TechniqueVerdict.NEUTRAL, 38,
+                "Price ${Fmt.money(price)} is pressing the monthly R2 ${Fmt.money(data.r2)} — " +
+                    "the month's outer resistance, where floor traders fade strength."
+            )
+            near(data.s2) -> TechniqueResult(
+                "pivot", name, TechniqueVerdict.NEUTRAL, 38,
+                "Price ${Fmt.money(price)} is testing the monthly S2 ${Fmt.money(data.s2)} — " +
+                    "the month's outer support, where floor traders fade weakness."
+            )
+            distPct > 0.3 -> TechniqueResult(
+                "pivot", name, TechniqueVerdict.BULLISH,
+                (55.0 + min(20.0, distPct * 2.5) + (if (price > data.r1) 8.0 else 0.0))
+                    .roundToInt().coerceIn(55, 88),
+                "Price ${Fmt.money(price)} trades ${fmt1(distPct)}% above the monthly pivot " +
+                    "${Fmt.money(p)}${if (price > data.r1) ", clear of R1 ${Fmt.money(data.r1)}" else ""} — " +
+                    "the floor-trader map reads bullish for the month."
+            )
+            distPct < -0.3 -> TechniqueResult(
+                "pivot", name, TechniqueVerdict.BEARISH,
+                (55.0 + min(20.0, -distPct * 2.5) + (if (price < data.s1) 8.0 else 0.0))
+                    .roundToInt().coerceIn(55, 88),
+                "Price ${Fmt.money(price)} trades ${fmt1(-distPct)}% below the monthly pivot " +
+                    "${Fmt.money(p)}${if (price < data.s1) ", under S1 ${Fmt.money(data.s1)}" else ""} — " +
+                    "the floor-trader map reads bearish for the month."
+            )
+            else -> TechniqueResult(
+                "pivot", name, TechniqueVerdict.NEUTRAL, 30,
+                "Price ${Fmt.money(price)} sits on the monthly pivot ${Fmt.money(p)} — " +
+                    "the month's balance point; R1 ${Fmt.money(data.r1)}, S1 ${Fmt.money(data.s1)}."
+            )
+        }
+    }
+
     /** Rolling Wilder ATR; first value at index [period]. */
     private fun atrSeries(candles: List<Candle>, period: Int): List<Double?> {
         val n = candles.size
@@ -1751,6 +2817,83 @@ object Techniques {
         for (i in period until n) {
             ema += k * (values[i] - ema)
             out[i] = ema
+        }
+        return out.toList()
+    }
+
+    /** EMA over a series with leading nulls; defined from the first non-null run. */
+    private fun emaNullable(values: List<Double?>, period: Int): List<Double?> {
+        val n = values.size
+        val out = arrayOfNulls<Double>(n)
+        val firstIdx = values.indexOfFirst { it != null }
+        if (firstIdx < 0) return out.toList()
+        val defined = ArrayList<Double>(n - firstIdx)
+        for (i in firstIdx until n) {
+            // Our series have no holes after the first value; stop if one appears
+            // rather than smoothing across it.
+            val v = values[i] ?: break
+            defined.add(v)
+        }
+        val ema = emaSeries(defined, period)
+        for (j in ema.indices) out[firstIdx + j] = ema[j]
+        return out.toList()
+    }
+
+    /** SMA over a nullable series; defined only where all [period] inputs are. */
+    private fun smaNullable(values: List<Double?>, period: Int): List<Double?> {
+        val n = values.size
+        val out = arrayOfNulls<Double>(n)
+        if (period <= 0) return out.toList()
+        for (i in period - 1 until n) {
+            var sum = 0.0
+            var ok = true
+            for (j in i - period + 1..i) {
+                val v = values[j]
+                if (v == null) {
+                    ok = false
+                    break
+                }
+                sum += v
+            }
+            if (ok) out[i] = sum / period
+        }
+        return out.toList()
+    }
+
+    /** Linearly weighted moving average; newest value carries weight [period]. */
+    private fun wmaSeries(values: List<Double>, period: Int): List<Double?> {
+        val n = values.size
+        val out = arrayOfNulls<Double>(n)
+        if (period <= 0 || n < period) return out.toList()
+        val denom = period * (period + 1) / 2.0
+        for (i in period - 1 until n) {
+            var sum = 0.0
+            for (j in 0 until period) {
+                sum += values[i - period + 1 + j] * (j + 1)
+            }
+            out[i] = sum / denom
+        }
+        return out.toList()
+    }
+
+    /** WMA over a nullable series; defined only where all [period] inputs are. */
+    private fun wmaNullable(values: List<Double?>, period: Int): List<Double?> {
+        val n = values.size
+        val out = arrayOfNulls<Double>(n)
+        if (period <= 0) return out.toList()
+        val denom = period * (period + 1) / 2.0
+        for (i in period - 1 until n) {
+            var sum = 0.0
+            var ok = true
+            for (j in 0 until period) {
+                val v = values[i - period + 1 + j]
+                if (v == null) {
+                    ok = false
+                    break
+                }
+                sum += v * (j + 1)
+            }
+            if (ok) out[i] = sum / denom
         }
         return out.toList()
     }
@@ -1990,6 +3133,8 @@ object Techniques {
     private fun fmt0(v: Double): String = String.format(Locale.US, "%.0f", v)
 
     private fun fmt1(v: Double): String = String.format(Locale.US, "%.1f", v)
+
+    private fun fmt2(v: Double): String = String.format(Locale.US, "%.2f", v)
 
     /** CMF values are small signed fractions; two decimals with an explicit sign. */
     private fun fmtCmf(v: Double): String = String.format(Locale.US, "%+.2f", v)

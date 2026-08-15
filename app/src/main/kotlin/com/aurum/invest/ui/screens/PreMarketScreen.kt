@@ -837,7 +837,7 @@ private fun IntradayMethodCard(targetPct: Double) {
                 "for a further gain.",
             "Volume at or above its normal pace: today's traded volume, scaled by how much " +
                 "of the session has elapsed, against the 3-month average.",
-            "The 20-technique board must read BULLISH — a hot screener line with a bearish " +
+            "The 35-technique board must read BULLISH — a hot screener line with a bearish " +
                 "board is dropped.",
             "The +${Fmt.pct(targetPct)} from the current price is tested against history: " +
                 "how often the day's high ultimately stretched far enough above the open to " +

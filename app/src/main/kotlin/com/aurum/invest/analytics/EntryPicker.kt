@@ -27,7 +27,7 @@ import org.json.JSONObject
  *     a real discount off the 52-week high, liquid, not chasing a green spike.
  *  3. Deep read on the ~28 best — a year of candles, RSI reset, dip off the
  *     20-day high, support proximity, ATR reward/risk to the nearest
- *     resistance, and the 20-technique board (bearish boards are dropped:
+ *     resistance, and the 35-technique board (bearish boards are dropped:
  *     that is a falling knife, not an entry).
  *
  * The top [count] are returned with an entry limit, target, stop, and the
@@ -268,7 +268,7 @@ class EntryPicker(
 
     private suspend fun deepRead(q: ScreenerQuote, pre: Double): Deep? {
         return try {
-            // A full year so all 20 techniques (incl. the 200-day cross) can vote.
+            // A full year so all 35 techniques (incl. the 200-day cross) can vote.
             val candles = try {
                 market.getDailyCandles(q.symbol, 365)
             } catch (_: Exception) {

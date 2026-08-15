@@ -54,6 +54,21 @@ object TechniqueExplain {
             "keltner" -> keltner(analysis, result, price)
             "cmf" -> cmf(analysis, result)
             "aroon" -> aroon(analysis, result)
+            "stochrsi" -> stochRsi(analysis, result)
+            "roc" -> roc(analysis, result)
+            "trix" -> trix(analysis, result)
+            "uo" -> uo(analysis, result)
+            "vortex" -> vortex(analysis, result)
+            "efi" -> efi(analysis, result)
+            "cmo" -> cmo(analysis, result)
+            "dpo" -> dpo(analysis, result, price)
+            "kst" -> kst(analysis, result)
+            "hull" -> hull(analysis, result, price)
+            "supertrend" -> supertrend(analysis, result, price)
+            "chandelier" -> chandelier(analysis, result, price)
+            "vwap" -> vwap(analysis, result, price)
+            "ad" -> adLine(analysis, result)
+            "pivot" -> pivot(analysis, result, price)
             else -> null
         }
     }
@@ -979,6 +994,678 @@ object TechniqueExplain {
 
     // ---------------------------------------------------------------- helpers
 
+    // ---------------------------------------------------------------- stochrsi
+
+    private fun stochRsi(a: TechniqueAnalysis, r: TechniqueResult): TechniqueDetail {
+        val k = a.stochRsiData.k.lastOrNull { it != null }
+        val d = a.stochRsiData.d.lastOrNull { it != null }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "Stochastic RSI runs the stochastic formula on the RSI itself instead of " +
+                "on price — momentum of momentum. It swings harder and turns earlier than plain " +
+                "RSI, which is why short-term desks use it to time entries inside a trend the " +
+                "slower tools already confirmed.",
+            drawn = listOf(
+                "Gold line — %K: where today's RSI sits inside its own 14-day range, smoothed over 3 bars.",
+                "Blue line — %D: a 3-bar average of %K, the trigger line.",
+                "Shaded band — the 20–80 neutral zone; signals fire at the extremes."
+            ),
+            reading = buildList {
+                add(r.summary)
+                if (k != null && d != null) {
+                    add("%K ${fmt0(k)} vs %D ${fmt0(d)} — ${if (k >= d) "the fast line leads up" else "the fast line leads down"}.")
+                }
+                add("Because it is doubly derived, StochRSI whipsaws in flat tape — it earns its keep when a trend tool agrees.")
+            },
+            levels = buildList {
+                k?.let { add("%K" to fmt0(it)) }
+                d?.let { add("%D" to fmt0(it)) }
+                add("Oversold line" to "20")
+                add("Overbought line" to "80")
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "The sub-20 upturn is the entry timing signal — take it only in the direction of the larger trend.",
+                    "A push back over 20 confirms the turn; a failure back down cancels it.",
+                    "Pair with the MA or Supertrend read: countertrend StochRSI turns are the ones that fail."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "The over-80 rollover warns the short-term push is exhausted — tighten stops on quick trades.",
+                    "In a strong uptrend an over-80 reading alone is not a sell; wait for the %K/%D cross.",
+                    "A drop back under 80 confirms the fade."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "Mid-range StochRSI carries no edge — let it reach an extreme before acting.",
+                    "Watch for %K pinning above 80 in strong trends: that is strength, not an automatic sell."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- roc
+
+    private fun roc(a: TechniqueAnalysis, r: TechniqueResult): TechniqueDetail {
+        val v = a.rocData.roc.lastOrNull { it != null }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "Rate of Change is the purest momentum gauge: today's close against the " +
+                "close 12 sessions ago, as a percentage. Above zero the stock is gaining ground, " +
+                "below zero it is losing it — and the zero-line cross is the classic momentum " +
+                "turn signal.",
+            drawn = listOf(
+                "Gold line — ROC(12), the 12-session percentage change.",
+                "Dashed line — zero: the boundary between gaining and losing ground."
+            ),
+            reading = buildList {
+                add(r.summary)
+                v?.let {
+                    add("A reading of ${fmt1(it)}% means \$100 held 12 sessions ago is worth ${Fmt.money(100.0 * (1.0 + it / 100.0))} today.")
+                }
+            },
+            levels = buildList {
+                v?.let { add("ROC(12)" to "${fmt1(it)}%") }
+                add("Momentum boundary" to "0%")
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "Positive and rising ROC backs momentum entries; the trade thesis holds while ROC holds above zero.",
+                    "Extreme ROC readings (far above the last months' peaks) warn the move is stretched — scale out, don't pile in.",
+                    "A lower ROC high while price makes a higher high is the divergence that precedes stalls."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "Negative ROC says the last 12 sessions lost money — buying against it needs a reversal signal, not hope.",
+                    "The zero-line recross from below is the earliest honest turn signal to wait for.",
+                    "Rallies while ROC stays negative are bounces inside a decline until proven otherwise."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "ROC near zero means the last 12 sessions went nowhere — momentum offers no edge here.",
+                    "Watch the next decisive zero cross; enter with it, not before it."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- trix
+
+    private fun trix(a: TechniqueAnalysis, r: TechniqueResult): TechniqueDetail {
+        val t = a.trixData.trix.lastOrNull { it != null }
+        val s = a.trixData.signal.lastOrNull { it != null }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "TRIX smooths price three times with a 15-day EMA, then plots the daily " +
+                "percentage change of that triple-smoothed line. The triple pass strips almost " +
+                "all the noise: what remains is the underlying trend's direction and its " +
+                "acceleration, which is why trend desks use TRIX as a low-whipsaw filter.",
+            drawn = listOf(
+                "Gold line — TRIX(15): the 1-bar % change of the triple EMA.",
+                "Blue line — the EMA(9) signal of TRIX.",
+                "Dashed line — zero: trend up above it, trend down below."
+            ),
+            reading = buildList {
+                add(r.summary)
+                if (t != null && s != null) {
+                    add("TRIX ${fmtSig(t)} vs signal ${fmtSig(s)} — ${if (t > s) "the smoothed trend is accelerating" else "the smoothed trend is decelerating"}.")
+                }
+            },
+            levels = buildList {
+                t?.let { add("TRIX" to fmtSig(it)) }
+                s?.let { add("Signal" to fmtSig(it)) }
+                add("Trend boundary" to "0")
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "TRIX above its signal and above zero is the full bullish alignment — trend entries have the filter's blessing.",
+                    "Because TRIX lags by design, use a faster tool for the entry price; TRIX defines the regime.",
+                    "Exit the regime call when TRIX closes back under its signal line."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "TRIX below its signal and falling says the smoothed trend is down — treat rallies as suspect.",
+                    "The signal-line recross from below is the earliest re-entry trigger worth waiting for.",
+                    "A TRIX zero-line recross confirms a full regime change, not just a bounce."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "TRIX pinned to its signal means the smoothed trend is flat — no regime call.",
+                    "Let the next decisive signal-line cross pick the direction."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- uo
+
+    private fun uo(a: TechniqueAnalysis, r: TechniqueResult): TechniqueDetail {
+        val v = a.uoData.uo.lastOrNull { it != null }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "Larry Williams' Ultimate Oscillator measures buying pressure — how far " +
+                "each close sits above its true low — across three timeframes at once (7, 14 and " +
+                "28 days), blended 4:2:1. Using three windows was Williams' fix for the false " +
+                "divergences that plague single-period oscillators.",
+            drawn = listOf(
+                "Gold line — the blended buying-pressure oscillator, 0..100.",
+                "Shaded band — the 30–70 neutral zone; extremes fire outside it."
+            ),
+            reading = buildList {
+                add(r.summary)
+                v?.let {
+                    add("At ${fmt0(it)}, closes are landing ${if (it >= 50) "nearer their true highs" else "nearer their true lows"} across all three windows.")
+                }
+            },
+            levels = buildList {
+                v?.let { add("Ultimate Oscillator" to fmt0(it)) }
+                add("Oversold line" to "30")
+                add("Overbought line" to "70")
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "A sub-30 reading marks washed-out selling on all three timeframes — the highest-probability zone Williams traded from.",
+                    "His full signal adds a bullish divergence (price lower low, UO higher low) and a break of the divergence high.",
+                    "Scale in rather than betting the turn on one bar."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "Over 70, buying pressure is stretched on every window — chasing here pays the worst prices.",
+                    "Watch for a bearish divergence: price higher high with a lower UO high is the distribution tell.",
+                    "Existing longs tighten stops rather than add."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "Inside 30–70 the oscillator has no edge; direction belongs to the trend tools.",
+                    "Track the 50 line: holding above it keeps the pressure balance with the buyers."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- vortex
+
+    private fun vortex(a: TechniqueAnalysis, r: TechniqueResult): TechniqueDetail {
+        val p = a.vortexData.plus.lastOrNull { it != null }
+        val m = a.vortexData.minus.lastOrNull { it != null }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "The Vortex Indicator tracks upward and downward range expansion: VI+ " +
+                "sums how far each high stretches above the prior low, VI- how far each low " +
+                "drops below the prior high, both normalized by true range over 14 days. The " +
+                "line that dominates names the trend; their crosses mark its turns.",
+            drawn = listOf(
+                "Green line — VI+, upward range expansion.",
+                "Red line — VI-, downward range expansion.",
+                "Dashed line — 1.0: a vortex line above it is genuinely expanding."
+            ),
+            reading = buildList {
+                add(r.summary)
+                if (p != null && m != null) {
+                    add("Spread ${fmt2(abs(p - m))} between the lines — ${if (abs(p - m) >= 0.15) "a decisive gap" else "a narrow gap that flips easily"}.")
+                }
+            },
+            levels = buildList {
+                p?.let { add("VI+" to fmt2(it)) }
+                m?.let { add("VI-" to fmt2(it)) }
+                add("Expansion line" to "1.00")
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "VI+ in command backs trend-following entries; hold the bias while VI+ stays on top.",
+                    "The VI cross is prone to whipsaw in chop — require the crossing line above 1.0, as here.",
+                    "Exit the bias when the lines cross back, not on the first red day."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "VI- in command says down-days are expanding range faster — rallies are for reducing, not chasing.",
+                    "Wait for VI+ to retake the top line before treating strength as a turn.",
+                    "Pair with ADX: a rising ADX behind a VI- lead is a trend, not a dip."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "Both lines hugging 1.0 means neither side expands range — a rotation, not a trend.",
+                    "The next decisive cross with follow-through names the new trend."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- efi
+
+    private fun efi(a: TechniqueAnalysis, r: TechniqueResult): TechniqueDetail {
+        val f = a.forceData.force.lastOrNull { it != null }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "Alexander Elder's Force Index multiplies each day's price change by its " +
+                "volume: a small move on huge volume carries more force than a big move on air. " +
+                "Smoothed with a 13-day EMA it shows which side — bulls or bears — is actually " +
+                "committing money, not just moving price.",
+            drawn = listOf(
+                "Gold line — Force Index, EMA(13)-smoothed price-change x volume.",
+                "Dashed line — zero: bull force above, bear force below."
+            ),
+            reading = buildList {
+                add(r.summary)
+                f?.let {
+                    add("The current force reads ${(if (it >= 0) "+" else "-") + Fmt.compact(abs(it))} — sign says who is winning, size says how hard they press.")
+                }
+            },
+            levels = buildList {
+                f?.let { add("Force Index" to (if (it >= 0) "+" else "-") + Fmt.compact(abs(it))) }
+                add("Balance line" to "0")
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "Positive, rising force backs the uptrend — Elder bought pullbacks while the 13-day force held positive.",
+                    "A force spike far above recent peaks often marks short-term climax — pause adds there.",
+                    "Divergence check: price higher high on weaker force is the fade warning."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "Negative, falling force says sellers commit real volume — bounces without force behind them fail.",
+                    "Wait for force to recross zero before trusting a bottom.",
+                    "Elder's rule: trade only in the direction the 13-day force points."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "Force near zero means neither side presses with volume — a truce, not a trend.",
+                    "The next sustained push away from zero picks the tradable side."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- cmo
+
+    private fun cmo(a: TechniqueAnalysis, r: TechniqueResult): TechniqueDetail {
+        val v = a.cmoData.cmo.lastOrNull { it != null }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "Tushar Chande's Momentum Oscillator nets 14 days of up-moves against " +
+                "down-moves on a -100..+100 scale. Unlike RSI it is unsmoothed and symmetric, " +
+                "so it reaches its ±50 extreme zones faster — Chande designed it to catch " +
+                "overbought and oversold conditions RSI reports late.",
+            drawn = listOf(
+                "Gold line — CMO(14) on the -100..+100 scale.",
+                "Dashed lines — Chande's +50 overbought and -50 oversold triggers.",
+                "Shaded band — the ±50 neutral zone."
+            ),
+            reading = buildList {
+                add(r.summary)
+                v?.let {
+                    add("At ${fmt0(it)}, ${fmt0((it + 100.0) / 2.0)}% of the last 14 days' total movement was upward.")
+                }
+            },
+            levels = buildList {
+                v?.let { add("CMO(14)" to fmt0(it)) }
+                add("Overbought" to "+50")
+                add("Oversold" to "-50")
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "Below -50 the selling is one-sided to the point of exhaustion — the reversion zone Chande targeted.",
+                    "Enter on the turn back toward -50, not on the extreme itself; falling knives print -80 too.",
+                    "Confirm with a support or VWAP test so the bounce has a floor under it."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "Above +50 the buying is one-sided — late chasers supply the next pullback.",
+                    "In strong trends CMO can pin high; sell signals need the turn back under +50.",
+                    "Tighten stops on extended longs rather than shorting strength blindly."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "Inside ±50 the days are two-sided — no exhaustion to trade against.",
+                    "Use CMO's zero line as the momentum lean while waiting for an extreme."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- dpo
+
+    private fun dpo(a: TechniqueAnalysis, r: TechniqueResult, price: Double): TechniqueDetail {
+        val v = a.dpoData.dpo.lastOrNull { it != null }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "The Detrended Price Oscillator subtracts a displaced 20-day average from " +
+                "price, deliberately removing the longer trend so what remains is the short " +
+                "CYCLE — the rhythm of swings a few weeks long. Cycle traders use it to time " +
+                "entries inside a trend the other tools own.",
+            drawn = listOf(
+                "Gold line — DPO(20): price minus the 20-day average from 11 bars back.",
+                "Dashed line — zero: the cycle's midpoint."
+            ),
+            reading = buildList {
+                add(r.summary)
+                if (v != null && price > 0.0) {
+                    add("The cycle swing is worth ${fmt1(abs(v) / price * 100.0)}% of price right now.")
+                }
+            },
+            levels = buildList {
+                v?.let { add("DPO(20)" to fmtSig(it)) }
+                add("Cycle midpoint" to "0")
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "A rising cycle from below zero is the swing-entry window — buy the upswing, not the peak.",
+                    "Measure past DPO peaks: the cycle tends to top near the same amplitude.",
+                    "Trade the cycle only in the direction of the larger trend."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "A falling cycle from above zero says the short swing is rolling down — poor timing for fresh buys.",
+                    "The zero recross from above usually runs to the prior trough's amplitude.",
+                    "Wait for the downswing to trough before timing the next entry."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "The cycle sits at its midpoint with no push — timing edge is absent.",
+                    "Note the recent DPO peaks and troughs: they sketch where the next swing should stall."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- kst
+
+    private fun kst(a: TechniqueAnalysis, r: TechniqueResult): TechniqueDetail {
+        val k = a.kstData.kst.lastOrNull { it != null }
+        val s = a.kstData.signal.lastOrNull { it != null }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "Martin Pring's Know Sure Thing blends four smoothed rate-of-change " +
+                "readings (10, 15, 20 and 30 days), weighting the longest most. One line then " +
+                "carries the whole momentum spectrum — short swings can't fake it, and a " +
+                "signal-line cross means several timeframes turned together.",
+            drawn = listOf(
+                "Gold line — KST: the 1:2:3:4 weighted sum of four smoothed ROCs.",
+                "Blue line — its SMA(9) signal.",
+                "Dashed line — zero: net momentum positive above, negative below."
+            ),
+            reading = buildList {
+                add(r.summary)
+                if (k != null && s != null) {
+                    add("KST ${fmt1(k)} vs signal ${fmt1(s)} — the momentum spectrum is ${if (k > s) "improving" else "deteriorating"}.")
+                }
+            },
+            levels = buildList {
+                k?.let { add("KST" to fmt1(it)) }
+                s?.let { add("Signal" to fmt1(it)) }
+                add("Zero line" to "0")
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "KST over its signal with both above zero is Pring's full buy alignment — momentum agrees on every window.",
+                    "Crosses below zero are early: real, but they need price confirmation before full size.",
+                    "Hold the bias until KST closes back under its signal."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "KST under its signal says the blended momentum rolled over — distribute into strength.",
+                    "The deeper below zero, the more repair the stock needs before trend buys make sense.",
+                    "Wait for the signal recross; front-running it is guessing."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "KST pinned to its signal carries no verdict — the momentum spectrum is undecided.",
+                    "The next clean cross, especially near the zero line, is the actionable event."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- hull
+
+    private fun hull(a: TechniqueAnalysis, r: TechniqueResult, price: Double): TechniqueDetail {
+        val h = a.hullData.hull.lastOrNull { it != null }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "Alan Hull's moving average nearly eliminates the lag that makes normal " +
+                "averages late: it extrapolates from two weighted averages, then smooths over " +
+                "the square root of the period. The result hugs price yet stays smooth — its " +
+                "own turn in direction is the signal.",
+            drawn = listOf(
+                "Price — the daily closes (line or candles).",
+                "Gold line — HMA(20), the Hull moving average."
+            ),
+            reading = buildList {
+                add(r.summary)
+                if (h != null) {
+                    val d = pctFrom(price, h)
+                    add("Price sits ${fmtPct(abs(d))} ${aboveBelow(d)} the HMA — with Hull, the average's own slope matters as much as which side price is on.")
+                }
+            },
+            levels = buildList {
+                add("Last close" to Fmt.money(price))
+                h?.let { add("HMA(20)" to Fmt.money(it)) }
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "Price above a rising HMA is the aligned read — pullbacks that hold the line are add points.",
+                    "The HMA turning down while price holds is the earliest caution flag; a close below it confirms.",
+                    "Because HMA is fast, confirm regime with the slower 50/200 read before sizing up."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "Price below a falling HMA keeps sellers in charge — rallies into the line tend to stall there.",
+                    "The HMA's own upturn is the first honest turn signal; price reclosing above it is the second.",
+                    "Do not fade a falling HMA on hope alone."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "Price and the HMA disagree — one is turning. Let them realign before acting.",
+                    "Watch the HMA slope: its flip usually precedes the price cross."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- supertrend
+
+    private fun supertrend(a: TechniqueAnalysis, r: TechniqueResult, price: Double): TechniqueDetail {
+        val idx = a.supertrendData.line.indexOfLast { it != null }
+        val line = if (idx >= 0) a.supertrendData.line[idx] else null
+        val up = idx >= 0 && a.supertrendData.bullish[idx] == true
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "Supertrend draws a single ratcheting line 3 ATRs from the bar midpoint: " +
+                "below price in an uptrend, above it in a downtrend. The line only tightens, " +
+                "never loosens, and a close through it flips the regime — one unambiguous " +
+                "trend state plus a ready-made trailing stop.",
+            drawn = listOf(
+                "Price — the daily closes (line or candles).",
+                "Green segments — the line under price: uptrend regime, and the long trailing stop.",
+                "Red segments — the line over price: downtrend regime, and the short trailing stop."
+            ),
+            reading = buildList {
+                add(r.summary)
+                if (line != null) {
+                    add("The flip level is ${Fmt.money(line)} — a daily close ${if (up) "below" else "above"} it changes the regime.")
+                }
+            },
+            levels = buildList {
+                add("Last close" to Fmt.money(price))
+                line?.let { add((if (up) "Trailing stop / flip" else "Overhead line / flip") to Fmt.money(it)) }
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "Hold longs while price stays above the line; the line IS the exit — no second-guessing.",
+                    "Fresh flips give the best entries; late in a regime, buy pullbacks toward the line instead of chasing.",
+                    "The 3-ATR gap means normal noise won't stop you out — but honor the flip when it comes."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "The line overhead caps rallies — the trend is down until a close above it proves otherwise.",
+                    "The flip level is the exact number to watch; above it, shorts cover and longs re-engage.",
+                    "Avoid anticipating the flip; the ratchet exists to keep you out of premature bottoms."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "Not enough history to seed the ratchet — no regime call yet."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- chandelier
+
+    private fun chandelier(a: TechniqueAnalysis, r: TechniqueResult, price: Double): TechniqueDetail {
+        val long = a.chandelierData.longStop.lastOrNull { it != null }
+        val short = a.chandelierData.shortStop.lastOrNull { it != null }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "Chuck LeBeau's Chandelier Exit hangs a trailing stop 3 ATRs below the " +
+                "22-day high (for longs) or above the 22-day low (for shorts). It answers the " +
+                "hardest question in trading — where to get out — with volatility, not emotion: " +
+                "the stop gives the trade room exactly proportional to how much the stock moves.",
+            drawn = listOf(
+                "Price — the daily closes (line or candles).",
+                "Green dashed line — the long exit: 22-day high minus 3 ATR(22).",
+                "Red dashed line — the short exit: 22-day low plus 3 ATR(22)."
+            ),
+            reading = buildList {
+                add(r.summary)
+                if (long != null && price > 0.0) {
+                    add("The long exit sits ${fmtPct(abs(pctFrom(long, price)))} away — that distance is the trade's built-in risk budget.")
+                }
+            },
+            levels = buildList {
+                add("Last close" to Fmt.money(price))
+                long?.let { add("Long exit" to Fmt.money(it)) }
+                short?.let { add("Short exit" to Fmt.money(it)) }
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "Longs stay on while price holds above the green line — that line is the stop, placed the day you buy.",
+                    "The exit only rises as new highs print; never move it down to 'give the trade room'.",
+                    "A close below the exit is the trade over — LeBeau's whole point is not to negotiate with it."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "Price under the short exit keeps the downtrend's stop overhead — longs here fight the exit math.",
+                    "A close back above the red line is the cover/turn signal.",
+                    "Fresh longs wait until the long exit is reclaimed and can be placed at a sane distance."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "Price sits between both exits — neither side's trailing stop protects a position here.",
+                    "Enter only when a close puts one exit cleanly behind the trade."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- vwap
+
+    private fun vwap(a: TechniqueAnalysis, r: TechniqueResult, price: Double): TechniqueDetail {
+        val v = a.vwapData.vwap.lastOrNull { it != null }
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "VWAP is the volume-weighted average price — the true average cost of " +
+                "every share that changed hands over the window. Institutions benchmark their " +
+                "fills against it, which makes the rolling 20-day VWAP a living map of where " +
+                "the big money's cost basis sits.",
+            drawn = listOf(
+                "Price — the daily closes (line or candles).",
+                "Gold line — the rolling 20-day VWAP on the typical price."
+            ),
+            reading = buildList {
+                add(r.summary)
+                if (v != null) {
+                    val d = pctFrom(price, v)
+                    add(
+                        if (d >= 0.0) "Above VWAP, the average recent buyer is in profit — dips toward the line meet buyers defending their basis."
+                        else "Below VWAP, the average recent buyer is underwater — rallies into the line meet sellers happy to break even."
+                    )
+                }
+            },
+            levels = buildList {
+                add("Last close" to Fmt.money(price))
+                v?.let { add("VWAP(20)" to Fmt.money(it)) }
+            },
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "Pullbacks to the VWAP from above are the institutional buy zone — the highest-quality dip entries.",
+                    "A high-volume close below VWAP is the warning that the basis broke; respect it.",
+                    "Far above VWAP, entries are paying a premium to the big money — wait for the line to catch up."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "Rallies into VWAP from below are where trapped buyers sell out — expect supply there.",
+                    "Only a decisive reclaim of VWAP on volume flips the read.",
+                    "Below a falling VWAP, patience beats knife-catching."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "Price sits at the cost basis — the argument between buyers and sellers is live at this exact level.",
+                    "The break away from VWAP on volume picks the next leg; trade with it."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- ad line
+
+    private fun adLine(a: TechniqueAnalysis, r: TechniqueResult): TechniqueDetail {
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "Marc Chaikin's Accumulation/Distribution line asks WHERE inside its " +
+                "daily range each close landed, weights that by volume, and keeps a running " +
+                "total. Closes near the highs on volume add; closes near the lows subtract. " +
+                "Its divergences from price expose quiet accumulation and distribution before " +
+                "price confesses.",
+            drawn = listOf(
+                "Gold line — the cumulative A/D line, scaled to the pane.",
+                "Faint line — price over the same window, scaled to its own range."
+            ),
+            reading = listOf(
+                r.summary,
+                "A/D differs from OBV by using the close's position INSIDE the range, not just up-day vs down-day — it catches days where price closed down but buyers absorbed the volume high in the range."
+            ),
+            levels = emptyList(),
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "A rising A/D under a flat or falling price is the accumulation divergence — someone is buying the dips with size.",
+                    "Enter on price confirmation (a resistance break), not on the divergence alone.",
+                    "The divergence thesis dies if A/D rolls over with price."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "A falling A/D under a rising price is distribution — strength is being sold into.",
+                    "Tighten stops on longs; breakouts without A/D support are the ones that fail.",
+                    "Only an A/D turn back up repairs the read."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "A/D moves with price — volume confirms but adds no divergence edge.",
+                    "Keep watching: the divergences are the only A/D signals worth money."
+                )
+            }
+        )
+    }
+
+    // ---------------------------------------------------------------- pivot
+
+    private fun pivot(a: TechniqueAnalysis, r: TechniqueResult, price: Double): TechniqueDetail {
+        val pd = a.pivotData
+        return TechniqueDetail(
+            key = r.key, title = r.name, verdict = r.verdict, strength = r.strength,
+            whatItIs = "Floor-trader pivots come from the exchange floors: the prior month's " +
+                "high, low and close define a balance point (P) with two resistance rungs above " +
+                "(R1, R2) and two support rungs below (S1, S2). Because thousands of desks " +
+                "compute the identical levels, orders cluster there — the levels work partly " +
+                "because everyone watches them.",
+            drawn = listOf(
+                "Price — the daily closes (line or candles).",
+                "Green dashed lines — the pivot rungs below price.",
+                "Red dashed lines — the pivot rungs above price."
+            ),
+            reading = buildList {
+                add(r.summary)
+                if (pd.valid) {
+                    add("This month's map: S2 ${Fmt.money(pd.s2)} · S1 ${Fmt.money(pd.s1)} · P ${Fmt.money(pd.pivot)} · R1 ${Fmt.money(pd.r1)} · R2 ${Fmt.money(pd.r2)}.")
+                }
+            },
+            levels = if (pd.valid) listOf(
+                "R2" to Fmt.money(pd.r2),
+                "R1" to Fmt.money(pd.r1),
+                "Pivot" to Fmt.money(pd.pivot),
+                "S1" to Fmt.money(pd.s1),
+                "S2" to Fmt.money(pd.s2)
+            ) else emptyList(),
+            playbook = when (r.verdict) {
+                TechniqueVerdict.BULLISH -> listOf(
+                    "Above the pivot the month's bias is long — dips to P are the classic buy zone with a stop just beneath it.",
+                    "R1 is the first profit rung; through R1 on volume, R2 becomes the stretch target.",
+                    "Lose the pivot on a close and the bias resets to neutral."
+                )
+                TechniqueVerdict.BEARISH -> listOf(
+                    "Below the pivot the month's bias is short — rallies to P are the fade zone.",
+                    "S1 is the first downside rung; through it, S2 opens.",
+                    "Only a close back above P flips the monthly bias."
+                )
+                TechniqueVerdict.NEUTRAL -> listOf(
+                    "Price sits at a decision rung — pivots are reaction levels, so let the reaction print first.",
+                    "Range traders fade the outer rungs (R2/S2); breakout traders need a close through them."
+                )
+            }
+        )
+    }
+
     private fun pctFrom(a: Double, b: Double): Double =
         if (b != 0.0) (a - b) / b * 100.0 else 0.0
 
@@ -987,6 +1674,8 @@ object TechniqueExplain {
     private fun fmt0(v: Double): String = String.format(Locale.US, "%.0f", v)
 
     private fun fmt1(v: Double): String = String.format(Locale.US, "%.1f", v)
+
+    private fun fmt2(v: Double): String = String.format(Locale.US, "%.2f", v)
 
     private fun fmtPct(v: Double): String = String.format(Locale.US, "%.1f%%", abs(v))
 

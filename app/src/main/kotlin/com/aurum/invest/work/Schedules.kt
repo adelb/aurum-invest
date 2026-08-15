@@ -19,6 +19,7 @@ object Schedules {
     private const val REFRESH_WORK_NAME = "aurum-refresh"
     private const val WEEKLY_PICKS_WORK_NAME = "aurum-weekly-picks"
     private const val U_PATTERN_WORK_NAME = "aurum-upattern"
+    private const val NEXT_SESSION_WORK_NAME = "aurum-nextsession"
 
     fun ensure(context: Context) {
         try {
@@ -55,6 +56,17 @@ object Schedules {
                 U_PATTERN_WORK_NAME,
                 ExistingPeriodicWorkPolicy.KEEP,
                 uPattern
+            )
+
+            // The next-session watcher: exits instantly outside its post-close
+            // and pre-open windows, scans and alerts inside them.
+            val nextSession = PeriodicWorkRequestBuilder<NextSessionWorker>(30, TimeUnit.MINUTES)
+                .setConstraints(connected)
+                .build()
+            workManager.enqueueUniquePeriodicWork(
+                NEXT_SESSION_WORK_NAME,
+                ExistingPeriodicWorkPolicy.KEEP,
+                nextSession
             )
         } catch (_: Exception) {
             // Scheduling must never crash app startup; workers are best-effort.

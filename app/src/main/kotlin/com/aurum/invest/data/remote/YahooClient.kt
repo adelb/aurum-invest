@@ -110,7 +110,8 @@ class YahooClient {
                     rangeDays <= 30 -> "1mo"
                     rangeDays <= 95 -> "3mo"
                     rangeDays <= 190 -> "6mo"
-                    else -> "1y"
+                    rangeDays <= 400 -> "1y"
+                    else -> "2y"
                 }
                 val root = getJson(chartUrl(symbol, range = range, interval = "1d"))
                     ?: return@withContext emptyList()

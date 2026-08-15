@@ -248,7 +248,7 @@ class WeeklyPicker(
             }
             if (scored.isEmpty()) return emptyList()
 
-            // Deep-read the leaders: the 20-technique board votes, bearish
+            // Deep-read the leaders: the 35-technique board votes, bearish
             // boards are OUT, and every survivor gets a stop and a first
             // target appended — a pick without an exit is not a plan.
             val leaders = scored.sortedByDescending { it.raw }.take(TOP_N + 5)
@@ -379,7 +379,7 @@ class WeeklyPicker(
 
     /**
      * The depth pass a week-long hold deserves: a year of candles so the
-     * 20-technique board can vote (a BEARISH board returns null and leaves
+     * 35-technique board can vote (a BEARISH board returns null and leaves
      * the list entirely), an ATR/structure stop, a first target from the
      * board's 5-day expected high, and the news tone. Returns the scored
      * name, its score bonus, and a reason suffix carrying the exit pair.

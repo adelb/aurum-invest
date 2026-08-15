@@ -3,45 +3,51 @@ package com.aurum.invest.data.repo
 import com.aurum.invest.analytics.BookContext
 import com.aurum.invest.analytics.MarketPulse
 import com.aurum.invest.analytics.MarketRating
+import com.aurum.invest.analytics.MoneyFlowEngine
+import com.aurum.invest.analytics.MoneyFlowReport
+import com.aurum.invest.analytics.NextSessionEngine
+import com.aurum.invest.analytics.NextSessionReport
 import com.aurum.invest.analytics.NextWeekPlan
 import com.aurum.invest.analytics.NextWeekPlanner
+import com.aurum.invest.analytics.PortfolioAdvisor
+import com.aurum.invest.analytics.PortfolioReview
 import com.aurum.invest.analytics.SectorStrategy
 import com.aurum.invest.analytics.SectorTrend
 import com.aurum.invest.analytics.SectorTrends
 import com.aurum.invest.analytics.WeeklyStrategy
-import com.aurum.invest.analytics.WealthPlan
-import com.aurum.invest.analytics.WealthPlanner
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.db.CacheDao
 import com.aurum.invest.data.db.CacheEntity
-import kotlinx.coroutines.flow.first
+import java.time.ZoneId
 import org.json.JSONArray
+import org.json.JSONObject
 
 /**
- * Persistence for the Wealth section: the user's base amount + 4-month profit
- * target live in DataStore (via [SettingsRepository]); the computed weekly
- * plan lives in the JSON cache under one key. A plan is stale when its
- * weekStart is no longer the current week — [ensurePlan] recomputes it then.
- * The Thursday→Monday next-week preview lives under its own week-suffixed key
- * so it never evicts the live plan. Never throws to callers.
+ * The Wealth section's data layer: the market pulse, the sector money-flow
+ * report, the portfolio review, the sector-gap strategy, the next-session
+ * report, and the Thursday→Monday next-week preview — each engine's output
+ * cached under its own key with an honest freshness window. Never throws to
+ * callers.
  */
 class WealthRepository(
     private val cacheDao: CacheDao,
     private val market: MarketRepository,
     private val news: NewsRepository,
-    private val settings: SettingsRepository,
     private val portfolio: PortfolioRepository
 ) {
 
     companion object {
-        private const val PLAN_KEY = "wealthplan"
         private const val PULSE_KEY = "marketpulse"
         private const val TRENDS_KEY = "sectortrends"
+        private const val FLOW_KEY = "moneyflow"
+        private const val REVIEW_KEY = "portfolioreview"
+        private const val NEXT_SESSION_KEY = "nextsession"
+        private const val NS_NOTIFIED_PREFIX = "nextsession:notified:"
         private const val PREVIEW_KEY_PREFIX = "wealthplan:next:"
     }
 
-    /** Open positions as symbol -> cost dollars, so plans can size around the book. */
-    private suspend fun heldMap(): Map<String, Double> = try {
+    /** Open positions as symbol -> cost dollars, so engines can size around the book. */
+    suspend fun heldMap(): Map<String, Double> = try {
         portfolio.positionsNow()
             .filter { PortfolioRepository.isOpen(it) }
             .associate { it.symbol to it.shares * it.avgCost }
@@ -49,10 +55,11 @@ class WealthRepository(
         emptyMap()
     }
 
+    // ---- shared sector scan -------------------------------------------------
+
     /**
-     * One sector scan per half hour, shared by the plan, the strategy card,
-     * and the next-week preview — previously each consumer re-ran the whole
-     * 16-ETF sweep for itself.
+     * One sector scan per half hour, shared by every consumer — the strategy
+     * card, the next-week preview, and the Stocks browse's rotation read.
      */
     private suspend fun sectorTrendsCached(maxAgeMs: Long = 1_800_000L): List<SectorTrend> {
         val now = System.currentTimeMillis()
@@ -75,17 +82,7 @@ class WealthRepository(
             emptyList()
         }
         if (fresh.isNotEmpty()) {
-            try {
-                cacheDao.put(
-                    CacheEntity(
-                        key = TRENDS_KEY,
-                        json = SectorTrends.toJson(fresh).toString(),
-                        updatedAt = now
-                    )
-                )
-            } catch (_: Exception) {
-                // cache write failure is non-fatal
-            }
+            putCache(TRENDS_KEY, SectorTrends.toJson(fresh).toString())
             return fresh
         }
         return cached?.let {
@@ -97,84 +94,100 @@ class WealthRepository(
         } ?: emptyList()
     }
 
-    /**
-     * The shared sector scan for screens outside Wealth (the sector browse's
-     * rotation read) — same half-hour cache, so opening the browse right
-     * after the Wealth tab costs no extra sweep.
-     */
+    /** The shared sector scan for screens outside Wealth (the sector browse). */
     suspend fun sectorTrends(): List<SectorTrend> = sectorTrendsCached()
 
-    /** (base, target) or null when the user has not set the inputs yet. */
-    suspend fun getInputs(): Pair<Double, Double>? = try {
-        val base = settings.wealthBase.first()
-        val target = settings.wealthTarget.first()
-        if (base > 0.0 && target > 0.0) base to target else null
-    } catch (_: Exception) {
-        null
-    }
-
-    suspend fun setInputs(base: Double, target: Double) {
-        try {
-            settings.setWealthInputs(base, target)
-        } catch (_: Exception) {
-            // DataStore failure is non-fatal; the caller recomputes anyway.
-        }
-    }
-
-    /** The stored plan, whatever week it belongs to. */
-    suspend fun getPlan(): WealthPlan? = try {
-        cacheDao.get(PLAN_KEY)?.let { WealthPlanner.fromJson(it.json) }
-    } catch (_: Exception) {
-        null
-    }
+    // ---- money flow ---------------------------------------------------------
 
     /**
-     * The plan for THIS week: stored one when fresh, recomputed when missing,
-     * stale, or built for different inputs. Null when inputs are unset or the
-     * market is unreachable.
+     * The standalone money-flow report: where the money and the volume are
+     * measurably moving, sector by sector. Cached 30 minutes; the stale copy
+     * serves as fallback when the market is unreachable.
      */
-    suspend fun ensurePlan(): WealthPlan? {
-        val inputs = getInputs() ?: return null
-        val existing = getPlan()
-        if (existing != null &&
-            existing.weekStart == Dates.currentWeekStartIso() &&
-            existing.baseAmount == inputs.first &&
-            existing.targetProfit == inputs.second
-        ) {
-            return existing
+    suspend fun getMoneyFlow(maxAgeMs: Long = 1_800_000L): MoneyFlowReport? {
+        val cached = getCache(FLOW_KEY)
+        val now = System.currentTimeMillis()
+        if (cached != null && now - cached.updatedAt <= maxAgeMs) {
+            MoneyFlowEngine.fromJson(cached.json)?.let { return it }
         }
-        return recompute()
+        return recomputeMoneyFlow() ?: cached?.let { MoneyFlowEngine.fromJson(it.json) }
     }
 
-    /** Recomputes this week's plan from fresh market data and stores it. */
-    suspend fun recompute(): WealthPlan? {
-        val inputs = getInputs() ?: return null
+    suspend fun recomputeMoneyFlow(): MoneyFlowReport? {
         return try {
-            val plan = WealthPlanner(market, news)
-                .build(
-                    Dates.currentWeekStartIso(), inputs.first, inputs.second,
-                    held = heldMap(),
-                    sectorTrends = sectorTrendsCached().ifEmpty { null }
-                )
-            if (plan != null) {
-                cacheDao.put(
-                    CacheEntity(
-                        key = PLAN_KEY,
-                        json = WealthPlanner.toJson(plan),
-                        updatedAt = System.currentTimeMillis()
-                    )
+            val report = MoneyFlowEngine(market, news).compute()
+            if (report != null) {
+                putCache(FLOW_KEY, MoneyFlowEngine.toJson(report))
+            }
+            report
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    // ---- portfolio review ---------------------------------------------------
+
+    /**
+     * The portfolio-evaluation engine's answer for the CURRENT book. The
+     * cached copy carries a fingerprint of the positions it was computed
+     * from — any trade invalidates it, so the review never describes a book
+     * the user no longer holds. Null when the book is empty.
+     */
+    suspend fun getPortfolioReview(maxAgeMs: Long = 1_800_000L): PortfolioReview? {
+        val fp = bookFingerprint()
+        if (fp.isEmpty()) return null
+        val cached = getCache(REVIEW_KEY)
+        val now = System.currentTimeMillis()
+        if (cached != null && now - cached.updatedAt <= maxAgeMs) {
+            try {
+                val o = JSONObject(cached.json)
+                if (o.optString("fp") == fp) {
+                    PortfolioReview.fromJson(o.optString("review"))?.let { return it }
+                }
+            } catch (_: Exception) {
+                // fall through to recompute
+            }
+        }
+        return recomputePortfolioReview()
+    }
+
+    suspend fun recomputePortfolioReview(): PortfolioReview? {
+        return try {
+            val open = portfolio.positionsNow().filter { PortfolioRepository.isOpen(it) }
+            if (open.isEmpty()) return null
+            val quotes = market.getQuotes(open.map { it.symbol })
+            val views = open.map { PortfolioRepository.toView(it, quotes[it.symbol]) }
+            val sectors = market.getSectors(open.map { it.symbol })
+            val flow = getMoneyFlow()
+            val book = com.aurum.invest.analytics.PortfolioLens.build(views, sectors)
+            val strategy = try {
+                SectorStrategy(market, news).build(sectorTrendsCached(), book, 0.0, flow)
+            } catch (_: Exception) {
+                null
+            }
+            val review = PortfolioAdvisor(market, news).review(views, sectors, flow, strategy)
+            if (review != null) {
+                putCache(
+                    REVIEW_KEY,
+                    JSONObject().apply {
+                        put("fp", bookFingerprint())
+                        put("review", PortfolioReview.toJson(review))
+                    }.toString()
                 )
             }
-            plan ?: getPlan()
+            review
         } catch (_: Exception) {
-            getPlan()
+            null
         }
     }
 
-    /** Weekly-worker entry point: recompute only when the user configured Wealth. */
-    suspend fun recomputeIfConfigured(): WealthPlan? {
-        getInputs() ?: return null
-        return recompute()
+    private suspend fun bookFingerprint(): String = try {
+        portfolio.positionsNow()
+            .filter { PortfolioRepository.isOpen(it) }
+            .sortedBy { it.symbol }
+            .joinToString("|") { "${it.symbol}:${it.shares}" }
+    } catch (_: Exception) {
+        ""
     }
 
     // ---- market pulse -------------------------------------------------------
@@ -184,11 +197,7 @@ class WealthRepository(
      * fresh (30 min); recomputed otherwise, with the stale copy as fallback.
      */
     suspend fun getMarketPulse(maxAgeMs: Long = 1_800_000L): MarketRating? {
-        val cached = try {
-            cacheDao.get(PULSE_KEY)
-        } catch (_: Exception) {
-            null
-        }
+        val cached = getCache(PULSE_KEY)
         val now = System.currentTimeMillis()
         if (cached != null && now - cached.updatedAt <= maxAgeMs) {
             MarketPulse.fromJson(cached.json)?.let { return it }
@@ -196,22 +205,86 @@ class WealthRepository(
         return recomputeMarketPulse() ?: cached?.let { MarketPulse.fromJson(it.json) }
     }
 
-    // ---- weekly sector strategy --------------------------------------------
-
-    /**
-     * The week's sector answer for THIS book: which trending themes the
-     * portfolio is missing, the stock to use for each, and how to split
-     * [investable] across them. The expensive inputs (ETF trends, member
-     * candles) are already cached by their own repositories, so repeat calls
-     * are cheap. Returns null only when the market is unreachable.
-     */
-    suspend fun getStrategy(book: BookContext, investable: Double): WeeklyStrategy? =
-        try {
-            val trends = sectorTrendsCached()
-            SectorStrategy(market, news).build(trends, book, investable)
+    /** Recomputes the market rating from live data and stores it. */
+    suspend fun recomputeMarketPulse(): MarketRating? {
+        return try {
+            val rating = MarketPulse(market).compute(Dates.todayIso())
+            if (rating != null) {
+                putCache(PULSE_KEY, MarketPulse.toJson(rating))
+            }
+            rating
         } catch (_: Exception) {
             null
         }
+    }
+
+    // ---- weekly sector strategy --------------------------------------------
+
+    /**
+     * The week's sector answer for THIS book: which themes the money is
+     * entering, which the portfolio is missing, and the strongest stock from
+     * each theme's full shelf. The split is expressed in percentages — the
+     * user decides the dollars. Returns null only when the market is
+     * unreachable.
+     */
+    suspend fun getStrategy(book: BookContext): WeeklyStrategy? =
+        try {
+            val trends = sectorTrendsCached()
+            val flow = getMoneyFlow()
+            SectorStrategy(market, news).build(trends, book, 0.0, flow)
+        } catch (_: Exception) {
+            null
+        }
+
+    // ---- next session -------------------------------------------------------
+
+    /**
+     * The next-session report: 10 measured picks with the extreme-probability
+     * alert flags. Cached 20 minutes so the in-app card and the background
+     * watcher share one scan.
+     */
+    suspend fun getNextSession(maxAgeMs: Long = 1_200_000L): NextSessionReport? {
+        val cached = getCache(NEXT_SESSION_KEY)
+        val now = System.currentTimeMillis()
+        if (cached != null && now - cached.updatedAt <= maxAgeMs) {
+            NextSessionReport.fromJson(cached.json)?.let { return it }
+        }
+        return recomputeNextSession() ?: cached?.let { NextSessionReport.fromJson(it.json) }
+    }
+
+    suspend fun recomputeNextSession(): NextSessionReport? {
+        return try {
+            val report = NextSessionEngine(market).compute(held = heldMap())
+            if (report != null) {
+                putCache(NEXT_SESSION_KEY, NextSessionReport.toJson(report))
+            }
+            report
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Symbols already alerted for the current ET day. */
+    suspend fun nsNotifiedToday(): Set<String> {
+        val key = NS_NOTIFIED_PREFIX + etToday()
+        val cached = getCache(key) ?: return emptySet()
+        return try {
+            val arr = JSONArray(cached.json)
+            buildSet { for (i in 0 until arr.length()) add(arr.optString(i)) }
+        } catch (_: Exception) {
+            emptySet()
+        }
+    }
+
+    /** Records that [symbols] were alerted today, so no pick alerts twice. */
+    suspend fun markNsNotified(symbols: Set<String>) {
+        if (symbols.isEmpty()) return
+        val all = nsNotifiedToday() + symbols
+        putCache(NS_NOTIFIED_PREFIX + etToday(), JSONArray(all.toList()).toString())
+    }
+
+    private fun etToday(): String =
+        java.time.LocalDate.now(ZoneId.of("America/New_York")).toString()
 
     // ---- next-week preview (Thursday → Monday) ------------------------------
 
@@ -220,7 +293,7 @@ class WealthRepository(
     /** The stored preview for the week [Dates.nextWeekPreview] points at, if any. */
     suspend fun getNextWeek(): NextWeekPlan? = try {
         val (_, weekIso) = Dates.nextWeekPreview()
-        cacheDao.get(previewKey(weekIso))?.let { NextWeekPlanner.fromJson(it.json) }
+        getCache(previewKey(weekIso))?.let { NextWeekPlanner.fromJson(it.json) }
     } catch (_: Exception) {
         null
     }
@@ -228,16 +301,12 @@ class WealthRepository(
     /**
      * The next-week preview, freshened at most every [maxAgeMs] (2 h default)
      * while the Thursday→Monday window is open. Outside the window it serves
-     * whatever is stored and computes nothing. Null when Wealth is unconfigured.
+     * whatever is stored and computes nothing.
      */
     suspend fun ensureNextWeek(maxAgeMs: Long = 7_200_000L): NextWeekPlan? {
         val (active, weekIso) = Dates.nextWeekPreview()
         if (!active) return getNextWeek()
-        val cached = try {
-            cacheDao.get(previewKey(weekIso))
-        } catch (_: Exception) {
-            null
-        }
+        val cached = getCache(previewKey(weekIso))
         val now = System.currentTimeMillis()
         if (cached != null && now - cached.updatedAt <= maxAgeMs) {
             NextWeekPlanner.fromJson(cached.json)?.let { return it }
@@ -247,24 +316,21 @@ class WealthRepository(
 
     /** Rebuilds the preview from live data and stores it under its week key. */
     suspend fun recomputeNextWeek(): NextWeekPlan? {
-        val inputs = getInputs() ?: return null
         val (_, weekIso) = Dates.nextWeekPreview()
         return try {
+            val held = heldMap()
             val plan = NextWeekPlanner(market, news).build(
                 weekStart = weekIso,
-                investable = inputs.first,
-                held = heldMap(),
+                // Next week's reference buying power is the invested book at
+                // cost; with no book the split is percentages only.
+                investable = held.values.sum(),
+                held = held,
                 sectorTrends = sectorTrendsCached().ifEmpty { null },
-                pulse = getMarketPulse()
+                pulse = getMarketPulse(),
+                flow = getMoneyFlow()
             )
             if (plan != null) {
-                cacheDao.put(
-                    CacheEntity(
-                        key = previewKey(weekIso),
-                        json = NextWeekPlanner.toJson(plan),
-                        updatedAt = System.currentTimeMillis()
-                    )
-                )
+                putCache(previewKey(weekIso), NextWeekPlanner.toJson(plan))
             }
             plan
         } catch (_: Exception) {
@@ -272,22 +338,35 @@ class WealthRepository(
         }
     }
 
-    /** Recomputes the market rating from live data and stores it. */
-    suspend fun recomputeMarketPulse(): MarketRating? {
-        return try {
-            val rating = MarketPulse(market).compute(Dates.todayIso())
-            if (rating != null) {
-                cacheDao.put(
-                    CacheEntity(
-                        key = PULSE_KEY,
-                        json = MarketPulse.toJson(rating),
-                        updatedAt = System.currentTimeMillis()
-                    )
-                )
-            }
-            rating
+    // ---- weekly worker entry ------------------------------------------------
+
+    /** Monday-morning refresh: the pulse and the flow report start the week fresh. */
+    suspend fun recomputeWeekly() {
+        try {
+            recomputeMarketPulse()
         } catch (_: Exception) {
-            null
+            // best-effort
+        }
+        try {
+            recomputeMoneyFlow()
+        } catch (_: Exception) {
+            // best-effort
+        }
+    }
+
+    // ---- cache plumbing -----------------------------------------------------
+
+    private suspend fun getCache(key: String): CacheEntity? = try {
+        cacheDao.get(key)
+    } catch (_: Exception) {
+        null
+    }
+
+    private suspend fun putCache(key: String, json: String) {
+        try {
+            cacheDao.put(CacheEntity(key = key, json = json, updatedAt = System.currentTimeMillis()))
+        } catch (_: Exception) {
+            // cache write failure is non-fatal
         }
     }
 }

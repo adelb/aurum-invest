@@ -26,7 +26,7 @@ data class AnalysisState(
     val analysis: TechniqueAnalysis? = null,
     val price: Double? = null,
     val plan: BuyPlan? = null,
-    /** Measured 3-month track record per technique; null while it computes. */
+    /** Measured 1-year track record per technique; null while it computes. */
     val evaluation: TechniqueEvaluation? = null
 )
 
@@ -43,10 +43,17 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
         /** Versioned: a grade stored for an older board must never score this one. */
-        private const val EVAL_KEY_PREFIX = "techeval:v2:"
+        private const val EVAL_KEY_PREFIX = "techeval:v3:"
 
         /** The back-test replays daily closes; a run stays valid for a session. */
         private const val EVAL_MAX_AGE_MS = 6L * 3_600_000L
+
+        /**
+         * Two years of dailies: the last 252 sessions feed the 1-year
+         * integrity replay, and the sessions before them give every replayed
+         * day a real indicator warm-up.
+         */
+        private const val CANDLE_DAYS = 550
     }
 
     fun start(symbol: String) {
@@ -66,9 +73,10 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
         job?.cancel()
         job = viewModelScope.launch {
             _state.update { it.copy(loading = true) }
-            // A full year of dailies so the plan's 200-day average exists.
+            // Two years of dailies: the 200-day average, plus a full-year
+            // integrity replay with honest warm-up for every replayed day.
             val candles = try {
-                market.getDailyCandles(sym, 365)
+                market.getDailyCandles(sym, CANDLE_DAYS)
             } catch (_: Exception) {
                 emptyList()
             }
@@ -94,10 +102,11 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
 
-            // The standalone accuracy engine: replay the last ~3 months and
-            // grade every technique against the real 5-day moves. Once graded,
-            // the outlook is re-voted with each technique weighted by its own
-            // measured hit rate on this stock.
+            // The integrity engine: replay the last year of sessions and grade
+            // every technique against the real 5-day moves. Once graded, the
+            // outlook is re-voted with each technique weighted by its own
+            // measured hit rate on this stock, and the board reorders so the
+            // top-ranked techniques lead.
             if (analysis == null || candles.size < 40) return@launch
             val evaluation = loadEvaluation(sym, candles) ?: return@launch
             val weighted = withContext(Dispatchers.Default) {
