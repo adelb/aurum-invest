@@ -1,6 +1,10 @@
 package com.aurum.invest.ui.components
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,11 +28,18 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -39,6 +50,8 @@ import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.AdviceAction
 import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.ui.theme.AurumColors
+import kotlin.math.abs
+import kotlinx.coroutines.launch
 
 /** Flat segmented toggle — gold fill marks the selected option. */
 @Composable
@@ -224,6 +237,102 @@ fun DeltaMoney(value: Double, modifier: Modifier = Modifier, style: TextStyle = 
         modifier = modifier
     )
 }
+
+/**
+ * A money figure that shows its own movement.
+ *
+ * When [value] changes, the text flips on its X axis — a quarter turn that
+ * lands face-up on the new number — and flashes green when it rose, red when
+ * it fell, before settling back to [baseColor]. This is for the figures the
+ * one-second live ticker re-prices (holdings value, net worth, total P/L,
+ * liquidity …): without it a digit simply differs from the one that was there
+ * a moment ago, and the user cannot tell which number moved or which way.
+ *
+ * Always exact cents — these are balances, and a flashing rounded number
+ * would appear to sit still while the cents underneath it moved.
+ */
+@Composable
+fun AnimatedMoney(
+    value: Double,
+    modifier: Modifier = Modifier,
+    style: TextStyle = LocalTextStyle.current,
+    baseColor: Color = AurumColors.text,
+    signed: Boolean = false,
+    textAlign: TextAlign? = null,
+    /** Movements below this are rounding noise and must not fire the flash. */
+    epsilon: Double = 0.005
+) {
+    var previous by remember { mutableStateOf(value) }
+    var direction by remember { mutableIntStateOf(0) }
+    // 1f = settled face-up, 0f = edge-on at the start of the flip.
+    val spin = remember { Animatable(1f) }
+    // 1f = fully tinted with the move colour, 0f = back to baseColor.
+    val flash = remember { Animatable(0f) }
+
+    LaunchedEffect(value) {
+        val delta = value - previous
+        previous = value
+        if (abs(delta) > epsilon) {
+            direction = if (delta > 0) 1 else -1
+            flash.snapTo(1f)
+            spin.snapTo(0f)
+        }
+        // Settle unconditionally. A tick that lands mid-flip cancels this
+        // effect; if the next one were noise and returned early, the text
+        // would be left frozen on its edge.
+        launch { flash.animateTo(0f, tween(FLASH_MS, easing = LinearEasing)) }
+        spin.animateTo(1f, tween(SPIN_MS, easing = FastOutSlowInEasing))
+    }
+
+    val moveColor = if (direction >= 0) AurumColors.gain else AurumColors.loss
+    Text(
+        text = if (signed) Fmt.signedMoneyExact(value) else Fmt.moneyExact(value),
+        style = style,
+        color = lerp(baseColor, moveColor, flash.value),
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Ellipsis,
+        textAlign = textAlign,
+        modifier = modifier.graphicsLayer {
+            rotationX = (1f - spin.value) * 90f
+            cameraDistance = 16f * density
+        }
+    )
+}
+
+/** Label over an [AnimatedMoney] value — the live counterpart of [StatTile]. */
+@Composable
+fun LiveStatTile(
+    label: String,
+    value: Double,
+    modifier: Modifier = Modifier,
+    signed: Boolean = false,
+    baseColor: Color = AurumColors.text,
+    labelStyle: TextStyle = MaterialTheme.typography.labelMedium,
+    valueStyle: TextStyle = MaterialTheme.typography.titleMedium
+) {
+    Column(modifier = modifier) {
+        Text(
+            text = label,
+            style = labelStyle,
+            color = AurumColors.textDim,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        AnimatedMoney(
+            value = value,
+            style = valueStyle,
+            baseColor = baseColor,
+            signed = signed
+        )
+    }
+}
+
+/** How long the green/red tint takes to fade back to the resting colour. */
+private const val FLASH_MS = 850
+
+/** How long the quarter-turn flip onto the new number takes. */
+private const val SPIN_MS = 380
 
 private fun adviceColor(action: AdviceAction): Color = when (action) {
     AdviceAction.STRONG_BUY, AdviceAction.BUY -> AurumColors.gain

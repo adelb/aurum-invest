@@ -50,7 +50,21 @@ data class Fundamentals(
     val recommendationMean: Double? = null,
     val recommendationKey: String? = null,
     // catalysts
+    /**
+     * The next earnings date that is still ahead. Yahoo's `earningsDate`
+     * array can hold dates that have ALREADY passed (the last report, until
+     * the next one is scheduled) and can hold TWO entries when the date is an
+     * unconfirmed window. Taking element 0 blindly therefore printed a past
+     * date under the heading "Next earnings". Null here means genuinely
+     * nothing upcoming is published — see [lastEarningsTs].
+     */
     val nextEarningsTs: Long? = null,
+    /** End of Yahoo's estimated window when it gives a range; null for a single date. */
+    val nextEarningsEndTs: Long? = null,
+    /** Yahoo's own `isEarningsDateEstimate` — an estimate is not a confirmed date. */
+    val earningsDateEstimated: Boolean = false,
+    /** The most recent earnings date already past; lets the UI say when it last reported. */
+    val lastEarningsTs: Long? = null,
     val dividendDateTs: Long? = null
 )
 

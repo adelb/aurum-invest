@@ -21,7 +21,9 @@ class FundamentalsRepository(private val cacheDao: CacheDao) {
         symbol: String,
         maxAgeMs: Long = 24L * 3_600_000L
     ): FundamentalsFeed {
-        val key = "fundamentals:v1:${symbol.trim().uppercase()}"
+        // v2: the earnings parse changed (past dates are no longer served as
+        // "next"), so v1 rows must not keep answering from the old shape.
+        val key = "fundamentals:v2:${symbol.trim().uppercase()}"
         val now = System.currentTimeMillis()
         val cached = try {
             cacheDao.get(key)
@@ -78,7 +80,11 @@ class FundamentalsRepository(private val cacheDao: CacheDao) {
         putOpt("targetLow", f.targetLow); putOpt("analystCount", f.analystCount)
         putOpt("recommendationMean", f.recommendationMean)
         putOpt("recommendationKey", f.recommendationKey)
-        putOpt("nextEarningsTs", f.nextEarningsTs); putOpt("dividendDateTs", f.dividendDateTs)
+        putOpt("nextEarningsTs", f.nextEarningsTs)
+        putOpt("nextEarningsEndTs", f.nextEarningsEndTs)
+        put("earningsDateEstimated", f.earningsDateEstimated)
+        putOpt("lastEarningsTs", f.lastEarningsTs)
+        putOpt("dividendDateTs", f.dividendDateTs)
     }.toString()
 
     private fun fromJson(json: String): Fundamentals? = try {
@@ -107,7 +113,11 @@ class FundamentalsRepository(private val cacheDao: CacheDao) {
             targetMean = d("targetMean"), targetHigh = d("targetHigh"), targetLow = d("targetLow"),
             analystCount = i("analystCount"), recommendationMean = d("recommendationMean"),
             recommendationKey = s("recommendationKey"),
-            nextEarningsTs = l("nextEarningsTs"), dividendDateTs = l("dividendDateTs")
+            nextEarningsTs = l("nextEarningsTs"),
+            nextEarningsEndTs = l("nextEarningsEndTs"),
+            earningsDateEstimated = o.optBoolean("earningsDateEstimated", false),
+            lastEarningsTs = l("lastEarningsTs"),
+            dividendDateTs = l("dividendDateTs")
         )
     } catch (_: Exception) {
         null

@@ -56,6 +56,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
+import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.FeedStatus
 import com.aurum.invest.data.model.GoldLink
@@ -1204,25 +1205,36 @@ private fun FundamentalsSections(
         )
         Spacer(Modifier.height(10.dp))
         if (f.targetMean != null || f.recommendationMean != null) {
-            Row(modifier = Modifier.fillMaxWidth()) {
+            // The low–high range is two prices plus a dash: in a third-width
+            // column it wrapped onto a second line and broke the tiles' shared
+            // baseline. It gets its own full-width row, where it cannot wrap
+            // however long the prices are.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 StatTile(
                     label = "Target (mean)",
                     value = fmtOrDash(f.targetMean) { Fmt.money(it) },
-                    modifier = Modifier.weight(1f)
-                )
-                StatTile(
-                    label = "Range",
-                    value = if (f.targetLow != null && f.targetHigh != null) {
-                        "${Fmt.money(f.targetLow)}–${Fmt.money(f.targetHigh)}"
-                    } else "—",
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1
                 )
                 StatTile(
                     label = "Analysts",
                     value = f.analystCount?.toString() ?: "—",
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1
                 )
             }
+            Spacer(Modifier.height(12.dp))
+            StatTile(
+                label = "Target range (low – high)",
+                value = if (f.targetLow != null && f.targetHigh != null) {
+                    "${Fmt.money(f.targetLow)} – ${Fmt.money(f.targetHigh)}"
+                } else "—",
+                modifier = Modifier.fillMaxWidth(),
+                maxLines = 1
+            )
             Spacer(Modifier.height(8.dp))
             val rec = f.recommendationKey?.replace('_', ' ')
             Text(
@@ -1268,15 +1280,32 @@ private fun FundamentalsSections(
             color = AurumColors.textDim
         )
         Spacer(Modifier.height(10.dp))
-        val now = System.currentTimeMillis()
-        val earnings = f.nextEarningsTs
+        val todayStart = Dates.todayStartMs()
+        // Second guard, on top of the parser's: a cached row can be read after
+        // its date has passed, and a date that is behind us is never "next".
+        val earnings = f.nextEarningsTs?.takeIf { it >= todayStart }
         if (earnings != null) {
-            val days = ((earnings - now) / 86_400_000L).toInt()
+            val days = ((earnings - todayStart) / 86_400_000L).toInt()
+            val soon = days <= 7
+            val window = f.nextEarningsEndTs
+                ?.takeIf { it > earnings }
+                ?.let { " – ${Fmt.dateShort(it)}" }
+                .orEmpty()
             Text(
-                text = "Next earnings: ${Fmt.dateShort(earnings)}" +
-                    (if (days in 0..7) "  ⚠ within a week — event risk on any new position" else ""),
+                text = "Next earnings: ${Fmt.dateShort(earnings)}$window" +
+                    (if (f.earningsDateEstimated || window.isNotEmpty()) " (estimated)" else " (confirmed)") +
+                    (if (soon) "  ⚠ within a week — event risk on any new position" else ""),
                 style = MaterialTheme.typography.bodySmall,
-                color = if (days in 0..7) AurumColors.gold else AurumColors.text
+                color = if (soon) AurumColors.gold else AurumColors.text
+            )
+        } else if (f.lastEarningsTs != null) {
+            // Yahoo keeps serving the last report's date until the next one is
+            // scheduled. Say which it is rather than dressing it up as "next".
+            Text(
+                text = "Next earnings date not scheduled yet · last reported " +
+                    Fmt.dateShort(f.lastEarningsTs),
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
             )
         } else {
             Text(

@@ -1,5 +1,6 @@
 package com.aurum.invest.data.remote
 
+import com.aurum.invest.core.Dates
 import com.aurum.invest.data.model.Fundamentals
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -119,12 +120,19 @@ class FundamentalsClient {
             listOf("strongBuy", "buy", "hold", "sell", "strongSell").sumOf { k -> it.optInt(k, 0) }
         }?.takeIf { it > 0 }
 
-        val earningsTs = calendar?.optJSONObject("earnings")
-            ?.optJSONArray("earningsDate")
-            ?.optJSONObject(0)
-            ?.optLong("raw", 0L)
-            ?.takeIf { it > 0L }
-            ?.times(1000L)
+        // Earnings dates, read honestly. `earningsDate` is an ARRAY, and Yahoo
+        // uses it two ways: a single confirmed date, or a two-element
+        // [start, end] window when the date is only estimated. It also keeps
+        // serving the LAST report's date until the next one is scheduled, so
+        // element 0 is frequently in the past. Split on "now" and only call a
+        // future date "next".
+        val earningsNode = calendar?.optJSONObject("earnings")
+        val earningsDates = earningsNode?.optJSONArray("earningsDate")
+            ?.let { arr -> (0 until arr.length()).mapNotNull { idx -> arr.optJSONObject(idx) } }
+            ?.mapNotNull { it.optLong("raw", 0L).takeIf { s -> s > 0L }?.times(1000L) }
+            ?.sorted()
+            .orEmpty()
+        val window = pickEarnings(earningsDates, Dates.todayStartMs())
 
         return Fundamentals(
             symbol = symbol,
@@ -166,7 +174,10 @@ class FundamentalsClient {
             analystCount = analystCount ?: raw(finData, "numberOfAnalystOpinions")?.toInt(),
             recommendationMean = raw(finData, "recommendationMean"),
             recommendationKey = finData?.optString("recommendationKey")?.ifBlank { null },
-            nextEarningsTs = earningsTs,
+            nextEarningsTs = window.next,
+            nextEarningsEndTs = window.nextEnd,
+            earningsDateEstimated = earningsNode?.optBoolean("isEarningsDateEstimate", false) == true,
+            lastEarningsTs = window.last,
             dividendDateTs = raw(calendar, "dividendDate")?.toLong()?.takeIf { it > 0 }?.times(1000L)
         )
     }
@@ -192,4 +203,33 @@ class FundamentalsClient {
             "summaryProfile,summaryDetail,defaultKeyStatistics,financialData," +
                 "calendarEvents,recommendationTrend"
     }
+}
+
+/** What [pickEarnings] resolved from Yahoo's `earningsDate` array. */
+internal data class EarningsWindow(
+    /** The next date still ahead; null when nothing upcoming is published. */
+    val next: Long?,
+    /** Far end of an estimated window when Yahoo gives two future dates. */
+    val nextEnd: Long?,
+    /** The most recent date already behind us. */
+    val last: Long?
+)
+
+/**
+ * Chooses the earnings dates to show from Yahoo's `earningsDate` array.
+ *
+ * The array is not "the next earnings date". Yahoo keeps serving the LAST
+ * report's date until the next is scheduled, and returns TWO entries when the
+ * date is an unconfirmed window. Reading element 0 therefore announced a date
+ * that had already passed as "Next earnings". Anything before [todayStartMs]
+ * is the past and is reported as such.
+ */
+internal fun pickEarnings(datesMs: List<Long>, todayStartMs: Long): EarningsWindow {
+    val sorted = datesMs.filter { it > 0L }.distinct().sorted()
+    val upcoming = sorted.filter { it >= todayStartMs }
+    return EarningsWindow(
+        next = upcoming.firstOrNull(),
+        nextEnd = upcoming.getOrNull(1),
+        last = sorted.lastOrNull { it < todayStartMs }
+    )
 }

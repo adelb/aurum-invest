@@ -83,7 +83,8 @@ import com.aurum.invest.ui.components.GoldGradientText
 import com.aurum.invest.ui.components.PillTag
 import com.aurum.invest.ui.components.SectionHeader
 import com.aurum.invest.ui.components.Sparkline
-import com.aurum.invest.ui.components.StatTile
+import com.aurum.invest.ui.components.AnimatedMoney
+import com.aurum.invest.ui.components.LiveStatTile
 import com.aurum.invest.ui.theme.AurumColors
 
 @Composable
@@ -477,14 +478,14 @@ private fun WalletStat(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        Text(
-            // Exact cents: these are balances, not list entries — rounding
-            // $25,477.30 to "$25,477" hides money the user actually has.
-            text = if (signed) Fmt.signedMoneyExact(value) else Fmt.moneyExact(value),
+        // Exact cents (rounding $25,477.30 to "$25,477" hides money the user
+        // has), and animated so a figure moved by the live ticker announces
+        // itself instead of silently differing from a second ago.
+        AnimatedMoney(
+            value = value,
             style = MaterialTheme.typography.bodyMedium,
-            color = if (signed) AurumColors.deltaColor(value) else valueColor,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            baseColor = if (signed) AurumColors.deltaColor(value) else valueColor,
+            signed = signed
         )
     }
 }
@@ -554,10 +555,16 @@ private fun HeroSummary(
             color = AurumColors.textDim
         )
         Spacer(Modifier.height(4.dp))
-        Text(
-            text = Fmt.money(s.marketValue),
-            style = MaterialTheme.typography.displayLarge,
-            color = AurumColors.text
+        // Exact cents at 44sp overflows a narrow screen once the book passes
+        // seven figures, so the longest strings step down a size rather than
+        // wrap. The value animates: it flips onto each new number and flashes
+        // green up / red down as the one-second ticker re-prices the book.
+        val holdingsText = Fmt.moneyExact(s.marketValue)
+        AnimatedMoney(
+            value = s.marketValue,
+            style = if (holdingsText.length > 12) MaterialTheme.typography.displaySmall
+            else MaterialTheme.typography.displayLarge,
+            baseColor = AurumColors.text
         )
         if (s.unpricedCount > 0) {
             Text(
@@ -645,7 +652,12 @@ private fun HeroSummary(
         // The headline delta: how the holdings stand AGAINST THE MONEY PUT IN
         // (market value vs remaining cost basis), not just today's move.
         Row(verticalAlignment = Alignment.CenterVertically) {
-            DeltaMoney(value = s.unrealizedPl, style = MaterialTheme.typography.titleMedium)
+            AnimatedMoney(
+                value = s.unrealizedPl,
+                style = MaterialTheme.typography.titleMedium,
+                baseColor = AurumColors.deltaColor(s.unrealizedPl),
+                signed = true
+            )
             if (s.investedCost > 0.0) {
                 Text(
                     text = "  ·  ",
@@ -666,7 +678,12 @@ private fun HeroSummary(
         Spacer(Modifier.height(2.dp))
         // The session move, demoted to a secondary line.
         Row(verticalAlignment = Alignment.CenterVertically) {
-            DeltaMoney(value = s.dayPl, style = MaterialTheme.typography.bodySmall)
+            AnimatedMoney(
+                value = s.dayPl,
+                style = MaterialTheme.typography.bodySmall,
+                baseColor = AurumColors.deltaColor(s.dayPl),
+                signed = true
+            )
             Text(
                 // Before today's US open, the delta belongs to the last session.
                 text = if (Dates.usMarketOpenedToday()) " today" else " last session",
@@ -687,25 +704,24 @@ private fun SummaryTiles(summary: PortfolioSummary?) {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            StatTile(
+            LiveStatTile(
                 label = "Invested",
-                value = Fmt.moneyExact(s.investedCost),
-                modifier = Modifier.weight(1f),
-                maxLines = 1
+                value = s.investedCost,
+                modifier = Modifier.weight(1f)
             )
-            StatTile(
+            LiveStatTile(
                 label = "Unrealized P/L",
-                value = Fmt.signedMoneyExact(s.unrealizedPl),
+                value = s.unrealizedPl,
                 modifier = Modifier.weight(1f),
-                valueColor = AurumColors.deltaColor(s.unrealizedPl),
-                maxLines = 1
+                signed = true,
+                baseColor = AurumColors.deltaColor(s.unrealizedPl)
             )
-            StatTile(
+            LiveStatTile(
                 label = "Realized P/L",
-                value = Fmt.signedMoneyExact(s.realizedPl),
+                value = s.realizedPl,
                 modifier = Modifier.weight(1f),
-                valueColor = AurumColors.deltaColor(s.realizedPl),
-                maxLines = 1
+                signed = true,
+                baseColor = AurumColors.deltaColor(s.realizedPl)
             )
         }
     }

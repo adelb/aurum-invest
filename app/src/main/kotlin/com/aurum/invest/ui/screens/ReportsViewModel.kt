@@ -27,17 +27,18 @@ data class ReportsState(
     val monthly: List<PeriodReport> = emptyList(),
     val yearly: List<PeriodReport> = emptyList(),
     val loading: Boolean = true,
-    val walletTotal: Double = 0.0,
-    val walletConfigured: Boolean = false,
-    val invested: Double = 0.0,
-    val liquidity: Double = 0.0,
     /**
-     * Accumulated realized P/L across the whole ledger — the part of
-     * [liquidity] that came from selling rather than from the stated wallet.
-     * Shown beside the tiles so the cash number is traceable to the sells
-     * that produced it.
+     * The same derived wallet the dashboard shows — total, invested,
+     * liquidity, realized/total P/L and net worth. Built from one
+     * [com.aurum.invest.data.repo.WalletState], so the two screens cannot
+     * quote different numbers for the same book.
      */
-    val realizedPl: Double = 0.0
+    val wallet: WalletState = WalletState.UNSET,
+    /**
+     * Open holdings with no live quote, carried at cost inside net worth.
+     * Net worth is only exact when this is 0, and the card says so.
+     */
+    val unpricedCount: Int = 0
 )
 
 class ReportsViewModel(app: Application) : AndroidViewModel(app) {
@@ -63,12 +64,19 @@ class ReportsViewModel(app: Application) : AndroidViewModel(app) {
                 Quad(txs, positions, walletTotal, walletConfigured)
             }.collectLatest { (txs, positions, walletTotal, walletConfigured) ->
                 txById = txs.associateBy { it.id }
-                val invested = positions.filter { PortfolioRepository.isOpen(it) }.sumOf { it.investedCost }
+                // Net worth needs the holdings at market, so this screen prices
+                // the open book the same way the dashboard does. Quotes are
+                // cache-served; a failure leaves positions carried at cost and
+                // [ReportsState.unpricedCount] makes the card say so.
+                val open = positions.filter { PortfolioRepository.isOpen(it) }
+                val quotes = runCatching { container.market.getQuotes(open.map { it.symbol }) }
+                    .getOrDefault(emptyMap())
+                val views = open.map { PortfolioRepository.toView(it, quotes[it.symbol]) }
                 // Realized P/L over ALL positions, closed ones included — a
                 // fully-sold winner is gone from the book but its proceeds are
                 // sitting in cash, so it must still count toward liquidity.
-                val realizedPl = positions.sumOf { it.realizedPl }
-                val liquidity = WalletState.liquidityOf(walletTotal, invested, realizedPl)
+                val summary = PortfolioRepository.summarize(views, positions)
+                val walletState = WalletState.of(walletTotal, walletConfigured, summary)
                 val (daily, weekly, monthly, yearly) = withContext(Dispatchers.Default) {
                     Quad(
                         ReportsEngine.build(txs, ReportPeriod.DAY),
@@ -88,11 +96,8 @@ class ReportsViewModel(app: Application) : AndroidViewModel(app) {
                     monthly = monthly,
                     yearly = yearly,
                     loading = false,
-                    walletTotal = walletTotal,
-                    walletConfigured = walletConfigured,
-                    invested = invested,
-                    liquidity = liquidity,
-                    realizedPl = realizedPl
+                    wallet = walletState,
+                    unpricedCount = summary.unpricedCount
                 )
             }
         }

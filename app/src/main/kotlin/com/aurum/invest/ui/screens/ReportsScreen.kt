@@ -56,6 +56,7 @@ import com.aurum.invest.ui.components.DeltaMoney
 import com.aurum.invest.ui.components.EmptyState
 import com.aurum.invest.ui.components.PillTag
 import com.aurum.invest.ui.components.SegmentedToggle
+import com.aurum.invest.ui.components.LiveStatTile
 import com.aurum.invest.ui.components.StatTile
 import com.aurum.invest.ui.theme.AurumColors
 
@@ -197,46 +198,66 @@ fun ReportsScreen(onBack: () -> Unit, onOpenAdviceHistory: () -> Unit = {}) {
 @Composable
 private fun WalletSummaryCard(state: ReportsState) {
     AurumCard(modifier = Modifier.fillMaxWidth()) {
-        if (state.walletConfigured) {
-            // Exact cents, and one line each: a wrapped money value reads as
-            // broken and knocks the three tiles off a shared baseline.
+        val w = state.wallet
+        if (w.configured) {
+            // Two per row, not four across: at exact cents a quarter-width
+            // column truncates the value, and a truncated balance is worse
+            // than a taller card.
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                StatTile(
+                LiveStatTile(
                     label = "Wallet",
-                    value = Fmt.moneyExact(state.walletTotal),
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1
+                    value = w.total,
+                    modifier = Modifier.weight(1f)
                 )
-                StatTile(
+                LiveStatTile(
                     label = "Invested",
-                    value = Fmt.moneyExact(state.invested),
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1
-                )
-                StatTile(
-                    label = "Liquidity",
-                    value = Fmt.moneyExact(state.liquidity),
-                    modifier = Modifier.weight(1f),
-                    valueColor = if (state.liquidity < -0.005) AurumColors.loss else AurumColors.text,
-                    maxLines = 1
+                    value = w.invested,
+                    modifier = Modifier.weight(1f)
                 )
             }
-            Spacer(Modifier.height(6.dp))
-            // Where the cash number comes from. A sell returns the shares'
-            // cost basis AND the P/L booked on them, so liquidity moves by the
-            // full proceeds — this line names the realized part of it.
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                LiveStatTile(
+                    label = "Liquidity",
+                    value = w.liquidity,
+                    modifier = Modifier.weight(1f),
+                    baseColor = if (w.shortfall) AurumColors.loss else AurumColors.text
+                )
+                LiveStatTile(
+                    label = "Net worth",
+                    value = w.netWorth,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            // Where both figures come from. A sell returns the shares' cost
+            // basis AND the P/L booked on them, so liquidity moves by the full
+            // proceeds — this line names the realized part of it.
             Text(
                 text = "Liquidity = wallet − invested " +
-                    (if (state.realizedPl < 0) "− " else "+ ") +
-                    Fmt.moneyExact(kotlin.math.abs(state.realizedPl)) +
-                    " realized P/L booked by your sells.",
+                    (if (w.realizedPl < 0) "− " else "+ ") +
+                    Fmt.moneyExact(kotlin.math.abs(w.realizedPl)) +
+                    " realized P/L booked by your sells · " +
+                    "net worth = liquidity + holdings at market.",
                 style = MaterialTheme.typography.labelSmall,
                 color = AurumColors.textDim
             )
-            if (state.liquidity < -0.005) {
+            if (state.unpricedCount > 0) {
+                Text(
+                    text = "${state.unpricedCount} holding" +
+                        (if (state.unpricedCount == 1) " has" else "s have") +
+                        " no live price — counted at cost, so net worth is approximate.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.gold
+                )
+            }
+            if (w.shortfall) {
                 Text(
                     text = "Your ledger has more deployed than the stated wallet covers — " +
                         "raise the total from the Portfolio tab if you've added money.",
