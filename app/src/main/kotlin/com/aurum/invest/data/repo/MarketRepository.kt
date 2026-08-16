@@ -3,8 +3,11 @@ package com.aurum.invest.data.repo
 import com.aurum.invest.data.db.CacheDao
 import com.aurum.invest.data.db.CacheEntity
 import com.aurum.invest.data.model.Candle
+import com.aurum.invest.data.model.CandleFeed
 import com.aurum.invest.data.model.ExtendedHours
+import com.aurum.invest.data.model.FeedStatus
 import com.aurum.invest.data.model.Quote
+import com.aurum.invest.data.model.ScanCoverage
 import com.aurum.invest.data.model.ScreenerQuote
 import com.aurum.invest.data.remote.YahooClient
 import kotlinx.coroutines.async
@@ -109,20 +112,38 @@ class MarketRepository(
         symbol: String,
         rangeDays: Int = 120,
         maxAgeMs: Long = 21_600_000L
-    ): List<Candle> {
+    ): List<Candle> = getDailyCandlesFeed(symbol, rangeDays, maxAgeMs).candles
+
+    /**
+     * Daily candles WITH provenance. An empty FRESH feed means the symbol was
+     * reached and genuinely has that little history (recent listing); FAILED
+     * means the fetch broke and nothing is cached — "not enough history" and
+     * "couldn't load history" are different diagnoses and screens must not
+     * collapse them.
+     */
+    suspend fun getDailyCandlesFeed(
+        symbol: String,
+        rangeDays: Int = 120,
+        maxAgeMs: Long = 21_600_000L
+    ): CandleFeed {
         val key = "candles:$symbol:$rangeDays"
         val now = System.currentTimeMillis()
         val cached = readCache(key)
         if (cached != null && now - cached.updatedAt <= maxAgeMs) {
             val parsed = candlesFromJson(cached.json)
-            if (parsed.isNotEmpty()) return parsed
+            if (parsed.isNotEmpty()) return CandleFeed(parsed, FeedStatus.FRESH, cached.updatedAt)
         }
         val fresh = yahoo.fetchDailyCandles(symbol, rangeDays)
         if (fresh.isNotEmpty()) {
             writeCache(key, candlesToJson(fresh).toString())
-            return fresh
+            return CandleFeed(fresh, FeedStatus.FRESH, now)
         }
-        return cached?.let { candlesFromJson(it.json) } ?: emptyList()
+        val stale = cached?.let { candlesFromJson(it.json) }.orEmpty()
+        return if (stale.isNotEmpty()) {
+            CandleFeed(stale, FeedStatus.STALE, cached!!.updatedAt)
+        } else {
+            CandleFeed(emptyList(), FeedStatus.FAILED, 0L)
+        }
     }
 
     /**
@@ -200,6 +221,47 @@ class MarketRepository(
             return fresh
         }
         return cached?.let { screenerFromJson(it.json) } ?: emptyList()
+    }
+
+    /**
+     * Post-scan health of the screener universe (H4): how many of [scrIds]
+     * are served live, from stale cache, or not at all — read from the cache
+     * entries the scan itself refreshed. An empty pick list only means
+     * "no qualifying setup" when the screens were actually reachable.
+     */
+    suspend fun screenerCoverage(
+        scrIds: List<String>,
+        liveWindowMs: Long = 2_400_000L
+    ): ScanCoverage {
+        val now = System.currentTimeMillis()
+        var live = 0
+        var stale = 0
+        var missing = 0
+        var rows = 0
+        var oldest = 0L
+        for (id in scrIds) {
+            val cached = readCache("screener:$id")
+            val parsed = cached?.let { screenerFromJson(it.json) }.orEmpty()
+            when {
+                cached == null || parsed.isEmpty() -> missing++
+                now - cached.updatedAt <= liveWindowMs -> {
+                    live++; rows += parsed.size
+                    if (oldest == 0L || cached.updatedAt < oldest) oldest = cached.updatedAt
+                }
+                else -> {
+                    stale++; rows += parsed.size
+                    if (oldest == 0L || cached.updatedAt < oldest) oldest = cached.updatedAt
+                }
+            }
+        }
+        return ScanCoverage(
+            screensRequested = scrIds.size,
+            screensLive = live,
+            screensStale = stale,
+            screensMissing = missing,
+            rowsSeen = rows,
+            oldestAsOf = oldest
+        )
     }
 
     suspend fun search(query: String): List<Pair<String, String>> =

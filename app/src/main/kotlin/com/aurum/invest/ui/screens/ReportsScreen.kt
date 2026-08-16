@@ -57,7 +57,7 @@ import com.aurum.invest.ui.components.StatTile
 import com.aurum.invest.ui.theme.AurumColors
 
 @Composable
-fun ReportsScreen(onBack: () -> Unit) {
+fun ReportsScreen(onBack: () -> Unit, onOpenAdviceHistory: () -> Unit = {}) {
     val vm: ReportsViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
     var period by rememberSaveable { mutableStateOf("WEEK") }
@@ -122,6 +122,14 @@ fun ReportsScreen(onBack: () -> Unit) {
                 style = MaterialTheme.typography.titleLarge,
                 color = AurumColors.text
             )
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = onOpenAdviceHistory) {
+                Text(
+                    text = "Advice history",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = AurumColors.gold
+                )
+            }
         }
 
         Column(modifier = Modifier.padding(horizontal = 20.dp)) {

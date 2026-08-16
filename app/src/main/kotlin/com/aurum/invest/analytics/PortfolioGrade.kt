@@ -883,6 +883,12 @@ object PortfolioGradeEngine {
             MarketCall.INVEST -> 1.0
             MarketCall.SELECTIVE -> 1.5
             MarketCall.DEFENSIVE -> 2.0
+            // No honest regime read -> this component is unmeasured, not scored.
+            MarketCall.INCOMPLETE -> return GradeComponent(
+                key = "regime", label = "Regime fit", principle = principle,
+                points = 0, maxPoints = 10, measured = false,
+                evidence = "The market pulse had too little measured data for a call."
+            )
         }
         fun pointsFor(bearShare: Double): Int =
             (10.0 * (1.0 - (bearShare * multiplier).coerceIn(0.0, 1.0))).roundToInt()

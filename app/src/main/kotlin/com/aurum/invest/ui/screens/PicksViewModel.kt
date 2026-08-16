@@ -9,10 +9,12 @@ import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.analytics.RelationGroup
 import com.aurum.invest.core.Dates
 import com.aurum.invest.analytics.UPick
+import com.aurum.invest.analytics.EntryPicker
 import com.aurum.invest.data.model.EntryPick
 import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.PowerPick
 import com.aurum.invest.data.model.Quote
+import com.aurum.invest.data.model.ScanCoverage
 import com.aurum.invest.data.model.WeeklyPick
 import com.aurum.invest.data.repo.PortfolioRepository
 import kotlinx.coroutines.async
@@ -63,7 +65,13 @@ data class PicksState(
     val pickSectors: Map<String, String> = emptyMap(),
     // Live pre/post-market read per visible symbol, so every pick card can
     // carry the same extended-hours chips the portfolio shows.
-    val extHours: Map<String, ExtendedHours> = emptyMap()
+    val extHours: Map<String, ExtendedHours> = emptyMap(),
+    /**
+     * Universe health of the last market-wide scan (H4): these lists come
+     * from Yahoo's predefined screens, NOT "the whole US market", and an
+     * empty list only means "no setup" when the screens were reachable.
+     */
+    val coverage: ScanCoverage? = null
 )
 
 class PicksViewModel(app: Application) : AndroidViewModel(app) {
@@ -195,6 +203,14 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Re-reads the screener-universe health after a market-wide scan ran. */
+    private suspend fun refreshCoverage() {
+        runCatching {
+            val cov = market.screenerCoverage(EntryPicker.MARKET_SCREENS)
+            _state.update { it.copy(coverage = cov) }
+        }
+    }
+
     /**
      * Extended-hours reads for [symbols], chunked so a full board (~45 names)
      * never bursts Yahoo. Failures are simply absent; entries refresh through
@@ -243,6 +259,7 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
                 try {
                     val rows = picks.ensureUPattern()
                     _state.update { it.copy(uRows = rows, uLoading = false) }
+                    refreshCoverage()
                 } finally {
                     inFlight.remove(tab)
                 }
@@ -251,6 +268,7 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
                 try {
                     val entries = picks.ensureEntries()
                     _state.update { it.copy(entryRows = entries, entryLoading = false) }
+                    refreshCoverage()
                 } finally {
                     inFlight.remove(tab)
                 }
@@ -259,6 +277,7 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
                 try {
                     val power = picks.ensurePower()
                     _state.update { it.copy(powerRows = power, powerLoading = false) }
+                    refreshCoverage()
                 } finally {
                     inFlight.remove(tab)
                 }
@@ -296,6 +315,7 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val power = picks.recomputePower()
                 _state.update { it.copy(powerRows = power, powerLoading = false) }
+                refreshCoverage()
                 loadExtHours(power.map { it.symbol }, maxAgeMs = 60_000L)
             } finally {
                 _state.update { it.copy(powerRefreshing = false) }
@@ -311,6 +331,7 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val entries = picks.recomputeEntries()
                 _state.update { it.copy(entryRows = entries, entryLoading = false) }
+                refreshCoverage()
                 loadExtHours(entries.map { it.symbol }, maxAgeMs = 60_000L)
             } finally {
                 _state.update { it.copy(entryRefreshing = false) }
@@ -332,6 +353,7 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
                     if (_state.value.uRows.isEmpty()) picks.recomputeUPattern()
                     else picks.refreshULive()
                 _state.update { it.copy(uRows = rows, uLoading = false) }
+                refreshCoverage()
             } finally {
                 _state.update { it.copy(uRefreshing = false) }
             }
@@ -346,6 +368,7 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val rows = picks.recomputeUPattern()
                 _state.update { it.copy(uRows = rows, uLoading = false) }
+                refreshCoverage()
             } finally {
                 _state.update { it.copy(uRefreshing = false) }
             }

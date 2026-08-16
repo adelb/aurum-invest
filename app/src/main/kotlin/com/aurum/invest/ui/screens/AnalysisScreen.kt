@@ -157,10 +157,21 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
             }
             analysis == null -> {
                 Column(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                    EmptyState(
-                        title = "Not enough history",
-                        message = "This symbol needs at least 30 daily candles before the techniques can read it."
-                    )
+                    // "Couldn't load" and "listed too recently" are different
+                    // diagnoses — show the one that actually happened.
+                    if (state.historyStatus == com.aurum.invest.data.model.FeedStatus.FAILED) {
+                        EmptyState(
+                            title = "Couldn't load price history",
+                            message = "The data source was unreachable, so nothing can be " +
+                                "analyzed. Check your connection and pull to retry."
+                        )
+                    } else {
+                        EmptyState(
+                            title = "Not enough history",
+                            message = "This symbol's verified history has fewer than 30 daily " +
+                                "candles — the techniques can't read it yet."
+                        )
+                    }
                 }
             }
             else -> {
@@ -337,6 +348,14 @@ private fun OutlookCard(analysis: TechniqueAnalysis, price: Double?) {
             low = outlook.expectedLow,
             high = outlook.expectedHigh,
             price = price ?: analysis.maData.closes.lastOrNull() ?: outlook.expectedLow
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "ATR-projected range — a volatility formula, not a calibrated forecast " +
+                "interval. \"% agree\" is indicator agreement among 35 correlated " +
+                "techniques, not a probability.",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
         )
         Spacer(Modifier.height(14.dp))
         outlook.summary.forEach { line ->
@@ -589,10 +608,14 @@ private fun TechniqueCard(
 private fun accuracyLine(score: TechniqueScore): String = when {
     score.signals == 0 ->
         "Last 12 months: no directional calls on this stock — nothing to grade."
-    score.signals < TechniqueEvaluator.MIN_SIGNALS ->
-        "Last 12 months: ${score.hits} of ${score.signals} calls right — too few to grade for trust."
+    score.independentSignals < TechniqueEvaluator.MIN_INDEPENDENT_SIGNALS ->
+        "Last 12 months: ${score.hits} of ${score.signals} daily calls right — but only " +
+            "${score.independentSignals} independent (non-overlapping) samples, too few to " +
+            "grade for trust."
     else ->
-        "Last 12 months: called ${score.hits} of ${score.signals} 5-day moves right (${score.hitRate}%)."
+        "Last 12 months: ${score.independentHits} of ${score.independentSignals} independent " +
+            "calls right (${score.independentHitRate}%, 95% CI ${score.ciLowPct}–" +
+            "${score.ciHighPct}%) vs a ${score.baseRatePct}% base rate on this stock."
 }
 
 /**
@@ -631,14 +654,16 @@ private fun AccuracyCard(evaluation: TechniqueEvaluation?, loading: Boolean) {
             }
             else -> {
                 val trusted = evaluation.scores.filter { it.trusted }
-                    .sortedByDescending { it.hitRate }
+                    .sortedByDescending { it.independentHitRate }
                 if (trusted.isEmpty()) {
                     Text(
                         text = "No technique cleared the trust bar on this stock: at least " +
-                            "${TechniqueEvaluator.MIN_SIGNALS} directional calls with a " +
-                            "${TechniqueEvaluator.TRUST_HIT_RATE}%+ hit rate over " +
-                            "${evaluation.daysEvaluated} graded sessions. That is the honest answer — " +
-                            "no border is painted gold without a track record.",
+                            "${TechniqueEvaluator.MIN_INDEPENDENT_SIGNALS} independent " +
+                            "(non-overlapping) calls, a ${TechniqueEvaluator.TRUST_HIT_RATE}%+ " +
+                            "hit rate, and an edge of " +
+                            "${TechniqueEvaluator.TRUST_EDGE_OVER_BASE}+ points over the " +
+                            "stock's own drift. That is the honest answer — no border is " +
+                            "painted gold without a real track record.",
                         style = MaterialTheme.typography.bodySmall,
                         color = AurumColors.textDim
                     )
@@ -648,28 +673,38 @@ private fun AccuracyCard(evaluation: TechniqueEvaluation?, loading: Boolean) {
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         trusted.forEach { s ->
-                            PillTag(text = "${s.name} · ${s.hitRate}%", color = AurumColors.gold)
+                            PillTag(
+                                text = "${s.name} · ${s.independentHitRate}% vs ${s.baseRatePct}% base",
+                                color = AurumColors.gold
+                            )
                         }
                     }
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "These techniques called this stock's 5-day moves right at least " +
-                            "${TechniqueEvaluator.TRUST_HIT_RATE}% of the time across " +
-                            "${evaluation.daysEvaluated} graded sessions — their cards wear the " +
-                            "gold border, and the 5-day outlook weights every vote by this " +
-                            "measured record.",
+                        text = "These techniques beat this stock's own base rate by at least " +
+                            "${TechniqueEvaluator.TRUST_EDGE_OVER_BASE} points on independent " +
+                            "5-day windows — their cards wear the gold border, and the 5-day " +
+                            "outlook weights every vote by this measured record.",
                         style = MaterialTheme.typography.bodySmall,
                         color = AurumColors.textDim
                     )
                 }
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "The full ${evaluation.scores.size}-technique board is ranked by this " +
-                        "record; the ${TechniqueEvaluator.TOP_TECHNIQUES} strongest on THIS stock " +
-                        "lead the list below, the rest fold away. A call counts as right when " +
-                        "the stock then moved at least ${TechniqueEvaluator.MOVE_DEADBAND_PCT}% " +
-                        "in the called direction within ${evaluation.horizonDays} trading days. " +
-                        "Past accuracy is measured, not promised.",
+                    text = "Record window: " +
+                        (if (evaluation.fromTs > 0L) {
+                            "${Fmt.dateShort(evaluation.fromTs)} – ${Fmt.dateShort(evaluation.toTs)}, "
+                        } else "") +
+                        "${evaluation.daysEvaluated} replayed sessions " +
+                        "(~${evaluation.daysEvaluated / evaluation.horizonDays} independent " +
+                        "windows). The full ${evaluation.scores.size}-technique board is ranked " +
+                        "by this record; the ${TechniqueEvaluator.TOP_TECHNIQUES} strongest on " +
+                        "THIS stock lead the list below, the rest fold away. A call counts as " +
+                        "right when the stock then moved at least " +
+                        "${TechniqueEvaluator.MOVE_DEADBAND_PCT}% in the called direction " +
+                        "within ${evaluation.horizonDays} trading days. This replay is " +
+                        "in-sample history on one stock — measured, not a promise, and not a " +
+                        "calibrated probability.",
                     style = MaterialTheme.typography.labelSmall,
                     color = AurumColors.textDim
                 )
@@ -838,6 +873,14 @@ private fun androidx.compose.foundation.lazy.LazyListScope.planItems(plan: BuyPl
                     modifier = Modifier.weight(1f)
                 )
             }
+            if (plan.budgetBasis.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = plan.budgetBasis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (plan.accountEquity != null) AurumColors.textDim else AurumColors.gold
+                )
+            }
         }
         Spacer(Modifier.height(14.dp))
     }
@@ -871,7 +914,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.planItems(plan: BuyPl
                     valueColor = AurumColors.loss
                 )
                 StatTile(
-                    label = "Of budget",
+                    label = if (plan.accountEquity != null) "Of account" else "Of budget",
                     value = Fmt.pct(plan.riskPct),
                     modifier = Modifier.weight(1f)
                 )

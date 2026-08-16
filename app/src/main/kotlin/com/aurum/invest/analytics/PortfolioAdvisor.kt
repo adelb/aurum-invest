@@ -2,6 +2,7 @@ package com.aurum.invest.analytics
 
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.PositionView
+import com.aurum.invest.data.repo.InvestorProfile
 import com.aurum.invest.data.repo.MarketRepository
 import com.aurum.invest.data.repo.NewsRepository
 import java.util.Locale
@@ -93,7 +94,13 @@ data class PortfolioReview(
     /** The whole-market regime line from the pulse engine; "" when unavailable. */
     val marketNote: String = "",
     /** The book graded 0-100 against the published rules of elite investors. */
-    val grade: PortfolioGrade? = null
+    val grade: PortfolioGrade? = null,
+    /**
+     * Which investor policy shaped these verdicts (C1 traceability) — the
+     * caps, loss rule, and profit rule all derive from it, and a review made
+     * under default policy says so.
+     */
+    val policyNote: String = ""
 ) {
     companion object {
         fun toJson(r: PortfolioReview): String = JSONObject().apply {
@@ -103,6 +110,7 @@ data class PortfolioReview(
             put("cashPct", r.suggestedCashPct)
             put("caveat", r.caveat)
             put("marketNote", r.marketNote)
+            put("policyNote", r.policyNote)
             r.grade?.let { put("grade", PortfolioGrade.toJson(it)) }
             put("sectorNotes", JSONArray(r.sectorNotes))
             put("unverified", JSONArray().apply {
@@ -260,7 +268,8 @@ data class PortfolioReview(
                 caveat = o.optString("caveat", ""),
                 unverified = unverified,
                 marketNote = o.optString("marketNote", ""),
-                grade = o.optJSONObject("grade")?.let { PortfolioGrade.fromJson(it) }
+                grade = o.optJSONObject("grade")?.let { PortfolioGrade.fromJson(it) },
+                policyNote = o.optString("policyNote", "")
             )
         } catch (_: Exception) {
             null
@@ -292,20 +301,27 @@ data class PortfolioReview(
  */
 class PortfolioAdvisor(
     private val market: MarketRepository,
-    private val news: NewsRepository
+    private val news: NewsRepository,
+    /**
+     * The investor's own policy (C1): every concentration cap, trim target,
+     * loss rule, and profit rule below derives from it — the same book must
+     * NOT produce the same orders for a conservative long-horizon investor
+     * and an aggressive short-horizon trader. Defaults are labeled defaults.
+     */
+    private val policy: InvestorProfile = InvestorProfile.DEFAULT
 ) {
 
     companion object {
-        /** A sector above this share of the book is overweight. */
+        /** Default: a sector above this share of the book is overweight. */
         const val SECTOR_OVERWEIGHT_PCT = 35.0
 
-        /** Rebalancing sells an overweight sector back toward this share. */
+        /** Default: rebalancing sells an overweight sector back toward this share. */
         const val SECTOR_TARGET_PCT = 30.0
 
-        /** A single position above this share of the book is concentrated. */
+        /** Default: a single position above this share of the book is concentrated. */
         const val POSITION_TRIM_PCT = 30.0
 
-        /** Suggested ceiling for any single position after rebalancing. */
+        /** Default: suggested ceiling for any single position after rebalancing. */
         const val POSITION_CAP_PCT = 22.0
 
         /** The 35-technique board's own minimum history. */
@@ -313,6 +329,29 @@ class PortfolioAdvisor(
 
         private const val DEEP_CHUNK = 4
     }
+
+    // ---- policy-derived thresholds (cited in the output via policyNote) ----
+
+    private val positionCapPct: Double get() = policy.maxPositionPct
+    private val positionTrimPct: Double get() = policy.maxPositionPct + 8.0
+    private val sectorOverweightPct: Double get() = policy.maxSectorPct
+    private val sectorTargetPct: Double get() = (policy.maxSectorPct - 5.0).coerceAtLeast(10.0)
+
+    /** Loss (%) beyond which a broken chart is cut — tighter for conservative money. */
+    private val cutLossPct: Double
+        get() = when (policy.riskTolerance) {
+            InvestorProfile.TOL_CONSERVATIVE -> -6.0
+            InvestorProfile.TOL_AGGRESSIVE -> -10.0
+            else -> -8.0
+        }
+
+    /** Gain (%) at which banking half becomes the default — later for long horizons. */
+    private val takeProfitPct: Double
+        get() = when (policy.horizon) {
+            InvestorProfile.HORIZON_SHORT -> 12.0
+            InvestorProfile.HORIZON_LONG -> 22.0
+            else -> 15.0
+        }
 
     /** One holding's deep read: a verdict, or the measured reason there is none. */
     private sealed interface Judged {
@@ -374,9 +413,9 @@ class PortfolioAdvisor(
             val suggested = when (v.action) {
                 HoldingAction.CUT_LOSS -> 0.0
                 HoldingAction.SELL -> 0.0
-                HoldingAction.TAKE_PROFIT -> min(v.weightPct * 0.5, POSITION_CAP_PCT)
-                HoldingAction.TRIM -> min(v.weightPct, POSITION_CAP_PCT)
-                HoldingAction.HOLD -> min(v.weightPct, POSITION_TRIM_PCT)
+                HoldingAction.TAKE_PROFIT -> min(v.weightPct * 0.5, positionCapPct)
+                HoldingAction.TRIM -> min(v.weightPct, positionCapPct)
+                HoldingAction.HOLD -> min(v.weightPct, positionTrimPct)
             }
             AllocationLine(
                 symbol = v.symbol,
@@ -386,8 +425,8 @@ class PortfolioAdvisor(
                     HoldingAction.CUT_LOSS -> "Exit — the loss rule fired."
                     HoldingAction.SELL -> "Exit — the board turned against it."
                     HoldingAction.TAKE_PROFIT -> "Bank half, trail the rest."
-                    HoldingAction.TRIM -> "Reduce to the ${fmt0(POSITION_CAP_PCT)}% position cap."
-                    HoldingAction.HOLD -> if (v.weightPct > POSITION_TRIM_PCT) {
+                    HoldingAction.TRIM -> "Reduce to your ${fmt0(positionCapPct)}% position cap."
+                    HoldingAction.HOLD -> if (v.weightPct > positionTrimPct) {
                         "Healthy but oversized — no adds."
                     } else "Keep as is."
                 }
@@ -407,11 +446,11 @@ class PortfolioAdvisor(
                             slice.sector, slice.weightPct, slice.symbols.take(3).joinToString(", ")
                         )
                     )
-                    slice.weightPct >= SECTOR_OVERWEIGHT_PCT -> add(
+                    slice.weightPct >= sectorOverweightPct -> add(
                         String.format(
                             Locale.US,
-                            "%s is overweight at %.0f%% of the book — above the %.0f%% concentration line.",
-                            slice.sector, slice.weightPct, SECTOR_OVERWEIGHT_PCT
+                            "%s is overweight at %.0f%% of the book — above your %.0f%% concentration line.",
+                            slice.sector, slice.weightPct, sectorOverweightPct
                         )
                     )
                     else -> Unit
@@ -464,6 +503,7 @@ class PortfolioAdvisor(
                 MarketCall.INVEST -> "a tape that supports new money"
                 MarketCall.SELECTIVE -> "a selective tape — add only to the strongest setups"
                 MarketCall.DEFENSIVE -> "a defensive tape — protect first, add later"
+                MarketCall.INCOMPLETE -> "an unmeasured tape — the pulse could not verify enough inputs"
             }
             String.format(
                 Locale.US,
@@ -488,7 +528,8 @@ class PortfolioAdvisor(
                 "Decision support, not financial advice.",
             unverified = unverified,
             marketNote = marketNote,
-            grade = PortfolioGradeEngine.evaluate(verdicts, book, flow, pulse, strategy)
+            grade = PortfolioGradeEngine.evaluate(verdicts, book, flow, pulse, strategy),
+            policyNote = policy.label()
         )
     }
 
@@ -594,21 +635,23 @@ class PortfolioAdvisor(
             val headline: String
             val whenText: String
             when {
-                plPct <= -8.0 && (direction == TechniqueVerdict.BEARISH || below50) -> {
+                plPct <= cutLossPct && (direction == TechniqueVerdict.BEARISH || below50) -> {
                     action = HoldingAction.CUT_LOSS
-                    headline = "Cut the loss — down ${fmt1(-plPct)}% with the tape against it."
+                    headline = "Cut the loss — down ${fmt1(-plPct)}% with the tape against it " +
+                        "(your ${fmt1(-cutLossPct)}% loss rule)."
                     whenText = "Sell at the next session's open. Capital comes first; " +
                         "re-entry is always available later."
                 }
                 direction == TechniqueVerdict.BEARISH && confidence >= 60 -> {
                     action = HoldingAction.SELL
-                    headline = "Sell — the board reads bearish at $confidence% confidence."
+                    headline = "Sell — the board reads bearish at $confidence% indicator agreement."
                     whenText = "Sell into the next strength, or at the close of any day that " +
                         "ends below ${Fmt.money(stop)} — whichever comes first this week."
                 }
-                plPct >= 15.0 && (rsi >= 70.0 || direction != TechniqueVerdict.BULLISH) -> {
+                plPct >= takeProfitPct && (rsi >= 70.0 || direction != TechniqueVerdict.BULLISH) -> {
                     action = HoldingAction.TAKE_PROFIT
-                    headline = "Take profit — up ${fmt1(plPct)}% and the move is stretched."
+                    headline = "Take profit — up ${fmt1(plPct)}% and the move is stretched " +
+                        "(your ${fmt1(takeProfitPct)}% horizon rule)."
                     whenText = "Sell half now; trail the rest with a stop raised to " +
                         "${Fmt.money(round2(max(stop, avgCost)))} so the win cannot become a loss."
                 }
@@ -621,17 +664,17 @@ class PortfolioAdvisor(
                     whenText = "Reduce into the next bounce this week; revisit when the " +
                         "sector's flow turns neutral or the board turns bullish."
                 }
-                weight >= POSITION_TRIM_PCT -> {
+                weight >= positionTrimPct -> {
                     action = HoldingAction.TRIM
                     headline = "Trim — ${fmt0(weight)}% of the book is riding on one name."
-                    whenText = "Reduce toward ${fmt0(POSITION_CAP_PCT)}% of the book this week, " +
-                        "selling into strength rather than weakness."
+                    whenText = "Reduce toward your ${fmt0(positionCapPct)}% position cap this " +
+                        "week, selling into strength rather than weakness."
                 }
                 else -> {
                     action = HoldingAction.HOLD
                     headline = when {
                         direction == TechniqueVerdict.BULLISH ->
-                            "Hold — the board backs it at $confidence% confidence."
+                            "Hold — the board backs it at $confidence% indicator agreement."
                         plPct >= 0.0 -> "Hold — in profit with no exit signal on the board."
                         else -> "Hold — the loss is inside the stop and the board has not turned."
                     }
@@ -649,8 +692,10 @@ class PortfolioAdvisor(
                     )
                 )
                 if (total > 0) {
+                    // "Agreement", not "confidence": this is the share of
+                    // correlated indicator votes, not a calibrated probability.
                     add("$bullish of $total techniques bullish — the board reads " +
-                        direction.name.lowercase(Locale.US) + " at $confidence% confidence.")
+                        direction.name.lowercase(Locale.US) + " at $confidence% indicator agreement.")
                 }
                 add(String.format(Locale.US, "RSI %.0f; 14-day ATR %s.", rsi, Fmt.money(atr)))
                 if (sma50 != null) {
@@ -757,7 +802,7 @@ class PortfolioAdvisor(
     ): List<RebalanceMove> {
         val moves = ArrayList<RebalanceMove>()
         val overweight = book.slices.filter {
-            it.sector != PortfolioLens.UNCLASSIFIED && it.weightPct >= SECTOR_OVERWEIGHT_PCT
+            it.sector != PortfolioLens.UNCLASSIFIED && it.weightPct >= sectorOverweightPct
         }
         if (overweight.isEmpty()) return moves
 
@@ -780,7 +825,7 @@ class PortfolioAdvisor(
             ?.firstOrNull()
 
         for (slice in overweight) {
-            val excess = (slice.weightPct - SECTOR_TARGET_PCT) / 100.0 * book.totalValue
+            val excess = (slice.weightPct - sectorTargetPct) / 100.0 * book.totalValue
             if (excess < book.totalValue * 0.02) continue
             // Sell the weakest holding in the sector: worst action first, then
             // the lowest board confidence.
@@ -800,7 +845,7 @@ class PortfolioAdvisor(
                 Locale.US,
                 "%s is %.0f%% of the book against a %.0f%% ceiling; %s is its weakest name " +
                     "(%d of %d techniques bullish, %+.1f%% P/L).",
-                slice.sector, slice.weightPct, SECTOR_OVERWEIGHT_PCT,
+                slice.sector, slice.weightPct, sectorOverweightPct,
                 weakest.symbol, weakest.techBullish, weakest.techTotal, weakest.unrealizedPlPct
             )
             if (buyCandidate != null) {

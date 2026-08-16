@@ -40,6 +40,16 @@ data class PlanDay(val day: Int, val title: String, val actions: List<String>)
 data class BuyPlan(
     val symbol: String,
     val budget: Double,
+    /**
+     * The account equity the plan was sized against; null when unknown — the
+     * plan then falls back to a fixed order budget and must SAY so instead
+     * of borrowing the authority of the 2% rule.
+     */
+    val accountEquity: Double? = null,
+    /** The risk-per-trade policy used (percent of account equity). */
+    val riskPerTradePct: Double = 0.0,
+    /** One sentence on where the budget number came from. */
+    val budgetBasis: String = "",
     /** One-line stance, e.g. "Deploy in three steps on strength." */
     val posture: String,
     /** 2-3 sentences explaining the stance. */
@@ -54,7 +64,7 @@ data class BuyPlan(
     val stopBasis: String,
     /** Dollars lost if all filled tranches stop out. */
     val riskDollars: Double,
-    /** Risk as % of the budget. */
+    /** Risk as % of the ACCOUNT when [accountEquity] is known, else % of the order budget. */
     val riskPct: Double,
     val firstTarget: Double,
     val firstTargetNote: String,
@@ -70,17 +80,79 @@ data class BuyPlan(
 
 object BuyPlanEngine {
 
+    /** Fallback order budget when the account is unknown — labeled as such, never as "2%". */
+    const val DEFAULT_BUDGET = 3000.0
+
     /**
      * [candles] is the full daily history available (ideally ~1 year so the
      * 200-day average exists); [analysis] the 35-technique read; [price] the
      * latest quote.
+     *
+     * When [accountEquity] is known, the budget is DERIVED: the plan is sized
+     * so a full stop-out loses at most [riskPerTradePct]% of the account,
+     * capped by [maxPositionPct]% of equity and by [cashAvailable]. When it
+     * is not known, [fallbackBudget] is used and the plan says so — a fixed
+     * order budget must never be dressed up as Elder's 2% account rule.
      */
     fun build(
         symbol: String,
         candles: List<Candle>,
         analysis: TechniqueAnalysis,
         price: Double,
-        budget: Double = 3000.0
+        fallbackBudget: Double = DEFAULT_BUDGET,
+        accountEquity: Double? = null,
+        riskPerTradePct: Double = 2.0,
+        maxPositionPct: Double = 22.0,
+        cashAvailable: Double? = null,
+        policyNote: String = ""
+    ): BuyPlan {
+        // First pass with a unit budget measures the plan's risk-per-dollar —
+        // stop and tranche PRICES depend only on the chart, so risk scales
+        // linearly with the budget and one probe sizes the real one.
+        val equity = accountEquity?.takeIf { it > 0.0 }
+        val budget: Double
+        val budgetBasis: String
+        if (equity != null) {
+            val probe = buildInternal(symbol, candles, analysis, price, 1000.0)
+            val riskPerDollar = (probe.riskDollars / 1000.0).coerceAtLeast(1e-6)
+            val allowedRisk = equity * riskPerTradePct / 100.0
+            val riskCapBudget = allowedRisk / riskPerDollar
+            val positionCap = equity * maxPositionPct / 100.0
+            val cashCap = cashAvailable?.takeIf { it > 0.0 } ?: Double.MAX_VALUE
+            budget = minOf(riskCapBudget, positionCap, cashCap).coerceAtLeast(0.0)
+            budgetBasis = buildString {
+                append(
+                    "Sized from your ${com.aurum.invest.core.Fmt.money(equity)} account: a full " +
+                        "stop-out loses at most ${pct1(riskPerTradePct)} of it"
+                )
+                if (budget == positionCap) append(", capped at ${pct1(maxPositionPct)} position size")
+                if (cashAvailable != null && budget == cashCap) append(", capped by available cash")
+                append(".")
+                if (policyNote.isNotBlank()) append(" $policyNote")
+            }
+        } else {
+            budget = fallbackBudget
+            budgetBasis = "Default ${com.aurum.invest.core.Fmt.money(fallbackBudget)} order " +
+                "budget — the app doesn't know your account equity, so this is NOT sized by " +
+                "the 2% account rule. Record your holdings (and cash) to size it properly."
+        }
+        return buildInternal(
+            symbol, candles, analysis, price, budget,
+            accountEquity = equity,
+            riskPerTradePct = if (equity != null) riskPerTradePct else 0.0,
+            budgetBasis = budgetBasis
+        )
+    }
+
+    private fun buildInternal(
+        symbol: String,
+        candles: List<Candle>,
+        analysis: TechniqueAnalysis,
+        price: Double,
+        budget: Double,
+        accountEquity: Double? = null,
+        riskPerTradePct: Double = 0.0,
+        budgetBasis: String = ""
     ): BuyPlan {
         val closes = candles.map { it.close }
         val atr = Indicators.atr(candles, 14) ?: (price * 0.02)
@@ -152,7 +224,15 @@ object BuyPlanEngine {
 
         val riskPerShare = max(avgEntry - stop, 0.0)
         val riskDollars = round2(totalShares * riskPerShare)
-        val riskPct = if (budget > 0.0) round2(riskDollars / budget * 100.0) else 0.0
+        // Percent of the ACCOUNT when equity is known — the number Elder's
+        // rule is actually about. Percent of the order budget otherwise,
+        // and the labels downstream say which one it is.
+        val riskPct = when {
+            accountEquity != null && accountEquity > 0.0 ->
+                round2(riskDollars / accountEquity * 100.0)
+            budget > 0.0 -> round2(riskDollars / budget * 100.0)
+            else -> 0.0
+        }
 
         val firstTarget = resistances.firstOrNull { it > avgEntry * 1.01 }
             ?: round2(avgEntry + 2.0 * (avgEntry - stop))
@@ -214,9 +294,17 @@ object BuyPlanEngine {
                 "the best-informed one.",
             "Paul Tudor Jones" to "Only be long above the 200-day average, frame the stretch " +
                 "exit at 5:1 reward-to-risk, and play defense first.",
-            "Alexander Elder" to "The 2% rule: the dollars lost if the stop hits stay a small, " +
-                "pre-known slice of capital — this plan risks ${money(riskDollars)} " +
-                "(${pct1(riskPct)} of the ${money(budget)}).",
+            "Alexander Elder" to if (accountEquity != null && accountEquity > 0.0) {
+                "The 2% rule, applied to your ACCOUNT: a full stop-out here loses " +
+                    "${money(riskDollars)} — ${pct1(riskPct)} of your " +
+                    "${money(accountEquity)} equity, inside the ${pct1(riskPerTradePct)} " +
+                    "risk-per-trade policy."
+            } else {
+                "Elder's 2% rule caps the loss at 2% of ACCOUNT equity — which this app " +
+                    "doesn't know yet. As shown, a stop-out loses ${money(riskDollars)} " +
+                    "(${pct1(riskPct)} of the ${money(budget)} order budget, NOT of your " +
+                    "account). Record your holdings to size this properly."
+            },
             "Buffett & Munger" to "Wait for your price: limit orders at support instead of " +
                 "market orders at whatever the day offers.",
             "Volatility stops" to "The stop lives ${money(atr)} (one ATR) worth of padding " +
@@ -226,6 +314,9 @@ object BuyPlanEngine {
         return BuyPlan(
             symbol = symbol,
             budget = budget,
+            accountEquity = accountEquity,
+            riskPerTradePct = riskPerTradePct,
+            budgetBasis = budgetBasis,
             posture = posture,
             postureDetail = postureDetail,
             trendNote = trendNote,

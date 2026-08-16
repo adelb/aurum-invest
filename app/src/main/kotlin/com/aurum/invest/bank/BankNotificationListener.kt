@@ -8,6 +8,8 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import androidx.core.app.NotificationManagerCompat
 import com.aurum.invest.AurumApp
+import com.aurum.invest.core.Fmt
+import com.aurum.invest.core.Notify
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -57,19 +59,40 @@ class BankNotificationListener : NotificationListenerService() {
                 if (eventId <= 0L) return@launch // deduped or storage failure
 
                 val parsed = TradeParser.parse(title, body) ?: return@launch
-                if (container.settings.autoImport.first() &&
-                    parsed.confidence >= 80 &&
-                    parsed.symbol != null &&
-                    parsed.shares != null &&
-                    parsed.price != null
-                ) {
-                    container.bankFeed.importEvent(
+                val autoImportOn = container.settings.autoImport.first()
+                // Unattended ledger writes demand more than a confident regex:
+                // every field present, a broker transaction reference to trace
+                // it by, and USD denomination (non-USD needs a human-entered
+                // FX conversion — storing a JOD number as a USD price would
+                // silently corrupt the ledger).
+                val usd = parsed.currency == null || parsed.currency == "USD"
+                val complete = parsed.symbol != null && parsed.shares != null && parsed.price != null
+                if (autoImportOn && complete && usd && parsed.ref != null && parsed.confidence >= 80) {
+                    val written = container.bankFeed.importEvent(
                         eventId = eventId,
-                        symbol = parsed.symbol,
+                        symbol = parsed.symbol!!,
                         side = parsed.side,
-                        shares = parsed.shares,
-                        price = parsed.price
+                        shares = parsed.shares!!,
+                        price = parsed.price!!
                     )
+                    if (written) {
+                        Notify.bankImported(
+                            applicationContext,
+                            "${parsed.side.name} ${Fmt.qty(parsed.shares)} ${parsed.symbol} " +
+                                "@ ${Fmt.money(parsed.price)} · ref ${parsed.ref}"
+                        )
+                    }
+                } else if (parsed.confidence >= 60) {
+                    // Looks like a real trade but doesn't clear the unattended
+                    // bar — ask the human instead of guessing.
+                    val why = when {
+                        !complete -> "some fields could not be read"
+                        !usd -> "it is in ${parsed.currency} and needs an FX conversion"
+                        parsed.ref == null -> "it carries no broker reference"
+                        !autoImportOn -> "auto-import is off"
+                        else -> "the parse is below the auto-import bar"
+                    }
+                    Notify.bankReviewNeeded(applicationContext, title.ifBlank { body.take(60) }, why)
                 }
             } catch (_: Exception) {
                 // capture must never crash the listener service

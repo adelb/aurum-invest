@@ -48,6 +48,16 @@ object TradeParser {
 
     private val CURRENCY_CODE = Regex("""\b(USD|JOD|EUR|GBP|SAR|AED)\b""", RegexOption.IGNORE_CASE)
 
+    /**
+     * Broker transaction reference: "Ref: AB1234", "Reference no. 555123",
+     * "Order #98765", "Txn: 2024-11-002", "مرجع 12345". Requires at least one
+     * digit so a stray word after "order" is never taken as an id.
+     */
+    private val REF = Regex(
+        """(?:\bref(?:erence)?\b|\border\b|\btxn\b|\btransaction\b|مرجع|رقم\s+العملية)\s*(?:no\.?|number|#|:)?\s*([A-Za-z0-9][A-Za-z0-9/-]{3,19})""",
+        RegexOption.IGNORE_CASE
+    )
+
     /** Contextual symbol patterns tried first — much less likely to hit a stray word. */
     private val SYMBOL_CONTEXT = listOf(
         Regex("""(?i:\bof|من|في)\s+([A-Z]{1,5})\b"""),          // "10 shares of AAPL" / "أسهم من AAPL"
@@ -90,6 +100,8 @@ object TradeParser {
             price = round(amount / shares * 100.0) / 100.0
         }
 
+        val ref = extractRef(s)
+
         var confidence = 40 // side is guaranteed present here
         if (symbol != null) confidence += 25
         if (shares != null) confidence += 20
@@ -102,7 +114,8 @@ object TradeParser {
             price = price,
             amount = amount,
             currency = currency,
-            confidence = confidence
+            confidence = confidence,
+            ref = ref
         )
     }
 
@@ -115,6 +128,7 @@ object TradeParser {
         o.put("amount", t.amount ?: JSONObject.NULL)
         o.put("currency", t.currency ?: JSONObject.NULL)
         o.put("confidence", t.confidence)
+        o.put("ref", t.ref ?: JSONObject.NULL)
         return o.toString()
     }
 
@@ -127,7 +141,8 @@ object TradeParser {
             price = if (o.isNull("price")) null else o.getDouble("price"),
             amount = if (o.isNull("amount")) null else o.getDouble("amount"),
             currency = if (o.isNull("currency")) null else o.getString("currency"),
-            confidence = o.optInt("confidence", 0)
+            confidence = o.optInt("confidence", 0),
+            ref = if (o.isNull("ref")) null else o.getString("ref")
         )
     } catch (_: Exception) {
         null
@@ -189,6 +204,13 @@ object TradeParser {
         firstNumber(SHARES_BEFORE_WORD, s)
             ?: firstNumber(SHARES_AFTER_X, s)
             ?: firstNumber(SHARES_BEFORE_X, s)
+
+    private fun extractRef(s: String): String? {
+        val m = REF.find(s) ?: return null
+        val token = m.groupValues[1]
+        // A reference must carry at least one digit; "order was" must not match.
+        return token.takeIf { it.any(Char::isDigit) }
+    }
 
     private fun firstNumber(rx: Regex, s: String): Double? =
         rx.find(s)?.groupValues?.getOrNull(1)?.replace(",", "")?.toDoubleOrNull()

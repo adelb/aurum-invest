@@ -54,7 +54,12 @@ data class PositionView(
     val marketValue: Double,
     val unrealizedPl: Double,
     val unrealizedPlPct: Double,
-    val dayPl: Double
+    val dayPl: Double,
+    /**
+     * False when no quote could be fetched: [marketValue] is then the COST of
+     * the position, not a market price, and the UI must say so.
+     */
+    val priced: Boolean = true
 )
 
 data class PortfolioSummary(
@@ -63,7 +68,10 @@ data class PortfolioSummary(
     val unrealizedPl: Double,
     val realizedPl: Double,
     val totalPl: Double,
-    val dayPl: Double
+    val dayPl: Double,
+    /** Open positions with no live quote — carried at cost inside [marketValue]. */
+    val unpricedCount: Int = 0,
+    val unpricedCost: Double = 0.0
 )
 
 enum class AdviceAction { STRONG_BUY, BUY, WAIT, HOLD, TAKE_PROFIT, CUT_LOSS, SELL }
@@ -88,6 +96,61 @@ data class GoldRelation(
     val description: String,
     val sampleDays: Int
 )
+
+/**
+ * Provenance of a served feed. "No data", "stale data", and "fetch failed"
+ * are different answers and must never be conflated: an empty FRESH news feed
+ * means verified-no-articles; an empty FAILED one means we simply don't know.
+ */
+enum class FeedStatus { FRESH, STALE, FAILED }
+
+/** Symbol news plus how much to trust it. [asOf] is when the items were actually fetched. */
+data class NewsFeed(
+    val items: List<NewsItem>,
+    val status: FeedStatus,
+    val asOf: Long
+) {
+    companion object {
+        val FAILED = NewsFeed(emptyList(), FeedStatus.FAILED, 0L)
+    }
+}
+
+/** Daily candles plus provenance — distinguishes "short listing history" from "fetch failed". */
+data class CandleFeed(
+    val candles: List<Candle>,
+    val status: FeedStatus,
+    val asOf: Long
+)
+
+/**
+ * Health of the screener universe behind a "market-wide" scan (H4): how many
+ * of the requested Yahoo screens were actually served live, from stale cache,
+ * or not at all. An empty pick list only means "no setup" when the screens
+ * were actually reachable.
+ */
+data class ScanCoverage(
+    val screensRequested: Int,
+    val screensLive: Int,
+    val screensStale: Int,
+    val screensMissing: Int,
+    val rowsSeen: Int,
+    /** Oldest fetch time among served screens; 0 when nothing was served. */
+    val oldestAsOf: Long
+) {
+    val healthy: Boolean get() = screensMissing == 0 && screensStale == 0
+    val reachable: Boolean get() = screensLive + screensStale > 0
+
+    fun summary(): String = buildString {
+        append("$screensRequested Yahoo screens · $rowsSeen rows")
+        if (screensLive == screensRequested) {
+            append(" · all live")
+        } else {
+            append(" · $screensLive live")
+            if (screensStale > 0) append(" · $screensStale stale")
+            if (screensMissing > 0) append(" · $screensMissing unreachable")
+        }
+    }
+}
 
 data class NewsItem(
     val id: String,
@@ -217,7 +280,13 @@ data class ParsedTrade(
     val price: Double?,
     val amount: Double?,
     val currency: String?,
-    val confidence: Int
+    val confidence: Int,
+    /**
+     * The broker's own transaction reference when the alert carries one
+     * ("Ref: AB12345", "Order #98765"). Auto-import requires it — a unique
+     * broker id is what makes an unattended ledger write traceable.
+     */
+    val ref: String? = null
 )
 
 /** A captured bank notification with its parse result. */

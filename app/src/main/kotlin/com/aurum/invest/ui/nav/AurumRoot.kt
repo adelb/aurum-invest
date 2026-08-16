@@ -43,9 +43,11 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.aurum.invest.AurumApp
 import com.aurum.invest.ui.screens.AddTransactionScreen
+import com.aurum.invest.ui.screens.AdviceHistoryScreen
 import com.aurum.invest.ui.screens.AnalysisScreen
 import com.aurum.invest.ui.screens.BankFeedScreen
 import com.aurum.invest.ui.screens.DashboardScreen
+import com.aurum.invest.ui.screens.DisclosureScreen
 import com.aurum.invest.ui.screens.EditPositionScreen
 import com.aurum.invest.ui.screens.PicksScreen
 import com.aurum.invest.ui.screens.PositionDetailScreen
@@ -64,6 +66,7 @@ object Routes {
     const val PICKS = "picks"; const val WEALTH = "wealth"
     const val PREMARKET = "premarket"
     const val FEED = "feed"; const val SETTINGS = "settings"
+    const val DISCLOSURES = "disclosures"; const val ADVICE_HISTORY = "advicehistory"
     const val ADD = "add?symbol={symbol}&side={side}"; const val DETAIL = "detail/{symbol}"
     const val ANALYSIS = "analysis/{symbol}"; const val REPORTS = "reports"
     const val EDIT_POSITION = "edit/{symbol}"
@@ -215,11 +218,21 @@ fun AurumRoot() {
             composable(Routes.SETTINGS) {
                 SettingsScreen(
                     onBack = { nav.popBackStack() },
-                    onOpenFeed = { nav.navigate(Routes.FEED) }
+                    onOpenFeed = { nav.navigate(Routes.FEED) },
+                    onOpenDisclosures = { nav.navigate(Routes.DISCLOSURES) }
                 )
             }
+            composable(Routes.DISCLOSURES) {
+                DisclosureScreen(onBack = { nav.popBackStack() })
+            }
+            composable(Routes.ADVICE_HISTORY) {
+                AdviceHistoryScreen(onBack = { nav.popBackStack() })
+            }
             composable(Routes.REPORTS) {
-                ReportsScreen(onBack = { nav.popBackStack() })
+                ReportsScreen(
+                    onBack = { nav.popBackStack() },
+                    onOpenAdviceHistory = { nav.navigate(Routes.ADVICE_HISTORY) }
+                )
             }
             composable(
                 route = Routes.ADD,

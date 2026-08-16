@@ -21,7 +21,9 @@ data class EditPositionState(
     val loading: Boolean = true,
     val trades: List<TransactionEntity> = emptyList(),
     /** The position as the ledger currently computes it — updates live while editing. */
-    val position: Position? = null
+    val position: Position? = null,
+    /** Set when an edit was rejected because it would make the ledger oversell. */
+    val editError: String? = null
 )
 
 /**
@@ -68,9 +70,30 @@ class EditPositionViewModel(app: Application) : AndroidViewModel(app) {
         if (shares <= 0.0 || price <= 0.0) return
         viewModelScope.launch {
             runCatching {
+                // Replay the whole ledger with this row changed — an edit that
+                // would sell more than held at any point is rejected, not
+                // silently absorbed.
+                val problem = portfolio.validateEdit(
+                    tx.copy(side = side.name, shares = shares, price = price, fees = fees, ts = ts)
+                )
+                if (problem != null) {
+                    _state.update { it.copy(editError = "Edit rejected: $problem") }
+                    return@runCatching
+                }
                 portfolio.updateTransaction(tx, side, shares, price, fees, ts, plOverride)
+                _state.update { it.copy(editError = null) }
             }
         }
+    }
+
+    fun clearEditError() {
+        _state.update { it.copy(editError = null) }
+    }
+
+    /** Records a stock split for this symbol (ratio 4.0 = 4-for-1, 0.25 = 1-for-4 reverse). */
+    fun recordSplit(ratio: Double, ts: Long) {
+        if (ratio <= 0.0 || symbol.isBlank()) return
+        viewModelScope.launch { runCatching { portfolio.addSplit(symbol, ratio, ts) } }
     }
 
     fun deleteTrade(tx: TransactionEntity) {

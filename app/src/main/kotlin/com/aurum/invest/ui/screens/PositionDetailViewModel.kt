@@ -6,10 +6,14 @@ import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
 import com.aurum.invest.analytics.AdviceEngine
 import com.aurum.invest.analytics.GoldCorrelation
+import com.aurum.invest.data.db.PriceAlertEntity
 import com.aurum.invest.data.model.Advice
 import com.aurum.invest.data.model.Candle
 import com.aurum.invest.data.model.ExtendedHours
+import com.aurum.invest.data.model.FeedStatus
+import com.aurum.invest.data.model.FundamentalsFeed
 import com.aurum.invest.data.model.GoldRelation
+import com.aurum.invest.data.model.NewsFeed
 import com.aurum.invest.data.model.NewsItem
 import com.aurum.invest.data.model.Position
 import com.aurum.invest.data.model.PositionView
@@ -44,6 +48,10 @@ data class DetailState(
     val chart1W: ChartSeries = ChartSeries(),
     val chart1M: ChartSeries = ChartSeries(),
     val chart3M: ChartSeries = ChartSeries(),
+    // Long-horizon views (M2), loaded lazily when their chip is tapped.
+    val chart1Y: ChartSeries = ChartSeries(),
+    val chart5Y: ChartSeries = ChartSeries(),
+    val chartMax: ChartSeries = ChartSeries(),
     val ext: ExtendedHours? = null,
     val position: Position? = null,
     val view: PositionView? = null,
@@ -51,8 +59,15 @@ data class DetailState(
     val advice: Advice? = null,
     val gold: GoldRelation? = null,
     val news: List<NewsItem> = emptyList(),
+    /** FRESH = feed verified; STALE = old cache after a failed fetch; FAILED = unknown. */
+    val newsStatus: FeedStatus = FeedStatus.FRESH,
+    val newsAsOf: Long = 0L,
     val watched: Boolean = false,
-    val pinned: Boolean = false
+    val pinned: Boolean = false,
+    /** The user's price alerts on this symbol (active first). */
+    val alerts: List<PriceAlertEntity> = emptyList(),
+    /** Company research (profile, financials, valuation, analysts, catalysts). */
+    val fundamentals: FundamentalsFeed? = null
 )
 
 class PositionDetailViewModel(app: Application) : AndroidViewModel(app) {
@@ -65,6 +80,7 @@ class PositionDetailViewModel(app: Application) : AndroidViewModel(app) {
     private var symbol: String = ""
     private val symKey: String get() = symbol.trim().uppercase()
     private var loadJob: Job? = null
+    private var alertsJob: Job? = null
 
     /** Idempotent entry point: sets the symbol and loads (once) for it. */
     fun start(symbol: String) {
@@ -74,6 +90,53 @@ class PositionDetailViewModel(app: Application) : AndroidViewModel(app) {
         this.symbol = cleaned
         _state.value = DetailState(loading = true, symbol = cleaned.uppercase())
         reload()
+        alertsJob?.cancel()
+        alertsJob = viewModelScope.launch {
+            runCatching {
+                container.alerts.observeForSymbol(symKey).collect { list ->
+                    _state.update { it.copy(alerts = list) }
+                }
+            }
+        }
+    }
+
+    /** Lazily loads the long-horizon chart data the first time its chip is tapped. */
+    fun ensureRange(range: String) {
+        if (symbol.isBlank()) return
+        val st = _state.value
+        val needed = when (range) {
+            "1Y" -> st.chart1Y.closes.isEmpty()
+            "5Y" -> st.chart5Y.closes.isEmpty()
+            "MAX" -> st.chartMax.closes.isEmpty()
+            else -> false
+        }
+        if (!needed) return
+        viewModelScope.launch {
+            val candles = runCatching {
+                when (range) {
+                    "1Y" -> container.market.getRangeCandles(symKey, "1y", "1d", maxAgeMs = 21_600_000L)
+                    "5Y" -> container.market.getRangeCandles(symKey, "5y", "1wk", maxAgeMs = 86_400_000L)
+                    else -> container.market.getRangeCandles(symKey, "max", "1mo", maxAgeMs = 86_400_000L)
+                }
+            }.getOrDefault(emptyList())
+            if (candles.isEmpty()) return@launch
+            _state.update { s ->
+                when (range) {
+                    "1Y" -> s.copy(chart1Y = ChartSeries.of(candles))
+                    "5Y" -> s.copy(chart5Y = ChartSeries.of(candles))
+                    else -> s.copy(chartMax = ChartSeries.of(candles))
+                }
+            }
+        }
+    }
+
+    fun addAlert(direction: String, threshold: Double, note: String = "") {
+        if (threshold <= 0.0 || symbol.isBlank()) return
+        viewModelScope.launch { container.alerts.add(symKey, direction, threshold, note) }
+    }
+
+    fun deleteAlert(alert: PriceAlertEntity) {
+        viewModelScope.launch { container.alerts.delete(alert) }
     }
 
     fun refresh() = reload()
@@ -92,6 +155,9 @@ class PositionDetailViewModel(app: Application) : AndroidViewModel(app) {
                     val dailyD = async { container.market.getDailyCandles(symKey, 120) }
                     val extD = async { container.market.getExtendedHours(symKey) }
                     val goldD = async { container.market.getGoldCandles() }
+                    val fundamentalsD = async {
+                        runCatching { container.fundamentals.getFundamentals(symKey) }.getOrNull()
+                    }
                     val positionsD = async { container.portfolio.positionsNow() }
                     val watchD = async {
                         container.watch.getAll().firstOrNull { it.symbol.equals(symKey, ignoreCase = true) }
@@ -101,8 +167,9 @@ class PositionDetailViewModel(app: Application) : AndroidViewModel(app) {
                     val intraday = intradayD.await()
                     val daily = dailyD.await()
 
-                    val news = runCatching { container.news.getNews(symKey, daily) }
-                        .getOrDefault(emptyList())
+                    val newsFeed = runCatching { container.news.getNewsFeed(symKey, daily) }
+                        .getOrDefault(NewsFeed.FAILED)
+                    val news = newsFeed.items
                     val newsScore = news.sumOf { it.sentiment }.coerceIn(-2, 2)
 
                     val position = positionsD.await()
@@ -143,8 +210,12 @@ class PositionDetailViewModel(app: Application) : AndroidViewModel(app) {
                         advice = advice,
                         gold = gold,
                         news = news,
+                        newsStatus = newsFeed.status,
+                        newsAsOf = newsFeed.asOf,
                         watched = watchItem != null,
-                        pinned = watchItem?.pinned == true
+                        pinned = watchItem?.pinned == true,
+                        alerts = _state.value.alerts,
+                        fundamentals = fundamentalsD.await()
                     )
                 }
             } catch (ce: CancellationException) {

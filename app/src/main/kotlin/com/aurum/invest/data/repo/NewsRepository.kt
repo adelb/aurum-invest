@@ -5,6 +5,8 @@ import com.aurum.invest.core.Dates
 import com.aurum.invest.data.db.CacheDao
 import com.aurum.invest.data.db.CacheEntity
 import com.aurum.invest.data.model.Candle
+import com.aurum.invest.data.model.FeedStatus
+import com.aurum.invest.data.model.NewsFeed
 import com.aurum.invest.data.model.NewsItem
 import com.aurum.invest.data.remote.NewsClient
 import kotlinx.coroutines.Dispatchers
@@ -21,16 +23,18 @@ class NewsRepository(private val cacheDao: CacheDao) {
     private val client = NewsClient()
 
     /**
-     * Last-5-days news for [symbol], newest first, max 20 items.
-     * [candles] are the symbol's daily candles, used to compute each item's
-     * same-day price impact. Serves fresh cache under [maxAgeMs], falls back
-     * to stale cache on network failure, and returns an empty list otherwise.
+     * Last-5-days news for [symbol] with PROVENANCE, newest first, max 20
+     * items. [candles] are the symbol's daily candles, used to compute each
+     * item's same-day move. Serves fresh cache under [maxAgeMs]; on network
+     * failure serves stale cache as STALE, or FAILED when nothing is cached.
+     * An empty FRESH result means the feed was reached and verified empty —
+     * never "we couldn't check".
      */
-    suspend fun getNews(
+    suspend fun getNewsFeed(
         symbol: String,
         candles: List<Candle>,
         maxAgeMs: Long = 1_800_000L
-    ): List<NewsItem> = withContext(Dispatchers.IO) {
+    ): NewsFeed = withContext(Dispatchers.IO) {
         val key = "news:$symbol"
         try {
             val now = System.currentTimeMillis()
@@ -40,13 +44,17 @@ class NewsRepository(private val cacheDao: CacheDao) {
                 null
             }
             if (cached != null && now - cached.updatedAt <= maxAgeMs) {
-                return@withContext fromJson(cached.json)
+                return@withContext NewsFeed(fromJson(cached.json), FeedStatus.FRESH, cached.updatedAt)
             }
 
             val raw = client.fetchNews(symbol)
-            if (raw.isEmpty()) {
-                // Network or parse failure (or genuinely no news): prefer stale cache.
-                return@withContext cached?.let { fromJson(it.json) } ?: emptyList()
+            if (raw == null) {
+                // Fetch FAILED: stale cache is better than nothing, but must say so.
+                return@withContext if (cached != null) {
+                    NewsFeed(fromJson(cached.json), FeedStatus.STALE, cached.updatedAt)
+                } else {
+                    NewsFeed.FAILED
+                }
             }
 
             val cutoff = now - FIVE_DAYS_MS
@@ -66,21 +74,34 @@ class NewsRepository(private val cacheDao: CacheDao) {
                         priceImpactPct = priceImpact(r.publishedAt, candles)
                     )
                 }
+                .let { NewsSentiment.dedupe(it) }
 
             try {
                 cacheDao.put(CacheEntity(key = key, json = toJson(items), updatedAt = now))
             } catch (_: Exception) {
                 // Cache write failure is non-fatal.
             }
-            items
+            NewsFeed(items, FeedStatus.FRESH, now)
         } catch (_: Exception) {
             try {
-                cacheDao.get(key)?.let { fromJson(it.json) } ?: emptyList()
+                cacheDao.get(key)?.let { NewsFeed(fromJson(it.json), FeedStatus.STALE, it.updatedAt) }
+                    ?: NewsFeed.FAILED
             } catch (_: Exception) {
-                emptyList()
+                NewsFeed.FAILED
             }
         }
     }
+
+    /**
+     * Items-only view of [getNewsFeed] for scoring engines. A FAILED fetch
+     * looks like an empty list here, so anything user-facing must use
+     * [getNewsFeed] and say which of the two it got.
+     */
+    suspend fun getNews(
+        symbol: String,
+        candles: List<Candle>,
+        maxAgeMs: Long = 1_800_000L
+    ): List<NewsItem> = getNewsFeed(symbol, candles, maxAgeMs).items
 
     /**
      * News for an arbitrary search [query] (sector themes, insider-buying
@@ -107,7 +128,7 @@ class NewsRepository(private val cacheDao: CacheDao) {
                 return@withContext fromJson(cached.json)
             }
             val raw = client.fetchQuery(query)
-            if (raw.isEmpty()) {
+            if (raw == null) {
                 return@withContext cached?.let { fromJson(it.json) } ?: emptyList()
             }
             val items = raw

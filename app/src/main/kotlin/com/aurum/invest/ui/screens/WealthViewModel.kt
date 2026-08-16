@@ -10,6 +10,7 @@ import com.aurum.invest.analytics.MoneyFlowReport
 import com.aurum.invest.analytics.NextSessionReport
 import com.aurum.invest.analytics.NextWeekPlan
 import com.aurum.invest.analytics.PortfolioLens
+import com.aurum.invest.analytics.PortfolioPerformance
 import com.aurum.invest.analytics.PortfolioReview
 import com.aurum.invest.analytics.WeeklyStrategy
 import com.aurum.invest.core.Dates
@@ -54,6 +55,9 @@ data class WealthState(
     val preview: NextWeekPlan? = null,
     val previewLoading: Boolean = false,
     val previewWindowActive: Boolean = false,
+    /** Reconstructed performance & risk (H2); null when too little could be measured. */
+    val performance: PortfolioPerformance? = null,
+    val performanceLoading: Boolean = false,
     /** True while a pull-to-refresh recompute is in flight. */
     val refreshing: Boolean = false
 )
@@ -80,6 +84,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
     private var reviewJob: Job? = null
     private var nextSessionJob: Job? = null
     private var previewJob: Job? = null
+    private var performanceJob: Job? = null
 
     init {
         // The live loop: keeps the review current between manual refreshes.
@@ -145,7 +150,18 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                 refreshReview()
                 refreshNextSession()
                 refreshPreview()
+                refreshPerformance()
             }
+        }
+    }
+
+    /** The reconstructed equity curve + risk stats; heavy, so cache-backed. */
+    private fun refreshPerformance() {
+        performanceJob?.cancel()
+        performanceJob = viewModelScope.launch {
+            _state.update { it.copy(performanceLoading = true) }
+            val perf = wealth.getPerformance()
+            _state.update { it.copy(performance = perf ?: it.performance, performanceLoading = false) }
         }
     }
 

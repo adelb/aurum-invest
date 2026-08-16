@@ -13,6 +13,7 @@ import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.PortfolioSummary
 import com.aurum.invest.data.model.Position
 import com.aurum.invest.data.model.PositionView
+import com.aurum.invest.data.repo.CashState
 import com.aurum.invest.data.repo.PortfolioRepository
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
@@ -65,7 +66,11 @@ data class DashboardState(
     val summary: PortfolioSummary? = null,
     val holdings: List<HoldingRow> = emptyList(),
     /** The book sliced by sector — shared math with Picks and Wealth. */
-    val book: BookContext = BookContext.EMPTY
+    val book: BookContext = BookContext.EMPTY,
+    /** Brokerage cash, when the user tracks it; UNTRACKED otherwise. */
+    val cash: CashState = CashState.UNTRACKED,
+    /** Oldest fetch time among the quotes shown; 0 when nothing was priced. */
+    val pricesAsOf: Long = 0L
 )
 
 class DashboardViewModel(app: Application) : AndroidViewModel(app) {
@@ -91,6 +96,14 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
         }
+        // Cash is optional truth: shown only when the user actually tracks it.
+        viewModelScope.launch {
+            runCatching {
+                container.cash.observeCash().collectLatest { cash ->
+                    _state.update { it.copy(cash = cash) }
+                }
+            }
+        }
     }
 
     /** Re-runs the whole pipeline with fresh quotes (bypasses the quote cache). */
@@ -110,6 +123,14 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                 else container.targets.setTarget(symbol, pct)
             }
             refresh()
+        }
+    }
+
+    /** Records a cash-account event (deposit, withdrawal, dividend, interest, fee). */
+    fun addCashEvent(type: String, amount: Double, symbol: String = "", note: String = "") {
+        if (amount <= 0.0) return
+        viewModelScope.launch {
+            runCatching { container.cash.addEvent(type = type, amount = amount, symbol = symbol, note = note) }
         }
     }
 
@@ -200,11 +221,20 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
             rowsList to sectorsD.await()
         }
 
-        _state.value = DashboardState(
-            loading = false,
-            summary = summary,
-            holdings = rows.sortedByDescending { it.view.marketValue },
-            book = PortfolioLens.build(openViews, sectors)
-        )
+        // Honest freshness: the OLDEST quote on screen sets the "as of" time.
+        val pricesAsOf = quotes.values
+            .map { it.fetchedAt }
+            .filter { it > 0L }
+            .minOrNull() ?: 0L
+
+        _state.update {
+            it.copy(
+                loading = false,
+                summary = summary,
+                holdings = rows.sortedByDescending { r -> r.view.marketValue },
+                book = PortfolioLens.build(openViews, sectors),
+                pricesAsOf = pricesAsOf
+            )
+        }
     }
 }

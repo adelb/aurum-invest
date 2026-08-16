@@ -112,7 +112,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 Text(
                     text = when (tab) {
                         PicksTab.U -> state.uLabel + " · dip first, rise into the close"
-                        PicksTab.ENTRIES -> "Market-wide entry-price scan"
+                        PicksTab.ENTRIES -> "Entry-price scan · 8-screen universe"
                         PicksTab.POWER -> "Buy 2:30–4:00 PM ET · sell into tomorrow"
                         PicksTab.WEEKLY -> state.weekLabel
                         PicksTab.RELATION -> "Who moves when the giants move"
@@ -250,27 +250,52 @@ private fun androidx.compose.foundation.lazy.LazyListScope.uItems(
             }
         }
         state.uRows.isEmpty() -> item {
-            EmptyState(
-                title = "No stock passes the U bar today",
-                message = "A name is listed only when its measured record clears every gate: " +
-                    "a real U habit (40%+ of recent sessions), a 1%+ median rebound, and a " +
-                    "buy rule that actually paid on replay. An empty list means the edge " +
-                    "is not there — not that the scan failed.",
-                actionLabel = "Rescan the market",
-                onAction = onRescan
-            )
+            // Honest empty state: "no setup" may only be claimed when the
+            // screener universe was actually reachable.
+            val cov = state.coverage
+            if (cov != null && !cov.reachable) {
+                EmptyState(
+                    title = "Scan failed — data source unreachable",
+                    message = "None of the ${cov.screensRequested} Yahoo screens behind this " +
+                        "scan could be fetched, so an empty list here means the scan FAILED — " +
+                        "it says nothing about whether the edge exists today.",
+                    actionLabel = "Retry the scan",
+                    onAction = onRescan
+                )
+            } else {
+                EmptyState(
+                    title = "No stock passes the U bar today",
+                    message = "A name is listed only when its measured record clears every gate: " +
+                        "a real U habit (40%+ of recent sessions), a 1%+ median rebound, and a " +
+                        "buy rule that actually paid on replay." +
+                        (cov?.let {
+                            if (it.screensMissing > 0) {
+                                " Note: only ${it.screensLive + it.screensStale} of " +
+                                    "${it.screensRequested} screens were reachable — this was a " +
+                                    "PARTIAL scan."
+                            } else {
+                                " The scan covered ${it.rowsSeen} screener rows and found no " +
+                                    "qualifying setup."
+                            }
+                        } ?: ""),
+                    actionLabel = "Rescan the market",
+                    onAction = onRescan
+                )
+            }
         }
         else -> {
             item {
                 Text(
                     text = "Stocks that habitually dip after the open and climb back through " +
-                        "the close — found by a whole-market scan, proven on ~21 sessions of " +
-                        "5-minute bars each (U-day rate, parabola curvature, VWAP-reclaim " +
-                        "rule replay), confirmed by the 35-technique board, and tracked " +
-                        "live so each card says whether NOW is the time to buy.",
+                        "the close — found by scanning Yahoo's 8 predefined market screens " +
+                        "(a broad liquid-name sample, not every US stock), proven on ~21 " +
+                        "sessions of 5-minute bars each (U-day rate, parabola curvature, " +
+                        "VWAP-reclaim rule replay), confirmed by the 35-technique board, and " +
+                        "tracked live so each card says whether NOW is the time to buy.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
+                ScanCoverageNote(state.coverage)
             }
             items(state.uRows, key = { "u-${it.symbol}" }) { pick ->
                 UPatternCard(
@@ -336,24 +361,42 @@ private fun androidx.compose.foundation.lazy.LazyListScope.powerItems(
             }
         }
         state.powerRows.isEmpty() -> item {
-            EmptyState(
-                title = "No power-hour setups found",
-                message = "No stock shows the 4-day strength this play needs right now. " +
-                    "Rescan during the buy window for the freshest read.",
-                actionLabel = "Scan now",
-                onAction = onRefresh
-            )
+            val cov = state.coverage
+            if (cov != null && !cov.reachable) {
+                EmptyState(
+                    title = "Scan failed — data source unreachable",
+                    message = "None of the ${cov.screensRequested} Yahoo screens could be " +
+                        "fetched — an empty list here means the scan FAILED, not that no " +
+                        "setup exists.",
+                    actionLabel = "Retry",
+                    onAction = onRefresh
+                )
+            } else {
+                EmptyState(
+                    title = "No power-hour setups found",
+                    message = "No scanned stock shows the 4-day strength this play needs right " +
+                        "now. Rescan during the buy window for the freshest read." +
+                        (cov?.takeIf { it.screensMissing > 0 }?.let {
+                            " Note: only ${it.screensLive + it.screensStale} of " +
+                                "${it.screensRequested} screens were reachable — a PARTIAL scan."
+                        } ?: ""),
+                    actionLabel = "Scan now",
+                    onAction = onRefresh
+                )
+            }
         }
         else -> {
             item {
                 Text(
                     text = "The 10 strongest candidates to buy in the last 90 minutes and hold " +
-                        "into tomorrow: the whole market screened for names finishing near " +
-                        "their daily high on hot volume after 4 strong trading days, confirmed " +
-                        "by the 35-technique board. Refresh inside the window for the live read.",
+                        "into tomorrow: Yahoo's 8 market screens (a broad liquid-name sample, " +
+                        "not every US stock) swept for names finishing near their daily high " +
+                        "on hot volume after 4 strong trading days, confirmed by the " +
+                        "35-technique board. Refresh inside the window for the live read.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
+                ScanCoverageNote(state.coverage)
             }
             items(state.powerRows, key = { "p-${it.symbol}" }) { pick ->
                 PowerPickCard(
@@ -583,7 +626,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
                     CircularProgressIndicator(color = AurumColors.gold)
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(
-                        text = "Sweeping the whole market for entry setups…",
+                        text = "Sweeping the screener universe for entry setups…",
                         style = MaterialTheme.typography.bodyMedium,
                         color = AurumColors.textDim
                     )
@@ -591,23 +634,41 @@ private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
             }
         }
         state.entryRows.isEmpty() -> item {
-            EmptyState(
-                title = "No entry setups found",
-                message = "The market-wide scan found no stock at a compelling entry right now.",
-                actionLabel = "Sweep again",
-                onAction = onRefresh
-            )
+            val cov = state.coverage
+            if (cov != null && !cov.reachable) {
+                EmptyState(
+                    title = "Scan failed — data source unreachable",
+                    message = "None of the ${cov.screensRequested} Yahoo screens could be " +
+                        "fetched — an empty list here means the scan FAILED, not that no " +
+                        "entry exists.",
+                    actionLabel = "Retry",
+                    onAction = onRefresh
+                )
+            } else {
+                EmptyState(
+                    title = "No entry setups found",
+                    message = "The scan found no stock at a compelling entry right now." +
+                        (cov?.takeIf { it.screensMissing > 0 }?.let {
+                            " Note: only ${it.screensLive + it.screensStale} of " +
+                                "${it.screensRequested} screens were reachable — a PARTIAL scan."
+                        } ?: ""),
+                    actionLabel = "Sweep again",
+                    onAction = onRefresh
+                )
+            }
         }
         else -> {
             item {
                 Text(
-                    text = "The best entry setups across 8 market-wide screens: kept only when " +
-                        "the long trend is intact, the price has pulled back toward support, " +
-                        "the 35-technique board does not read the dip as a falling knife, and " +
-                        "the week's news does not explain the dip away.",
+                    text = "The best entry setups across Yahoo's 8 predefined screens (a broad " +
+                        "liquid-name sample, not every US stock): kept only when the long trend " +
+                        "is intact, the price has pulled back toward support, the 35-technique " +
+                        "board does not read the dip as a falling knife, and the week's news " +
+                        "does not explain the dip away.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
+                ScanCoverageNote(state.coverage)
             }
             items(state.entryRows, key = { "e-${it.symbol}" }) { pick ->
                 EntryPickCard(
@@ -999,9 +1060,10 @@ private fun androidx.compose.foundation.lazy.LazyListScope.weeklyItems(
     item {
         Text(
             text = "The week's strongest sustained setups — momentum, volume, and the " +
-                "35-technique board over the fixed universe plus the market-wide screens. " +
-                "Every pick now carries its stop and first target in the reason line: a " +
-                "pick without an exit is not a plan.",
+                "35-technique board over the fixed universe plus Yahoo's predefined screens " +
+                "(a broad liquid-name sample, not every US stock). Every pick now carries " +
+                "its stop and first target in the reason line: a pick without an exit is " +
+                "not a plan.",
             style = MaterialTheme.typography.bodySmall,
             color = AurumColors.textDim
         )
@@ -1409,5 +1471,22 @@ private fun PortfolioNoteTag(note: PickNote?) {
             NoteKind.CONCENTRATION -> AurumColors.loss
             NoteKind.DIVERSIFIES -> AurumColors.info
         }
+    )
+}
+
+/**
+ * One-line universe provenance under a scan header (H4): exactly which
+ * screens were served, how many rows the universe held, and when — so
+ * "market scan" can never be read as "every US stock, right now".
+ */
+@Composable
+private fun ScanCoverageNote(coverage: com.aurum.invest.data.model.ScanCoverage?) {
+    if (coverage == null) return
+    Text(
+        text = "Universe: ${coverage.summary()}" +
+            (if (coverage.oldestAsOf > 0L) " · as of ${Fmt.timeShort(coverage.oldestAsOf)}" else ""),
+        style = MaterialTheme.typography.labelSmall,
+        color = if (coverage.healthy) AurumColors.textDim else AurumColors.gold,
+        modifier = Modifier.padding(top = 6.dp)
     )
 }

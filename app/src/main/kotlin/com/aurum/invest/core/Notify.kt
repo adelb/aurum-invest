@@ -22,6 +22,8 @@ object Notify {
 
     private const val U_CHANNEL_ID = "aurum_upattern"
     private const val NS_CHANNEL_ID = "aurum_nextsession"
+    private const val BANK_CHANNEL_ID = "aurum_bank"
+    private const val ALERT_CHANNEL_ID = "aurum_price_alerts"
 
     /** The Android 13+ runtime permission the alerts card asks for. */
     const val POST_PERMISSION = "android.permission.POST_NOTIFICATIONS"
@@ -160,5 +162,77 @@ object Notify {
             }
         }
         return delivered
+    }
+
+    private fun ensureChannel(context: Context, id: String, name: String, description: String) {
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE)
+            as? NotificationManager ?: return
+        if (manager.getNotificationChannel(id) != null) return
+        manager.createNotificationChannel(
+            NotificationChannel(id, name, NotificationManager.IMPORTANCE_HIGH).apply {
+                this.description = description
+            }
+        )
+    }
+
+    private fun post(context: Context, channel: String, id: Int, title: String, body: String) {
+        val compat = NotificationManagerCompat.from(context)
+        if (!compat.areNotificationsEnabled()) return
+        val open = PendingIntent.getActivity(
+            context,
+            id,
+            Intent(context, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val n = NotificationCompat.Builder(context, channel)
+            .setSmallIcon(R.drawable.ic_stat_u)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+        try {
+            compat.notify(id, n)
+        } catch (_: SecurityException) {
+            // Permission revoked mid-flight — nothing else to do.
+        }
+    }
+
+    /** A bank alert was auto-imported into the ledger — the user must know a write happened. */
+    fun bankImported(context: Context, summary: String) {
+        ensureChannel(
+            context, BANK_CHANNEL_ID, "Bank trade imports",
+            "A bank trade alert was imported into the ledger or needs review"
+        )
+        post(
+            context, BANK_CHANNEL_ID, ("bankimp" + summary).hashCode(),
+            "Trade imported from bank alert",
+            "$summary — tap to review it in the Bank Feed."
+        )
+    }
+
+    /** A captured trade alert needs the user's confirmation before touching the ledger. */
+    fun bankReviewNeeded(context: Context, title: String, why: String) {
+        ensureChannel(
+            context, BANK_CHANNEL_ID, "Bank trade imports",
+            "A bank trade alert was imported into the ledger or needs review"
+        )
+        post(
+            context, BANK_CHANNEL_ID, ("bankrev$title").hashCode(),
+            "Bank trade alert needs review",
+            "\"$title\" was captured but not imported because $why. Review it in the Bank Feed."
+        )
+    }
+
+    /** A user-defined price alert fired. */
+    fun priceAlert(context: Context, symbol: String, body: String) {
+        ensureChannel(
+            context, ALERT_CHANNEL_ID, "Price alerts",
+            "A price you asked to watch was crossed"
+        )
+        post(context, ALERT_CHANNEL_ID, ("palert$symbol$body").hashCode(), "$symbol price alert", body)
     }
 }

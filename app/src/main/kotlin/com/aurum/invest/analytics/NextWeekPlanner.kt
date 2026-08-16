@@ -372,9 +372,10 @@ class NextWeekPlanner(
                         "taking shape — it re-ranks until the open, never a promise."
                 ),
                 caveat = "Built ${Dates.todayLabel()} from confirmed sector money flow, " +
-                    "whole-market screens, news tone, the 35-technique board, and the latest " +
-                    "pre/post-market prints. Numbers refresh until Monday's open; projections " +
-                    "are dampened extrapolations, not promises."
+                    "Yahoo's market screens (a broad liquid sample, not every US stock), news " +
+                    "tone, the 35-technique board, and the latest pre/post-market prints. " +
+                    "Numbers refresh until Monday's open; projections are dampened " +
+                    "extrapolations, not promises."
             )
         } catch (_: Exception) {
             null

@@ -11,7 +11,11 @@ import com.aurum.invest.analytics.TechniqueEvaluation
 import com.aurum.invest.analytics.TechniqueEvaluator
 import com.aurum.invest.analytics.Techniques
 import com.aurum.invest.data.db.CacheEntity
+import com.aurum.invest.data.model.FeedStatus
+import com.aurum.invest.data.repo.InvestorProfile
+import com.aurum.invest.data.repo.PortfolioRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,7 +32,15 @@ data class AnalysisState(
     val plan: BuyPlan? = null,
     /** Measured 1-year track record per technique; null while it computes. */
     val evaluation: TechniqueEvaluation? = null,
-    val evaluationLoading: Boolean = false
+    val evaluationLoading: Boolean = false,
+    /**
+     * Provenance of the price history behind everything on this screen.
+     * FAILED with an empty analysis means "couldn't load the data" — a
+     * different diagnosis from "this symbol is listed too recently", and the
+     * screen must say the right one.
+     */
+    val historyStatus: FeedStatus = FeedStatus.FRESH,
+    val historyAsOf: Long = 0L
 )
 
 class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
@@ -44,7 +56,7 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
         /** Versioned: a grade stored for an older board must never score this one. */
-        private const val EVAL_KEY_PREFIX = "techeval:v5:"
+        private const val EVAL_KEY_PREFIX = "techeval:v6:"
 
         /** The back-test replays daily closes; a run stays valid for a session. */
         private const val EVAL_MAX_AGE_MS = 6L * 3_600_000L
@@ -78,11 +90,12 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
             }
             // Two years of dailies: the 200-day average, plus a full-year
             // integrity replay with honest warm-up for every replayed day.
-            val candles = try {
-                market.getDailyCandles(sym, CANDLE_DAYS)
+            val candleFeed = try {
+                market.getDailyCandlesFeed(sym, CANDLE_DAYS)
             } catch (_: Exception) {
-                emptyList()
+                com.aurum.invest.data.model.CandleFeed(emptyList(), FeedStatus.FAILED, 0L)
             }
+            val candles = candleFeed.candles
             val quote = try {
                 market.getQuote(sym)
             } catch (_: Exception) {
@@ -90,10 +103,37 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
             }
             val analysis = Techniques.analyze(sym, candles)
             val price = quote?.price ?: candles.lastOrNull()?.close
+
+            // Account-aware sizing: the plan derives its budget from equity
+            // and the investor's risk policy instead of a fixed $3,000.
+            val profile = runCatching { container.settings.investorProfile.first() }
+                .getOrDefault(InvestorProfile.DEFAULT)
+            val equity = runCatching {
+                val open = container.portfolio.positionsNow()
+                    .filter { PortfolioRepository.isOpen(it) }
+                if (open.isEmpty()) {
+                    null
+                } else {
+                    val quotes = container.market.getQuotes(open.map { it.symbol })
+                    // Only quote-priced holdings count — cost basis is not equity.
+                    val priced = open.mapNotNull { p -> quotes[p.symbol]?.let { p.shares * it.price } }
+                    if (priced.size < open.size) null else priced.sum()
+                }
+            }.getOrNull()
+            val cash = runCatching { container.cash.observeCash().first() }.getOrNull()
+            val totalEquity = equity?.plus(if (cash?.tracked == true) cash.balance else 0.0)
+
             val plan =
                 if (analysis != null && price != null && price > 0.0) {
                     runCatching {
-                        BuyPlanEngine.build(sym, candles, analysis, price)
+                        BuyPlanEngine.build(
+                            sym, candles, analysis, price,
+                            accountEquity = totalEquity,
+                            riskPerTradePct = profile.riskPerTradePct,
+                            maxPositionPct = profile.maxPositionPct,
+                            cashAvailable = if (cash?.tracked == true) cash.balance else null,
+                            policyNote = profile.label()
+                        )
                     }.getOrNull()
                 } else null
             _state.update {
@@ -102,6 +142,8 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
                     analysis = analysis,
                     price = price,
                     plan = plan,
+                    historyStatus = candleFeed.status,
+                    historyAsOf = candleFeed.asOf,
                     evaluationLoading =
                         analysis != null &&
                             candles.size >= TechniqueEvaluator.MIN_CANDLES_FOR_FULL_REPLAY

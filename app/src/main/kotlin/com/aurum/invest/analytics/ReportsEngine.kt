@@ -2,6 +2,7 @@ package com.aurum.invest.analytics
 
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.db.TransactionEntity
+import com.aurum.invest.data.db.TxSide
 import com.aurum.invest.data.model.TradeSide
 import java.time.DayOfWeek
 import java.time.Instant
@@ -78,8 +79,21 @@ object ReportsEngine {
             val symbol = tx.symbol.trim().uppercase()
             val acc = bySymbol.getOrPut(symbol) { Acc() }
 
-            // Replicate PortfolioRepository.computePositions exactly.
+            // Replicate PortfolioRepository.computePositions exactly. SPLIT
+            // rows scale the replay state and never appear as trade activity.
+            if (tx.side == TxSide.SPLIT) {
+                if (tx.shares > 0.0 && acc.shares > 0.0) {
+                    acc.shares *= tx.shares
+                    acc.avg /= tx.shares
+                }
+                continue
+            }
+
             val realized: Double?
+            // Effective quantity: sells clamp to the held amount, matching the
+            // position engine, so the report's totals can never disagree with
+            // the portfolio's truth.
+            val effShares: Double
             if (tx.side == TradeSide.BUY.name) {
                 val newShares = acc.shares + tx.shares
                 if (newShares > 0) {
@@ -87,8 +101,8 @@ object ReportsEngine {
                 }
                 acc.shares = newShares
                 realized = null
+                effShares = tx.shares
             } else {
-                // never sell more than held; ignore the excess
                 val qty = minOf(tx.shares, acc.shares)
                 val computed = if (qty > 0) {
                     val r = qty * (tx.price - acc.avg) - tx.fees
@@ -104,6 +118,7 @@ object ReportsEngine {
                 // The user's pinned outcome wins over the replayed number —
                 // same rule as PortfolioRepository.computePositions.
                 realized = tx.plOverride ?: computed
+                effShares = qty
             }
 
             val day = Instant.ofEpochMilli(tx.ts).atZone(zone).toLocalDate()
@@ -119,7 +134,7 @@ object ReportsEngine {
             bucket.trades += TradeLine(
                 symbol = symbol,
                 side = tx.side,
-                shares = tx.shares,
+                shares = effShares,
                 price = tx.price,
                 ts = tx.ts,
                 realizedPl = realized,
@@ -131,7 +146,7 @@ object ReportsEngine {
                 bucket.buysTotal += tx.shares * tx.price + tx.fees
             } else {
                 bucket.sellsCount += 1
-                bucket.sellsTotal += tx.shares * tx.price - tx.fees
+                bucket.sellsTotal += effShares * tx.price - tx.fees
             }
         }
 

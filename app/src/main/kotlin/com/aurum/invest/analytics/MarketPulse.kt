@@ -13,8 +13,13 @@ import kotlinx.coroutines.coroutineScope
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** The week's verdict: deploy, deploy selectively, or keep the powder dry. */
-enum class MarketCall { INVEST, SELECTIVE, DEFENSIVE }
+/**
+ * The week's verdict: deploy, deploy selectively, or keep the powder dry.
+ * INCOMPLETE means too little of the input data could actually be measured
+ * to honestly make any of the other three calls — it is a refusal, not a
+ * neutral score.
+ */
+enum class MarketCall { INVEST, SELECTIVE, DEFENSIVE, INCOMPLETE }
 
 /** One benchmark's trend read. */
 data class IndexRead(
@@ -65,7 +70,14 @@ data class MarketRating(
     val vix: Double?,                   // null when the volatility read failed
     val indexes: List<IndexRead>,
     val bestYesterday: List<MarketMover>,
-    val nextDay: List<TomorrowPick>
+    val nextDay: List<TomorrowPick>,
+    /**
+     * Share of the score's input weight that was actually MEASURED (benchmarks
+     * reached, breadth pool populated, VIX served) rather than substituted
+     * with neutral points. Below [MarketPulse.MIN_COVERAGE_PCT] the call is
+     * INCOMPLETE — a market call built mostly on placeholders is not a call.
+     */
+    val coveragePct: Double = 100.0
 )
 
 /**
@@ -97,6 +109,12 @@ class MarketPulse(private val market: MarketRepository) {
         private const val SHORTLIST = 18
         private const val CANDLE_CHUNK = 6
 
+        /** Below this measured-input share, the pulse refuses to make a call. */
+        const val MIN_COVERAGE_PCT = 60.0
+
+        /** A breadth/participation pool smaller than this counts as partially measured. */
+        private const val FULL_POOL = 100
+
         fun toJson(r: MarketRating): String = JSONObject().apply {
             put("date", r.date)
             put("computedAt", r.computedAt)
@@ -108,6 +126,7 @@ class MarketPulse(private val market: MarketRepository) {
             put("breadth", r.breadthAbove50Pct)
             put("advancers", r.advancersPct)
             put("scanned", r.scannedCount)
+            put("coverage", r.coveragePct)
             if (r.vix != null) put("vix", r.vix)
             put("indexes", JSONArray().apply {
                 r.indexes.forEach { ix ->
@@ -224,7 +243,8 @@ class MarketPulse(private val market: MarketRepository) {
                 vix = if (o.has("vix")) o.getDouble("vix") else null,
                 indexes = indexes,
                 bestYesterday = best,
-                nextDay = next
+                nextDay = next,
+                coveragePct = o.optDouble("coverage", 100.0)
             )
         } catch (_: Exception) {
             null
@@ -263,13 +283,36 @@ class MarketPulse(private val market: MarketRepository) {
             val advPts = advancers / 100.0 * 15.0      // 0..15
             val volPts = vixPoints(vix)                // 0..15
             val score = (idxPts + breadthPts + advPts + volPts).roundToInt().coerceIn(0, 100)
+
+            // How much of the score's weight was actually measured, not
+            // substituted with neutral points. Fail closed below the floor:
+            // a call built on placeholders is a guess wearing a number.
+            val coverage = (
+                indexes.size / 3.0 * 40.0 +
+                    min(1.0, measurable.size.toDouble() / FULL_POOL) * 30.0 +
+                    min(1.0, pool.size.toDouble() / FULL_POOL) * 15.0 +
+                    (if (vix != null) 15.0 else 0.0)
+                )
             val call = when {
+                coverage < MIN_COVERAGE_PCT -> MarketCall.INCOMPLETE
                 score >= 60 -> MarketCall.INVEST
                 score >= 42 -> MarketCall.SELECTIVE
                 else -> MarketCall.DEFENSIVE
             }
 
             val reasons = buildReasons(indexes, breadth, advancers, measurable.size, vix)
+                .toMutableList()
+                .apply {
+                    if (coverage < 100.0) {
+                        add(
+                            String.format(
+                                Locale.US,
+                                "Only %.0f%% of the score's inputs were measured this run",
+                                coverage
+                            )
+                        )
+                    }
+                }
             val best = bestYesterday(pool)
             // Next-session positioning is owned by the standalone
             // NextSessionEngine now — the pulse carries the market rating.
@@ -284,6 +327,7 @@ class MarketPulse(private val market: MarketRepository) {
                     MarketCall.INVEST -> "A favorable week to put money to work."
                     MarketCall.SELECTIVE -> "A mixed tape — deploy selectively."
                     MarketCall.DEFENSIVE -> "A hostile tape — protect capital this week."
+                    MarketCall.INCOMPLETE -> "Not enough measured data for a market call."
                 },
                 advice = when (call) {
                     MarketCall.INVEST ->
@@ -295,6 +339,10 @@ class MarketPulse(private val market: MarketRepository) {
                     MarketCall.DEFENSIVE ->
                         "This week does not favor new money. Sit on cash, let the market " +
                             "settle, and check the pulse again after the next session."
+                    MarketCall.INCOMPLETE ->
+                        "Too many inputs were unreachable to rate the market honestly. " +
+                            "Refresh when you're back online — no call is better than a " +
+                            "made-up one."
                 },
                 reasons = reasons,
                 breadthAbove50Pct = round1(breadth),
@@ -303,7 +351,8 @@ class MarketPulse(private val market: MarketRepository) {
                 vix = vix?.let { round1(it) },
                 indexes = indexes,
                 bestYesterday = best,
-                nextDay = next
+                nextDay = next,
+                coveragePct = round1(coverage)
             )
         } catch (_: Exception) {
             null

@@ -40,6 +40,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.db.TransactionEntity
+import com.aurum.invest.data.db.TxSide
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.EmptyState
 import com.aurum.invest.ui.components.PillTag
@@ -62,6 +63,7 @@ fun EditPositionScreen(
     val state by vm.state.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf<TransactionEntity?>(null) }
     var confirmDelete by remember { mutableStateOf<TransactionEntity?>(null) }
+    var showSplitDialog by remember { mutableStateOf(false) }
 
     editing?.let { tx ->
         EditTradeDialog(
@@ -70,6 +72,33 @@ fun EditPositionScreen(
             onSave = { side, shares, price, fees, ts, plOverride ->
                 vm.updateTrade(tx, side, shares, price, fees, ts, plOverride)
                 editing = null
+            }
+        )
+    }
+
+    if (showSplitDialog) {
+        SplitDialog(
+            symbol = state.symbol,
+            onDismiss = { showSplitDialog = false },
+            onSave = { ratio, ts ->
+                vm.recordSplit(ratio, ts)
+                showSplitDialog = false
+            }
+        )
+    }
+
+    state.editError?.let { error ->
+        AlertDialog(
+            onDismissRequest = { vm.clearEditError() },
+            containerColor = AurumColors.surface,
+            titleContentColor = AurumColors.text,
+            textContentColor = AurumColors.textDim,
+            title = { Text("Edit rejected") },
+            text = { Text(error) },
+            confirmButton = {
+                TextButton(onClick = { vm.clearEditError() }) {
+                    Text("OK", color = AurumColors.gold)
+                }
             }
         )
     }
@@ -195,9 +224,18 @@ fun EditPositionScreen(
                 items(state.trades, key = { it.id }) { tx ->
                     TradeRow(
                         tx = tx,
-                        onEdit = { editing = tx },
+                        onEdit = { if (tx.side != TxSide.SPLIT) editing = tx },
                         onDelete = { confirmDelete = tx }
                     )
+                }
+                item {
+                    TextButton(onClick = { showSplitDialog = true }) {
+                        Text(
+                            text = "Record a stock split…",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = AurumColors.gold
+                        )
+                    }
                 }
             }
         }
@@ -207,16 +245,18 @@ fun EditPositionScreen(
 @Composable
 private fun TradeRow(tx: TransactionEntity, onEdit: () -> Unit, onDelete: () -> Unit) {
     val isBuy = tx.side.equals("BUY", ignoreCase = true)
+    val isSplit = tx.side == TxSide.SPLIT
     AurumCard(onClick = onEdit, modifier = Modifier.fillMaxWidth().animateContentSize()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             PillTag(
-                text = if (isBuy) "Buy" else "Sell",
-                color = if (isBuy) AurumColors.gain else AurumColors.loss
+                text = if (isSplit) "Split" else if (isBuy) "Buy" else "Sell",
+                color = if (isSplit) AurumColors.gold else if (isBuy) AurumColors.gain else AurumColors.loss
             )
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "${Fmt.qty(tx.shares)} @ ${Fmt.money(tx.price)}",
+                    text = if (isSplit) "${Fmt.qty(tx.shares)}-for-1 split"
+                    else "${Fmt.qty(tx.shares)} @ ${Fmt.money(tx.price)}",
                     style = MaterialTheme.typography.titleSmall,
                     color = AurumColors.text
                 )
@@ -224,6 +264,8 @@ private fun TradeRow(tx: TransactionEntity, onEdit: () -> Unit, onDelete: () -> 
                     text = Fmt.dateShort(tx.ts) +
                         (if (tx.fees > 0.0) " · fees ${Fmt.money(tx.fees)}" else "") +
                         (if (tx.source == "BANK") " · from bank" else "") +
+                        (if (tx.currency != "USD") " · ${tx.currency} @ ${Fmt.qty(tx.fxRate)}" else "") +
+                        (if (tx.note.isNotBlank()) " · ${tx.note}" else "") +
                         (tx.plOverride?.let {
                             " · outcome pinned ${Fmt.signedMoney(it)}"
                         } ?: ""),
@@ -231,11 +273,13 @@ private fun TradeRow(tx: TransactionEntity, onEdit: () -> Unit, onDelete: () -> 
                     color = AurumColors.textDim
                 )
             }
-            Text(
-                text = Fmt.money(tx.shares * tx.price + if (isBuy) tx.fees else -tx.fees),
-                style = MaterialTheme.typography.titleSmall,
-                color = AurumColors.text
-            )
+            if (!isSplit) {
+                Text(
+                    text = Fmt.money(tx.shares * tx.price + if (isBuy) tx.fees else -tx.fees),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text
+                )
+            }
             IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
                 Icon(
                     Icons.Rounded.Delete,
@@ -246,6 +290,54 @@ private fun TradeRow(tx: TransactionEntity, onEdit: () -> Unit, onDelete: () -> 
             }
         }
     }
+}
+
+/** Records a stock split as a ledger row — the position engine scales shares and cost basis. */
+@Composable
+private fun SplitDialog(
+    symbol: String,
+    onDismiss: () -> Unit,
+    onSave: (ratio: Double, ts: Long) -> Unit
+) {
+    var ratioText by remember { mutableStateOf("") }
+    val ratio = ratioText.trim().toDoubleOrNull()
+    val valid = ratio != null && ratio > 0.0 && ratio != 1.0
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = AurumColors.surface,
+        titleContentColor = AurumColors.text,
+        textContentColor = AurumColors.textDim,
+        title = { Text("Record $symbol split") },
+        text = {
+            Column {
+                Text(
+                    "Enter the new-shares-per-old-share ratio: 4 for a 4-for-1 split, " +
+                        "0.25 for a 1-for-4 reverse split. Shares multiply and average cost " +
+                        "divides by this ratio from today onward."
+                )
+                Spacer(Modifier.height(12.dp))
+                androidx.compose.material3.OutlinedTextField(
+                    value = ratioText,
+                    onValueChange = { ratioText = it },
+                    label = { Text("Ratio") },
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { if (ratio != null) onSave(ratio, System.currentTimeMillis()) },
+                enabled = valid
+            ) { Text("Record split", color = if (valid) AurumColors.gold else AurumColors.textDim) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel", color = AurumColors.textDim) }
+        }
+    )
 }
 
 // The trade-edit dialog itself is shared with the Reports screen — see

@@ -156,6 +156,7 @@ fun AddTransactionScreen(prefillSymbol: String?, prefillSide: String?, onDone: (
                 modifier = Modifier.weight(1f),
                 singleLine = true,
                 enabled = !state.sellAll,
+                isError = state.oversellError != null,
                 shape = RoundedCornerShape(16.dp),
                 colors = addFieldColors(),
                 label = { Text("Shares") },
@@ -231,6 +232,14 @@ fun AddTransactionScreen(prefillSymbol: String?, prefillSide: String?, onDone: (
                 )
             }
         }
+        AnimatedVisibility(visible = state.oversellError != null || state.saveError != null) {
+            Text(
+                text = state.saveError ?: state.oversellError.orEmpty(),
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.loss,
+                modifier = Modifier.padding(start = 4.dp, top = 10.dp)
+            )
+        }
         Spacer(modifier = Modifier.height(14.dp))
 
         OutlinedTextField(
@@ -243,6 +252,18 @@ fun AddTransactionScreen(prefillSymbol: String?, prefillSide: String?, onDone: (
             label = { Text("Fees (optional)") },
             placeholder = { Text("0.00") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+        )
+        Spacer(modifier = Modifier.height(14.dp))
+
+        OutlinedTextField(
+            value = state.note,
+            onValueChange = vm::onNoteChange,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            shape = RoundedCornerShape(16.dp),
+            colors = addFieldColors(),
+            label = { Text("Note (optional)") },
+            placeholder = { Text("Why this trade — thesis, trigger, plan") }
         )
         Spacer(modifier = Modifier.height(24.dp))
 

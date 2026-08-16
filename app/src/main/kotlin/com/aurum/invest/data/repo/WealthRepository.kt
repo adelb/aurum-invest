@@ -10,6 +10,8 @@ import com.aurum.invest.analytics.NextSessionReport
 import com.aurum.invest.analytics.NextWeekPlan
 import com.aurum.invest.analytics.NextWeekPlanner
 import com.aurum.invest.analytics.PortfolioAdvisor
+import com.aurum.invest.analytics.PortfolioPerformance
+import com.aurum.invest.analytics.PortfolioPerformanceEngine
 import com.aurum.invest.analytics.PortfolioReview
 import com.aurum.invest.analytics.SectorStrategy
 import com.aurum.invest.analytics.SectorTrend
@@ -24,6 +26,7 @@ import com.aurum.invest.data.model.PositionView
 import com.aurum.invest.data.model.Quote
 import java.time.ZoneId
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import org.json.JSONArray
@@ -40,14 +43,20 @@ class WealthRepository(
     private val cacheDao: CacheDao,
     private val market: MarketRepository,
     private val news: NewsRepository,
-    private val portfolio: PortfolioRepository
+    private val portfolio: PortfolioRepository,
+    /** Supplies the investor policy so every review is sized to its owner. */
+    private val settings: SettingsRepository? = null,
+    /** Immutable trail of emitted recommendations, for later outcome review. */
+    private val adviceLog: AdviceLogRepository? = null,
+    /** Cash ledger — part of the equity curve when the user tracks it. */
+    private val cash: CashRepository? = null
 ) {
 
     companion object {
         private const val PULSE_KEY = "marketpulse:v2"
         private const val TRENDS_KEY = "sectortrends:v2"
         private const val FLOW_KEY = "moneyflow:v2"
-        private const val REVIEW_KEY = "portfolioreview:v5"
+        private const val REVIEW_KEY = "portfolioreview:v6"
         private const val NEXT_SESSION_KEY = "nextsession:v2"
         private const val NS_NOTIFIED_PREFIX = "nextsession:notified:"
         private const val PREVIEW_KEY_PREFIX = "wealthplan:next:v2:"
@@ -182,13 +191,82 @@ class WealthRepository(
     suspend fun getPortfolioReview(maxAgeMs: Long = 1_800_000L): PortfolioReview? {
         val snapshot = bookSnapshot() ?: return null
         if (snapshot.open.isEmpty()) return null
-        val fp = snapshot.fingerprint
+        // The policy is part of the review's identity: change your risk
+        // profile and a cached review sized to the old one must not serve.
+        val fp = snapshot.fingerprint + "|" + policyFingerprint()
         val cached = getCache(REVIEW_KEY)
         val now = System.currentTimeMillis()
         if (cached != null && now - cached.updatedAt <= maxAgeMs) {
             cachedReview(cached.json, fp)?.let { return it }
         }
         return recomputePortfolioReview()
+    }
+
+    // ---- performance & risk (H2) -------------------------------------------
+
+    /**
+     * The reconstructed performance/risk read, cached 6 hours per exact
+     * ledger. Null when the ledger is empty or too little could be measured.
+     */
+    suspend fun getPerformance(maxAgeMs: Long = 6L * 3_600_000L): PortfolioPerformance? {
+        return try {
+            val ordered = portfolio.orderedTransactionsNow()
+            if (ordered.isEmpty()) return null
+            val fp = portfolioFingerprint(
+                PortfolioRepository.computePositions(ordered).filter { PortfolioRepository.isOpen(it) }
+            ) + ":" + ordered.size
+            val key = "perf:v1"
+            val cached = getCache(key)
+            val now = System.currentTimeMillis()
+            if (cached != null && now - cached.updatedAt <= maxAgeMs) {
+                try {
+                    val o = JSONObject(cached.json)
+                    if (o.optString("fp") == fp) {
+                        PortfolioPerformance.fromJson(o.optString("perf"))?.let { return it }
+                    }
+                } catch (_: Exception) {
+                }
+            }
+
+            val symbols = ordered.map { it.symbol.trim().uppercase() }.distinct()
+            val candles = coroutineScope {
+                symbols.chunked(4).flatMap { chunk ->
+                    chunk.map { sym ->
+                        async { sym to runCatching { market.getDailyCandles(sym, 400) }.getOrDefault(emptyList()) }
+                    }.awaitAll()
+                }
+            }.toMap()
+            val spy = market.getDailyCandles("SPY", 400)
+            val cashEvents = cash?.let {
+                runCatching { it.observeEvents().first() }.getOrDefault(emptyList())
+            } ?: emptyList()
+            val cashTracked = cashEvents.any { it.type == com.aurum.invest.data.db.CashType.DEPOSIT }
+
+            val perf = PortfolioPerformanceEngine.compute(
+                ordered = ordered,
+                cashEvents = cashEvents,
+                candlesBySymbol = candles,
+                benchmark = spy,
+                cashTracked = cashTracked
+            ) ?: return null
+            putCache(
+                key,
+                JSONObject().apply {
+                    put("fp", fp)
+                    put("perf", PortfolioPerformance.toJson(perf))
+                }.toString()
+            )
+            perf
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private suspend fun policyFingerprint(): String {
+        val p = settings?.let { runCatching { it.investorProfile.first() }.getOrNull() }
+            ?: InvestorProfile.DEFAULT
+        return "${p.configured}:${p.horizon}:${p.riskTolerance}:${p.riskPerTradePct}:" +
+            "${p.maxPositionPct}:${p.maxSectorPct}"
     }
 
     /** The stored review, only when it was computed from exactly this book. */
@@ -210,10 +288,11 @@ class WealthRepository(
             if (open.isEmpty()) return null
             val quotes = market.getQuotes(open.map { it.symbol })
             val (views, unpriced) = pricedViews(open, quotes)
+            val reviewFp = snapshot.fingerprint + "|" + policyFingerprint()
             if (views.isEmpty()) {
                 // Nothing could be priced this run (network down?) — serve the
                 // last review of exactly this book rather than a blank screen.
-                return getCache(REVIEW_KEY)?.let { cachedReview(it.json, snapshot.fingerprint) }
+                return getCache(REVIEW_KEY)?.let { cachedReview(it.json, reviewFp) }
             }
             val sectors = market.getSectors(views.map { it.position.symbol })
             val flow = getMoneyFlow()
@@ -228,19 +307,34 @@ class WealthRepository(
                 } catch (_: Exception) {
                     null
                 }
-            val review = PortfolioAdvisor(market, news)
+            val profile = settings?.let {
+                runCatching { it.investorProfile.first() }.getOrNull()
+            } ?: InvestorProfile.DEFAULT
+            val review = PortfolioAdvisor(market, news, profile)
                 .review(views, sectors, flow, strategy, pulse, unpriced)
             if (review != null) {
                 putCache(
                     REVIEW_KEY,
                     JSONObject().apply {
-                        put("fp", snapshot.fingerprint)
+                        put("fp", reviewFp)
                         put("review", PortfolioReview.toJson(review))
                     }.toString()
                 )
+                // Audit trail: every emitted verdict is recorded so its
+                // outcome can be reviewed later. One row per symbol per day.
+                review.verdicts.forEach { v ->
+                    adviceLog?.log(
+                        engine = "WEALTH",
+                        symbol = v.symbol,
+                        action = v.action.name,
+                        priceAt = v.price,
+                        score = v.techConfidence,
+                        detail = v.headline
+                    )
+                }
             }
             review
-                ?: getCache(REVIEW_KEY)?.let { cachedReview(it.json, snapshot.fingerprint) }
+                ?: getCache(REVIEW_KEY)?.let { cachedReview(it.json, reviewFp) }
         } catch (_: Exception) {
             null
         }

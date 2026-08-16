@@ -46,10 +46,26 @@ class BankFeedViewModel(app: Application) : AndroidViewModel(app) {
         listenerEnabled.value = BankNotificationListener.isEnabled(getApplication())
     }
 
-    fun importEvent(eventId: Long, symbol: String, side: TradeSide, shares: Double, price: Double) {
+    /**
+     * [price] is in [currency]; a non-USD import must carry the [fxRate] used
+     * so the stored USD price stays auditable.
+     */
+    fun importEvent(
+        eventId: Long,
+        symbol: String,
+        side: TradeSide,
+        shares: Double,
+        price: Double,
+        currency: String = "USD",
+        fxRate: Double = 1.0
+    ) {
         viewModelScope.launch {
             try {
-                container.bankFeed.importEvent(eventId, symbol.trim().uppercase(), side, shares, price)
+                val usdPrice = if (currency == "USD") price else price * fxRate
+                container.bankFeed.importEvent(
+                    eventId, symbol.trim().uppercase(), side, shares, usdPrice,
+                    currency = currency, fxRate = fxRate
+                )
             } catch (_: Exception) {
                 // repo never throws by contract; belt and braces
             }

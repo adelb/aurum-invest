@@ -65,6 +65,7 @@ import com.aurum.invest.analytics.GradeAction
 import com.aurum.invest.analytics.GradeActionKind
 import com.aurum.invest.analytics.PortfolioGrade
 import com.aurum.invest.analytics.PortfolioLens
+import com.aurum.invest.analytics.PortfolioPerformance
 import com.aurum.invest.analytics.PortfolioReview
 import com.aurum.invest.analytics.RebalanceMove
 import com.aurum.invest.analytics.SectorFlow
@@ -239,13 +240,13 @@ private fun WealthContent(
                     enabledText = "Extreme next-session alerts are on — checked after the close and pre-open.",
                     title = "Get the extreme setup alert",
                     message = "Allow notifications and Aurum will alert you when a stock clears " +
-                        "every score, analog-history, and 35-technique confidence gate."
+                        "every score, analog-history, and 35-technique agreement gate."
                 )
             }
             val ns = state.nextSession
             when {
                 ns == null && state.nextSessionLoading -> {
-                    item { LoadingCard("Scanning the whole market and replaying every analog day…") }
+                    item { LoadingCard("Scanning the screener universe and replaying every analog day…") }
                 }
                 ns == null -> {
                     item {
@@ -298,7 +299,7 @@ private fun WealthContent(
                     item { NextWeekFooterCard(preview) }
                 }
                 state.previewLoading -> {
-                    item { LoadingCard("Reading the whole market, flows, news, and the latest prints…") }
+                    item { LoadingCard("Reading the screener universe, flows, news, and the latest prints…") }
                 }
                 else -> {
                     item {
@@ -353,6 +354,25 @@ private fun WealthContent(
             }
         }
 
+        // 6b — performance & risk, reconstructed from the actual ledger (H2).
+        if (state.hasPositions) {
+            item {
+                WealthSectionHeader(
+                    title = "Performance & risk",
+                    expanded = open("perf"),
+                    trailing = state.performance?.let { Fmt.signedPct(it.twrPct) }
+                ) { toggle("perf") }
+            }
+            if (open("perf")) {
+                item {
+                    PerformanceCard(
+                        perf = state.performance,
+                        loading = state.performanceLoading
+                    )
+                }
+            }
+        }
+
         // 7 — sector gaps + the theme lens.
         if (state.strategy != null || state.strategyLoading) {
             item {
@@ -399,7 +419,10 @@ private fun WealthContent(
 
         // 8 — session extras, folded by default.
         val pulse = state.pulse
-        if (pulse != null && pulse.call != MarketCall.DEFENSIVE && pulse.bestYesterday.isNotEmpty()) {
+        if (pulse != null &&
+            (pulse.call == MarketCall.INVEST || pulse.call == MarketCall.SELECTIVE) &&
+            pulse.bestYesterday.isNotEmpty()
+        ) {
             item {
                 WealthSectionHeader(
                     title = "Last session's best performers",
@@ -528,6 +551,15 @@ private fun ReviewSummaryCard(review: PortfolioReview) {
                 text = review.marketNote,
                 style = MaterialTheme.typography.bodySmall,
                 color = AurumColors.textDim
+            )
+        }
+        if (review.policyNote.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = review.policyNote,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (review.policyNote.startsWith("Default")) AurumColors.gold
+                else AurumColors.textDim
             )
         }
         Spacer(Modifier.height(10.dp))
@@ -1270,7 +1302,7 @@ private fun NextSessionCard(
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "Next session ",
+                text = "Next session (ATR-projected) ",
                 style = MaterialTheme.typography.labelMedium,
                 color = AurumColors.textDim
             )
@@ -1565,6 +1597,7 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
                             MarketCall.INVEST -> AurumColors.gain
                             MarketCall.SELECTIVE -> AurumColors.gold
                             MarketCall.DEFENSIVE -> AurumColors.loss
+                            MarketCall.INCOMPLETE -> AurumColors.textDim
                         }
                     )
                     Text(
@@ -1596,6 +1629,7 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
                 MarketCall.INVEST -> PillTag(text = "Worth investing this week", color = AurumColors.gain)
                 MarketCall.SELECTIVE -> PillTag(text = "Selective entries only", color = AurumColors.gold)
                 MarketCall.DEFENSIVE -> PillTag(text = "Not this week", color = AurumColors.loss)
+                MarketCall.INCOMPLETE -> PillTag(text = "No call — data incomplete", color = AurumColors.textDim)
             }
         }
         Spacer(Modifier.height(10.dp))
@@ -2261,5 +2295,105 @@ private fun MoverRow(
             }
         }
         WealthNoteTag(note)
+    }
+}
+
+/**
+ * Performance & risk (H2): the account's actual equity path — time-weighted
+ * return vs SPY, volatility, drawdown, beta, Sharpe, and diversification that
+ * isn't (correlated pairs) — every window defined, nothing extrapolated.
+ */
+@Composable
+private fun PerformanceCard(perf: PortfolioPerformance?, loading: Boolean) {
+    AurumCard {
+        if (perf == null) {
+            Text(
+                text = if (loading) {
+                    "Replaying your ledger against a year of daily closes…"
+                } else {
+                    "Not enough measurable history yet — the engine needs at least " +
+                        "${com.aurum.invest.analytics.PortfolioPerformanceEngine.MIN_DAYS} " +
+                        "trading days with a priced book."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+            return@AurumCard
+        }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            StatTile(
+                label = "Your return (TWR)",
+                value = Fmt.signedPct(perf.twrPct),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.deltaColor(perf.twrPct)
+            )
+            StatTile(
+                label = "SPY same days",
+                value = Fmt.signedPct(perf.benchmarkTwrPct),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.deltaColor(perf.benchmarkTwrPct)
+            )
+            StatTile(
+                label = "Max drawdown",
+                value = Fmt.pct(perf.maxDrawdownPct),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.loss
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            StatTile(
+                label = "Volatility (ann.)",
+                value = Fmt.pct(perf.volatilityPct),
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                label = "Beta vs SPY",
+                value = perf.beta?.let { String.format(Locale.US, "%.2f", it) } ?: "—",
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                label = "Sharpe (rf 0)",
+                value = perf.sharpe?.let { String.format(Locale.US, "%.2f", it) } ?: "—",
+                modifier = Modifier.weight(1f)
+            )
+        }
+        if (perf.equityCurve.size >= 2) {
+            Spacer(Modifier.height(12.dp))
+            com.aurum.invest.ui.components.Sparkline(
+                data = perf.equityCurve.map { it.equity },
+                modifier = Modifier.fillMaxWidth().height(56.dp)
+            )
+            Spacer(Modifier.height(4.dp))
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = Fmt.dateShort(perf.windowStartTs),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = Fmt.dateShort(perf.windowEndTs),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        if (perf.correlatedPairs.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "Diversification that isn't: " + perf.correlatedPairs.joinToString("; ") {
+                    "${it.a}–${it.b} move together (r=${it.correlation})"
+                } + " — these fall together in a drawdown.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.gold
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = perf.methodNote,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
     }
 }

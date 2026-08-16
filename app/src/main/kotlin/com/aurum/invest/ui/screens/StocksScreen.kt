@@ -821,6 +821,13 @@ private fun WatchRowCard(
         ) {
             val advice = row.advice
             if (advice != null) {
+                // Watchlist advice is technical-only (no news read) — the
+                // detail screen's full view includes headline tone.
+                Text(
+                    text = "tech read",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
                 ActionBadge(action = advice.action)
                 val entry = advice.suggestedBuyPrice
                 if (entry != null) {

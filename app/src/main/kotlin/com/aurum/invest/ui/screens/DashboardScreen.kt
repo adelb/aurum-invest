@@ -67,6 +67,7 @@ import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.PortfolioSummary
+import com.aurum.invest.data.repo.CashState
 import com.aurum.invest.data.repo.TargetsRepository
 import com.aurum.invest.ui.components.ActionBadge
 import com.aurum.invest.ui.components.AurumCard
@@ -94,6 +95,17 @@ fun DashboardScreen(
     val state by vm.state.collectAsStateWithLifecycle()
     var confirmRemove by remember { mutableStateOf<String?>(null) }
     var targetFor by remember { mutableStateOf<HoldingRow?>(null) }
+    var showCashDialog by remember { mutableStateOf(false) }
+
+    if (showCashDialog) {
+        CashEventDialog(
+            onDismiss = { showCashDialog = false },
+            onSave = { type, amount, symbol, note ->
+                vm.addCashEvent(type, amount, symbol, note)
+                showCashDialog = false
+            }
+        )
+    }
 
     targetFor?.let { row ->
         SellTargetDialog(
@@ -159,12 +171,27 @@ fun DashboardScreen(
 
                 item {
                     Spacer(Modifier.height(20.dp))
-                    HeroSummary(summary = state.summary)
+                    HeroSummary(
+                        summary = state.summary,
+                        cash = state.cash,
+                        pricesAsOf = state.pricesAsOf
+                    )
                 }
 
                 item {
                     Spacer(Modifier.height(20.dp))
                     SummaryTiles(summary = state.summary)
+                    TextButton(onClick = { showCashDialog = true }) {
+                        Text(
+                            text = if (state.cash.tracked) {
+                                "Record cash · deposit, dividend, fee…"
+                            } else {
+                                "Track brokerage cash · record a deposit to start"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = AurumColors.gold
+                        )
+                    }
                 }
 
                 if (state.holdings.size >= 2) {
@@ -453,11 +480,18 @@ private fun HeaderRow(
 }
 
 @Composable
-private fun HeroSummary(summary: PortfolioSummary?) {
+private fun HeroSummary(
+    summary: PortfolioSummary?,
+    cash: CashState = CashState.UNTRACKED,
+    pricesAsOf: Long = 0L
+) {
     val s = summary ?: PortfolioSummary(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     Column(modifier = Modifier.fillMaxWidth().animateContentSize()) {
         Text(
-            text = "Total value",
+            // "Holdings value", not "Total value": brokerage cash is a
+            // separate line (or not tracked at all) — the sum of open
+            // positions must never masquerade as account equity.
+            text = "Holdings value",
             style = MaterialTheme.typography.labelMedium,
             color = AurumColors.textDim
         )
@@ -467,6 +501,31 @@ private fun HeroSummary(summary: PortfolioSummary?) {
             style = MaterialTheme.typography.displayLarge,
             color = AurumColors.text
         )
+        if (s.unpricedCount > 0) {
+            Text(
+                text = "${s.unpricedCount} holding${if (s.unpricedCount == 1) "" else "s"} " +
+                    "without a live price — ${Fmt.money(s.unpricedCost)} counted at cost, " +
+                    "not market value.",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.gold
+            )
+        }
+        if (cash.tracked) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = "Cash ${Fmt.money(cash.balance)} · Total equity " +
+                    Fmt.money(cash.balance + s.marketValue),
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
+        if (pricesAsOf > 0L && System.currentTimeMillis() - pricesAsOf > 15 * 60_000L) {
+            Text(
+                text = "Prices as of ${Fmt.timeShort(pricesAsOf)} (${Fmt.timeAgo(pricesAsOf)})",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.gold
+            )
+        }
         Spacer(Modifier.height(4.dp))
         // The headline delta: how the holdings stand AGAINST THE MONEY PUT IN
         // (market value vs remaining cost basis), not just today's move.
@@ -566,15 +625,30 @@ private fun HoldingCard(
                 Spacer(Modifier.width(14.dp))
             }
             Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = Fmt.money(price),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = AurumColors.text
-                )
-                if (quote != null) {
-                    DeltaPct(
-                        value = quote.dayChangePct,
-                        style = MaterialTheme.typography.bodySmall
+                if (view.priced) {
+                    Text(
+                        text = Fmt.money(price),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AurumColors.text
+                    )
+                    if (quote != null) {
+                        DeltaPct(
+                            value = quote.dayChangePct,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                } else {
+                    // No live quote: showing avg cost as "the price" with a
+                    // flat 0% would look like verified data. Say what it is.
+                    Text(
+                        text = "no price",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AurumColors.gold
+                    )
+                    Text(
+                        text = "at cost ${Fmt.money(position.avgCost)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
                     )
                 }
             }
@@ -594,7 +668,16 @@ private fun HoldingCard(
             )
             DeltaPct(value = view.unrealizedPlPct, style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.weight(1f))
-            row.advice?.let { ActionBadge(action = it.action) }
+            // Dashboard advice is computed WITHOUT news tone (the detail
+            // screen's full read includes it) — the label keeps that honest.
+            row.advice?.let {
+                Text(
+                    text = "tech read ",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+                ActionBadge(action = it.action)
+            }
             Spacer(Modifier.width(6.dp))
             IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
                 Icon(
@@ -696,6 +779,7 @@ private fun SellTargetFlag(row: HoldingRow, onClick: () -> Unit) {
                         append(Fmt.pct(distance))
                         append(" to go")
                     }
+                    append(" · before fees & tax")
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = AurumColors.textDim
@@ -778,7 +862,7 @@ private fun SellTargetDialog(
                             append(Fmt.signedMoney(shares * avgCost * pct / 100.0))
                             append(" on ")
                             append(Fmt.qty(shares))
-                            append(" shares")
+                            append(" shares · before selling fees and tax")
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = AurumColors.textDim
@@ -822,6 +906,99 @@ private fun SellTargetDialog(
                     Text("Cancel", color = AurumColors.textDim)
                 }
             }
+        }
+    )
+}
+
+/**
+ * Records a brokerage-cash event. Cash tracking is opt-in truth: the first
+ * DEPOSIT starts it, and until then the dashboard never invents a balance.
+ */
+@Composable
+private fun CashEventDialog(
+    onDismiss: () -> Unit,
+    onSave: (type: String, amount: Double, symbol: String, note: String) -> Unit
+) {
+    var type by remember { mutableStateOf(com.aurum.invest.data.db.CashType.DEPOSIT) }
+    var amountText by remember { mutableStateOf("") }
+    var symbol by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
+    val amount = amountText.replace(",", "").trim().toDoubleOrNull()
+    val valid = amount != null && amount > 0.0
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = AurumColors.surface,
+        titleContentColor = AurumColors.text,
+        textContentColor = AurumColors.textDim,
+        title = { Text("Record cash event") },
+        text = {
+            Column {
+                Text(
+                    text = "Deposits and withdrawals track your brokerage cash; dividends, " +
+                        "interest, and fees keep the account's P/L complete. Amounts are USD.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    com.aurum.invest.data.db.CashType.ALL.forEach { t ->
+                        val selected = t == type
+                        Text(
+                            text = t.lowercase().replaceFirstChar { it.uppercase() },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (selected) AurumColors.bg else AurumColors.textDim,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(if (selected) AurumColors.gold else AurumColors.surfaceHigh)
+                                .clickable { type = t }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = amountText,
+                    onValueChange = { amountText = it },
+                    label = { Text("Amount ($)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (type == com.aurum.invest.data.db.CashType.DIVIDEND) {
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = symbol,
+                        onValueChange = { input -> symbol = input.uppercase().filter { it.isLetter() }.take(5) },
+                        label = { Text("Paying symbol (optional)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it.take(100) },
+                    label = { Text("Note (optional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { if (amount != null) onSave(type, amount, symbol, note) },
+                enabled = valid,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AurumColors.gold,
+                    contentColor = AurumColors.bg,
+                    disabledContainerColor = AurumColors.surfaceHigh,
+                    disabledContentColor = AurumColors.textDim
+                )
+            ) { Text("Record") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel", color = AurumColors.textDim) }
         }
     )
 }

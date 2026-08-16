@@ -19,9 +19,12 @@ import kotlin.math.roundToInt
  * graded — saying "no signal" is not a prediction.
  *
  * A technique earns TRUSTED on a stock only with a real track record there:
- * at least [MIN_SIGNALS] directional calls and a hit rate of
- * [TRUST_HIT_RATE]% or better. Trusted techniques get the gold border on the
- * analysis screen and extra vote weight in the 5-day outlook.
+ * at least [MIN_INDEPENDENT_SIGNALS] calls on the NON-OVERLAPPING grid, a
+ * hit rate of [TRUST_HIT_RATE]%+ there, AND an edge of
+ * [TRUST_EDGE_OVER_BASE]+ points over the stock's own unconditional base
+ * rate — a rule that merely rode a rising tape is not trusted for it.
+ * Trusted techniques get the gold border on the analysis screen and extra
+ * vote weight in the 5-day outlook.
  *
  * [TechniqueEvaluation.ranked] orders the whole 35-technique board by that
  * measured record, so the app can surface the [TOP_TECHNIQUES] that have
@@ -34,7 +37,7 @@ import kotlin.math.roundToInt
 data class TechniqueScore(
     val key: String,
     val name: String,
-    /** Directional (non-neutral) verdicts that could be graded. */
+    /** Directional (non-neutral) verdicts that could be graded (daily, overlapping windows). */
     val signals: Int,
     /** Calls where the stock moved >= deadband in the called direction. */
     val hits: Int,
@@ -42,8 +45,28 @@ data class TechniqueScore(
     val hitRate: Int,
     /** Average signed 5-day move in the called direction, percent. */
     val avgMovePct: Double,
-    /** True when signals >= MIN_SIGNALS and hitRate >= TRUST_HIT_RATE. */
-    val trusted: Boolean
+    /** True when the INDEPENDENT record clears every trust gate (see below). */
+    val trusted: Boolean,
+    /**
+     * Directional calls on the non-overlapping (every-5th-session) grid.
+     * Daily replays share most of their forward window with their neighbors,
+     * so [signals] overstates the effective sample — trust and intervals are
+     * judged on this independent count instead.
+     */
+    val independentSignals: Int = 0,
+    val independentHits: Int = 0,
+    /** independentHits / independentSignals as a percent. */
+    val independentHitRate: Int = 0,
+    /**
+     * The stock's own unconditional hit rate over the same windows, weighted
+     * by this technique's bull/bear call mix — the drift an always-bullish
+     * rule would have scored without any skill. A technique only shows edge
+     * when it beats this, not 50%.
+     */
+    val baseRatePct: Int = 0,
+    /** Wilson 95% interval on the independent hit rate, percent. */
+    val ciLowPct: Int = 0,
+    val ciHighPct: Int = 0
 )
 
 data class TechniqueEvaluation(
@@ -53,7 +76,10 @@ data class TechniqueEvaluation(
     /** Forward window each call was graded against, in trading days. */
     val horizonDays: Int,
     /** One score per technique, in board order. */
-    val scores: List<TechniqueScore>
+    val scores: List<TechniqueScore>,
+    /** First and last replayed session (epoch millis) — the record's date range. */
+    val fromTs: Long = 0L,
+    val toTs: Long = 0L
 ) {
     val trustedKeys: Set<String> get() = scores.filter { it.trusted }.map { it.key }.toSet()
 
@@ -101,19 +127,44 @@ object TechniqueEvaluator {
     /** Minimum move (percent) in the called direction to count as a hit. */
     const val MOVE_DEADBAND_PCT = 0.5
 
-    /** Directional calls needed before a technique can be trusted. */
-    const val MIN_SIGNALS = 8
+    /**
+     * INDEPENDENT (non-overlapping-window) calls needed before a technique
+     * can be trusted. Overlapping daily replays are not independent evidence.
+     */
+    const val MIN_INDEPENDENT_SIGNALS = 10
 
-    /** Hit-rate bar (percent) for the trusted badge. */
+    /** Hit-rate bar (percent) for the trusted badge, on the independent record. */
     const val TRUST_HIT_RATE = 60
 
-    /** Calls needed before a hit rate is allowed to weight the outlook at all. */
-    const val MIN_WEIGHT_SIGNALS = 5
+    /** How far (points) the independent hit rate must beat the stock's own base rate. */
+    const val TRUST_EDGE_OVER_BASE = 5
+
+    /** Overlapping calls needed before a hit rate is allowed to weight the outlook at all. */
+    const val MIN_WEIGHT_SIGNALS = 10
 
     private class Tally(val name: String) {
         var signals = 0
         var hits = 0
         var moveSum = 0.0
+        // Independent (stride-5) grid.
+        var iSignals = 0
+        var iHits = 0
+        var iBull = 0
+        var iBear = 0
+    }
+
+    /** Wilson 95% score interval for [hits] of [n]; (0,100) when n == 0. */
+    fun wilson95(hits: Int, n: Int): Pair<Double, Double> {
+        if (n <= 0) return 0.0 to 100.0
+        val z = 1.96
+        val p = hits.toDouble() / n
+        val z2 = z * z
+        val denom = 1.0 + z2 / n
+        val center = p + z2 / (2 * n)
+        val margin = z * kotlin.math.sqrt(p * (1 - p) / n + z2 / (4.0 * n * n))
+        val low = ((center - margin) / denom * 100.0).coerceIn(0.0, 100.0)
+        val high = ((center + margin) / denom * 100.0).coerceIn(0.0, 100.0)
+        return low to high
     }
 
     /**
@@ -132,6 +183,13 @@ object TechniqueEvaluator {
 
         val tallies = LinkedHashMap<String, Tally>()
         var days = 0
+        // The stock's own unconditional record on the independent grid: how
+        // often ANY 5-day window moved past the deadband up or down. This is
+        // the drift a skill-less always-bullish (or always-bearish) rule
+        // would collect — the honest benchmark for every technique.
+        var baseWindows = 0
+        var baseUp = 0
+        var baseDown = 0
         for (t in firstEval..lastEval) {
             val base = candles[t].close
             val forward = candles[t + HORIZON_DAYS].close
@@ -146,6 +204,12 @@ object TechniqueEvaluator {
                 continue
             }
             val movePct = (forward - base) / base * 100.0
+            val independent = (t - firstEval) % HORIZON_DAYS == 0
+            if (independent) {
+                baseWindows++
+                if (movePct >= MOVE_DEADBAND_PCT) baseUp++
+                if (movePct <= -MOVE_DEADBAND_PCT) baseDown++
+            }
             days++
             for (r in analysis.results) {
                 val tally = tallies.getOrPut(r.key) { Tally(r.name) }
@@ -154,11 +218,19 @@ object TechniqueEvaluator {
                         tally.signals++
                         tally.moveSum += movePct
                         if (movePct >= MOVE_DEADBAND_PCT) tally.hits++
+                        if (independent) {
+                            tally.iSignals++; tally.iBull++
+                            if (movePct >= MOVE_DEADBAND_PCT) tally.iHits++
+                        }
                     }
                     TechniqueVerdict.BEARISH -> {
                         tally.signals++
                         tally.moveSum -= movePct
                         if (movePct <= -MOVE_DEADBAND_PCT) tally.hits++
+                        if (independent) {
+                            tally.iSignals++; tally.iBear++
+                            if (movePct <= -MOVE_DEADBAND_PCT) tally.iHits++
+                        }
                     }
                     TechniqueVerdict.NEUTRAL -> Unit
                 }
@@ -166,8 +238,18 @@ object TechniqueEvaluator {
         }
         if (days != LOOKBACK_DAYS || tallies.size != Techniques.TECHNIQUE_COUNT) return null
 
+        val baseUpPct = if (baseWindows > 0) baseUp * 100.0 / baseWindows else 0.0
+        val baseDownPct = if (baseWindows > 0) baseDown * 100.0 / baseWindows else 0.0
+
         val scores = tallies.map { (key, t) ->
             val rate = if (t.signals > 0) (t.hits * 100.0 / t.signals).roundToInt() else 0
+            val iRate = if (t.iSignals > 0) (t.iHits * 100.0 / t.iSignals).roundToInt() else 0
+            // The base rate this technique must beat, weighted by its own
+            // bull/bear call mix on the independent grid.
+            val baseRate = if (t.iSignals > 0) {
+                ((t.iBull * baseUpPct + t.iBear * baseDownPct) / t.iSignals).roundToInt()
+            } else 0
+            val (ciLow, ciHigh) = wilson95(t.iHits, t.iSignals)
             TechniqueScore(
                 key = key,
                 name = t.name,
@@ -175,16 +257,34 @@ object TechniqueEvaluator {
                 hits = t.hits,
                 hitRate = rate,
                 avgMovePct = if (t.signals > 0) t.moveSum / t.signals else 0.0,
-                trusted = t.signals >= MIN_SIGNALS && rate >= TRUST_HIT_RATE
+                trusted = isTrustworthy(t.iSignals, iRate, baseRate),
+                independentSignals = t.iSignals,
+                independentHits = t.iHits,
+                independentHitRate = iRate,
+                baseRatePct = baseRate,
+                ciLowPct = ciLow.roundToInt(),
+                ciHighPct = ciHigh.roundToInt()
             )
         }
         return TechniqueEvaluation(
             symbol = symbol,
             daysEvaluated = days,
             horizonDays = HORIZON_DAYS,
-            scores = scores
+            scores = scores,
+            fromTs = candles[firstEval].ts,
+            toTs = candles[lastEval].ts
         ).takeIf { isComplete(it, symbol) }
     }
+
+    /**
+     * The trust gate: enough INDEPENDENT calls, a hit rate over the bar, and
+     * a real edge over the stock's own drift. A rule that merely rode a
+     * rising tape scores its base rate and is not trusted for it.
+     */
+    fun isTrustworthy(independentSignals: Int, independentHitRate: Int, baseRatePct: Int): Boolean =
+        independentSignals >= MIN_INDEPENDENT_SIGNALS &&
+            independentHitRate >= TRUST_HIT_RATE &&
+            independentHitRate >= baseRatePct + TRUST_EDGE_OVER_BASE
 
     fun isComplete(evaluation: TechniqueEvaluation, symbol: String = evaluation.symbol): Boolean =
         evaluation.symbol.isNotBlank() &&
@@ -198,9 +298,11 @@ object TechniqueEvaluator {
                     it.signals in 0..LOOKBACK_DAYS &&
                     it.hits in 0..it.signals &&
                     it.hitRate in 0..100 &&
+                    it.independentSignals in 0..it.signals &&
+                    it.independentHits in 0..it.independentSignals &&
                     it.avgMovePct.isFinite() &&
                     it.trusted ==
-                    (it.signals >= MIN_SIGNALS && it.hitRate >= TRUST_HIT_RATE)
+                    isTrustworthy(it.independentSignals, it.independentHitRate, it.baseRatePct)
             }
 
     // ---- JSON (for the on-device cache) ------------------------------------
@@ -210,6 +312,8 @@ object TechniqueEvaluator {
         root.put("symbol", e.symbol)
         root.put("days", e.daysEvaluated)
         root.put("horizon", e.horizonDays)
+        root.put("fromTs", e.fromTs)
+        root.put("toTs", e.toTs)
         val arr = JSONArray()
         for (s in e.scores) {
             arr.put(
@@ -221,6 +325,12 @@ object TechniqueEvaluator {
                     put("hitRate", s.hitRate)
                     put("avgMove", s.avgMovePct)
                     put("trusted", s.trusted)
+                    put("iSignals", s.independentSignals)
+                    put("iHits", s.independentHits)
+                    put("iHitRate", s.independentHitRate)
+                    put("baseRate", s.baseRatePct)
+                    put("ciLow", s.ciLowPct)
+                    put("ciHigh", s.ciHighPct)
                 }
             )
         }
@@ -242,7 +352,13 @@ object TechniqueEvaluator {
                     hits = o.optInt("hits", 0),
                     hitRate = o.optInt("hitRate", 0),
                     avgMovePct = o.optDouble("avgMove", 0.0),
-                    trusted = o.optBoolean("trusted", false)
+                    trusted = o.optBoolean("trusted", false),
+                    independentSignals = o.optInt("iSignals", 0),
+                    independentHits = o.optInt("iHits", 0),
+                    independentHitRate = o.optInt("iHitRate", 0),
+                    baseRatePct = o.optInt("baseRate", 0),
+                    ciLowPct = o.optInt("ciLow", 0),
+                    ciHighPct = o.optInt("ciHigh", 0)
                 )
             )
         }
@@ -250,7 +366,9 @@ object TechniqueEvaluator {
             symbol = root.getString("symbol"),
             daysEvaluated = root.optInt("days", 0),
             horizonDays = root.optInt("horizon", HORIZON_DAYS),
-            scores = scores
+            scores = scores,
+            fromTs = root.optLong("fromTs", 0L),
+            toTs = root.optLong("toTs", 0L)
         ).takeIf { isComplete(it) }
     } catch (_: Exception) {
         null

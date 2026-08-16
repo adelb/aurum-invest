@@ -44,6 +44,9 @@ object Fmt {
 
     fun qty(v: Double): String = qtyFmt.format(v)
 
+    /** Plain 2-decimal number, no currency symbol — for non-USD amounts. */
+    fun num2(v: Double): String = money2.format(v)
+
     /** "2.06" not "2.0600" — for pre-filling editable number fields. */
     fun trimNumber(v: Double): String =
         java.math.BigDecimal.valueOf(v).stripTrailingZeros().toPlainString()

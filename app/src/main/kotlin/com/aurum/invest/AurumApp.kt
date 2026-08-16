@@ -12,10 +12,16 @@ import com.aurum.invest.data.repo.SettingsRepository
 import com.aurum.invest.data.repo.TargetsRepository
 import com.aurum.invest.data.repo.WatchRepository
 import com.aurum.invest.data.repo.WealthRepository
+import com.aurum.invest.data.repo.AdviceLogRepository
+import com.aurum.invest.data.repo.AlertsRepository
+import com.aurum.invest.data.repo.CashRepository
+import com.aurum.invest.data.repo.FundamentalsRepository
 import com.aurum.invest.work.Schedules
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 class AurumApp : Application() {
 
@@ -26,6 +32,14 @@ class AurumApp : Application() {
         super.onCreate()
         container = AppContainer(this)
         Schedules.ensure(this)
+        // Retention: raw bank-notification text is sensitive; captures older
+        // than the configured window are deleted on every launch.
+        container.appScope.launch {
+            runCatching {
+                val days = container.settings.bankRetentionDays.first()
+                if (days > 0) container.bankFeed.purgeOlderThan(days)
+            }
+        }
     }
 }
 
@@ -42,6 +56,10 @@ class AppContainer(app: Application) {
     val news = NewsRepository(db.cacheDao())
     val picks = PicksRepository(db.picksDao(), market, db.cacheDao(), news)
     val bankFeed = BankFeedRepository(db.bankEventDao(), portfolio)
-    val wealth = WealthRepository(db.cacheDao(), market, news, portfolio)
+    val adviceLog = AdviceLogRepository(db.adviceLogDao(), BuildConfig.VERSION_NAME)
+    val cash = CashRepository(db.cashEventDao(), db.transactionDao())
+    val wealth = WealthRepository(db.cacheDao(), market, news, portfolio, settings, adviceLog, cash)
     val targets = TargetsRepository(db.cacheDao())
+    val alerts = AlertsRepository(db.priceAlertDao())
+    val fundamentals = FundamentalsRepository(db.cacheDao())
 }

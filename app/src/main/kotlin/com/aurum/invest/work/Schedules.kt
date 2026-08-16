@@ -20,6 +20,7 @@ object Schedules {
     private const val WEEKLY_PICKS_WORK_NAME = "aurum-weekly-picks"
     private const val U_PATTERN_WORK_NAME = "aurum-upattern"
     private const val NEXT_SESSION_WORK_NAME = "aurum-nextsession"
+    private const val ALERTS_WORK_NAME = "aurum-price-alerts"
 
     fun ensure(context: Context) {
         try {
@@ -67,6 +68,16 @@ object Schedules {
                 NEXT_SESSION_WORK_NAME,
                 ExistingPeriodicWorkPolicy.KEEP,
                 nextSession
+            )
+
+            // User price alerts: cheap (one batched quote call), 15-min floor.
+            val alerts = PeriodicWorkRequestBuilder<AlertsWorker>(15, TimeUnit.MINUTES)
+                .setConstraints(connected)
+                .build()
+            workManager.enqueueUniquePeriodicWork(
+                ALERTS_WORK_NAME,
+                ExistingPeriodicWorkPolicy.KEEP,
+                alerts
             )
         } catch (_: Exception) {
             // Scheduling must never crash app startup; workers are best-effort.
