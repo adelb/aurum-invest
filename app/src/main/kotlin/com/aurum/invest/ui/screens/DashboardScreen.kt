@@ -462,7 +462,9 @@ private fun WalletStat(
             overflow = TextOverflow.Ellipsis
         )
         Text(
-            text = if (signed) Fmt.signedMoney(value) else Fmt.money(value),
+            // Exact cents: these are balances, not list entries — rounding
+            // $25,477.30 to "$25,477" hides money the user actually has.
+            text = if (signed) Fmt.signedMoneyExact(value) else Fmt.moneyExact(value),
             style = MaterialTheme.typography.bodyMedium,
             color = if (signed) AurumColors.deltaColor(value) else valueColor,
             maxLines = 1,
@@ -609,7 +611,7 @@ private fun HeroSummary(
             )
             if (wallet.shortfall) {
                 Text(
-                    text = "Your ledger has ${Fmt.money(-wallet.liquidity)} more deployed than " +
+                    text = "Your ledger has ${Fmt.moneyExact(-wallet.liquidity)} more deployed than " +
                         "the stated wallet covers — raise the total if you've added money.",
                     style = MaterialTheme.typography.labelSmall,
                     color = AurumColors.gold
@@ -663,23 +665,31 @@ private fun HeroSummary(
 private fun SummaryTiles(summary: PortfolioSummary?) {
     val s = summary ?: PortfolioSummary(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     AurumCard {
-        Row(modifier = Modifier.fillMaxWidth()) {
+        // Invested and Realized also appear in the wallet block above; both
+        // places must print the same figure to the cent, on one line each.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
             StatTile(
                 label = "Invested",
-                value = Fmt.money(s.investedCost),
-                modifier = Modifier.weight(1f)
+                value = Fmt.moneyExact(s.investedCost),
+                modifier = Modifier.weight(1f),
+                maxLines = 1
             )
             StatTile(
                 label = "Unrealized P/L",
-                value = Fmt.signedMoney(s.unrealizedPl),
+                value = Fmt.signedMoneyExact(s.unrealizedPl),
                 modifier = Modifier.weight(1f),
-                valueColor = AurumColors.deltaColor(s.unrealizedPl)
+                valueColor = AurumColors.deltaColor(s.unrealizedPl),
+                maxLines = 1
             )
             StatTile(
                 label = "Realized P/L",
-                value = Fmt.signedMoney(s.realizedPl),
+                value = Fmt.signedMoneyExact(s.realizedPl),
                 modifier = Modifier.weight(1f),
-                valueColor = AurumColors.deltaColor(s.realizedPl)
+                valueColor = AurumColors.deltaColor(s.realizedPl),
+                maxLines = 1
             )
         }
     }

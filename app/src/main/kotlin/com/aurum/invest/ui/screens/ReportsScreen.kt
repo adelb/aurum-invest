@@ -198,22 +198,30 @@ fun ReportsScreen(onBack: () -> Unit, onOpenAdviceHistory: () -> Unit = {}) {
 private fun WalletSummaryCard(state: ReportsState) {
     AurumCard(modifier = Modifier.fillMaxWidth()) {
         if (state.walletConfigured) {
-            Row(modifier = Modifier.fillMaxWidth()) {
+            // Exact cents, and one line each: a wrapped money value reads as
+            // broken and knocks the three tiles off a shared baseline.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 StatTile(
                     label = "Wallet",
-                    value = Fmt.money(state.walletTotal),
-                    modifier = Modifier.weight(1f)
+                    value = Fmt.moneyExact(state.walletTotal),
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1
                 )
                 StatTile(
                     label = "Invested",
-                    value = Fmt.money(state.invested),
-                    modifier = Modifier.weight(1f)
+                    value = Fmt.moneyExact(state.invested),
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1
                 )
                 StatTile(
                     label = "Liquidity",
-                    value = Fmt.money(state.liquidity),
+                    value = Fmt.moneyExact(state.liquidity),
                     modifier = Modifier.weight(1f),
-                    valueColor = if (state.liquidity < -0.005) AurumColors.loss else AurumColors.text
+                    valueColor = if (state.liquidity < -0.005) AurumColors.loss else AurumColors.text,
+                    maxLines = 1
                 )
             }
             Spacer(Modifier.height(6.dp))
@@ -223,7 +231,7 @@ private fun WalletSummaryCard(state: ReportsState) {
             Text(
                 text = "Liquidity = wallet − invested " +
                     (if (state.realizedPl < 0) "− " else "+ ") +
-                    Fmt.money(kotlin.math.abs(state.realizedPl)) +
+                    Fmt.moneyExact(kotlin.math.abs(state.realizedPl)) +
                     " realized P/L booked by your sells.",
                 style = MaterialTheme.typography.labelSmall,
                 color = AurumColors.textDim

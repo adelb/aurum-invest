@@ -25,6 +25,20 @@ object Fmt {
         return "$sign$symbol${f.format(abs(v))}"
     }
 
+    /**
+     * Always two decimals, however large the amount. [money] drops the cents
+     * above $10,000 to keep dense lists narrow, which is wrong for the wallet
+     * figures — a balance that reads "$25,477" hides money the user has.
+     */
+    fun moneyExact(v: Double, symbol: String = "$"): String =
+        if (v < 0) "-$symbol${money2.format(abs(v))}" else "$symbol${money2.format(v)}"
+
+    /** [moneyExact] with an explicit +/- sign — for P/L figures. */
+    fun signedMoneyExact(v: Double, symbol: String = "$"): String {
+        val sign = if (v >= 0) "+" else "-"
+        return "$sign$symbol${money2.format(abs(v))}"
+    }
+
     fun pct(v: Double): String = "${pct2.format(v)}%"
 
     fun signedPct(v: Double): String {
