@@ -407,7 +407,7 @@ private fun SectorAllocation(book: BookContext) {
         book.slices.forEachIndexed { i, slice ->
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(vertical = 3.dp)
+                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)
             ) {
                 Box(
                     modifier = Modifier
@@ -417,23 +417,39 @@ private fun SectorAllocation(book: BookContext) {
                             AurumColors.allocation[i % AurumColors.allocation.size]
                         )
                 )
+                Spacer(Modifier.width(6.dp))
                 Text(
-                    text = "  ${slice.sector}",
+                    text = slice.sector,
                     style = MaterialTheme.typography.labelMedium,
                     color = AurumColors.text,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
-                Spacer(Modifier.weight(1f))
+                Spacer(Modifier.width(8.dp))
+                // The symbol list is the only part allowed to lose characters:
+                // it is unweighted and capped, so it is measured before the
+                // sector name and shrinks first. Three names plus "+N" keeps a
+                // crowded sector inside the cap instead of ellipsising.
                 Text(
-                    text = slice.symbols.take(4).joinToString(", ") +
-                        (if (slice.symbols.size > 4) " +${slice.symbols.size - 4}" else "") +
-                        "  ·  " + Fmt.pct(slice.weightPct),
+                    text = slice.symbols.take(3).joinToString(", ") +
+                        (if (slice.symbols.size > 3) " +${slice.symbols.size - 3}" else ""),
                     style = MaterialTheme.typography.labelSmall,
                     color = AurumColors.textDim,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = 180.dp)
+                    modifier = Modifier.widthIn(max = 112.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                // The weight is the point of the row, so it is its own Text
+                // with no ellipsis and no wrapping — it gets its natural width
+                // first and can never be cut to "60.5…" by a crowded sector.
+                Text(
+                    text = Fmt.pct(slice.weightPct),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    softWrap = false
                 )
             }
         }
