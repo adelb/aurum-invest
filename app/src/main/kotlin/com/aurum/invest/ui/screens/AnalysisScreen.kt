@@ -402,19 +402,28 @@ private fun RangeBar(low: Double, high: Double, price: Double) {
             Text(
                 text = Fmt.money(low),
                 style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.loss
+                color = AurumColors.loss,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
             )
-            Spacer(Modifier.weight(1f))
             Text(
                 text = Fmt.money(price),
                 style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.gold
+                color = AurumColors.gold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.weight(1f)
             )
-            Spacer(Modifier.weight(1f))
             Text(
                 text = Fmt.money(high),
                 style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.gain
+                color = AurumColors.gain,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                modifier = Modifier.weight(1f)
             )
         }
     }
