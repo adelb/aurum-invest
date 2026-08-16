@@ -202,6 +202,72 @@ class WalletLiquidityTest {
     }
 
     @Test
+    fun `liquidity is invariant to every price the market can print`() {
+        // The hard rule: unrealized P/L is NOT cash. Whatever the tape does to
+        // an open position, the money available to spend cannot move until
+        // something is actually sold.
+        val ledger = listOf(
+            tx("AAPL", TxSide.BUY, 10.0, 200.0),
+            tx("AAPL", TxSide.SELL, 4.0, 250.0),
+            tx("MSFT", TxSide.BUY, 5.0, 400.0)
+        )
+        // 20,000 − (6×200 + 5×400) + 4×50 = 17,000, at any price.
+        val expected = 17_000.0
+
+        for (price in listOf(0.01, 1.0, 50.0, 199.99, 200.0, 250.0, 1_000.0, 100_000.0)) {
+            val w = wallet(20_000.0, ledger, mapOf("AAPL" to price, "MSFT" to price))
+            assertEquals("liquidity moved at price $price", expected, w.liquidity, 1e-9)
+            assertEquals("invested moved at price $price", 3_200.0, w.invested, 1e-9)
+            assertEquals("realized moved at price $price", 200.0, w.realizedPl, 1e-9)
+        }
+    }
+
+    @Test
+    fun `a holding with no live quote still cannot move liquidity`() {
+        // No quote -> the position is carried at COST and unrealized is 0. The
+        // cash figure must be identical to the fully-priced read.
+        val ledger = listOf(
+            tx("AAPL", TxSide.BUY, 10.0, 200.0),
+            tx("AAPL", TxSide.SELL, 4.0, 250.0)
+        )
+        val priced = wallet(20_000.0, ledger, mapOf("AAPL" to 320.0))
+        val unpriced = wallet(20_000.0, ledger, prices = emptyMap())
+
+        assertEquals(priced.liquidity, unpriced.liquidity, 1e-9)
+        assertEquals(19_000.0, unpriced.liquidity, 1e-9)   // 20,000 − 1,200 + 200
+    }
+
+    @Test
+    fun `a deep unrealized loss does not drain liquidity`() {
+        val ledger = listOf(tx("AAPL", TxSide.BUY, 10.0, 200.0))
+        val flat = wallet(10_000.0, ledger, mapOf("AAPL" to 200.0))
+        val crashed = wallet(10_000.0, ledger, mapOf("AAPL" to 20.0))
+
+        assertEquals(-1_800.0, crashed.unrealizedPl, 1e-9)  // the loss is real
+        assertEquals(flat.liquidity, crashed.liquidity, 1e-9)
+        assertEquals(8_000.0, crashed.liquidity, 1e-9)      // but it is not cash
+        assertEquals(0.0, crashed.realizedPl, 1e-9)         // nothing was sold
+    }
+
+    @Test
+    fun `only the sell converts a gain into spendable cash`() {
+        val bought = listOf(tx("AAPL", TxSide.BUY, 10.0, 200.0))
+        val held = wallet(10_000.0, bought, mapOf("AAPL" to 260.0))
+        val sold = wallet(
+            10_000.0,
+            bought + tx("AAPL", TxSide.SELL, 10.0, 260.0),
+            prices = emptyMap()
+        )
+        // Same $600 gain: on paper first, in the wallet only after the sell.
+        assertEquals(600.0, held.unrealizedPl, 1e-9)
+        assertEquals(8_000.0, held.liquidity, 1e-9)
+        assertEquals(600.0, sold.realizedPl, 1e-9)
+        assertEquals(10_600.0, sold.liquidity, 1e-9)
+        // Net worth is the same either way — only its cash/holdings split moved.
+        assertEquals(held.netWorth, sold.netWorth, 1e-9)
+    }
+
+    @Test
     fun `a wallet top-up raises liquidity and leaves P-L alone`() {
         val ledger = listOf(
             tx("AAPL", TxSide.BUY, 10.0, 200.0),
