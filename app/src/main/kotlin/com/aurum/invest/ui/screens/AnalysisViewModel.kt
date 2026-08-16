@@ -108,20 +108,32 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
             // and the investor's risk policy instead of a fixed $3,000.
             val profile = runCatching { container.settings.investorProfile.first() }
                 .getOrDefault(InvestorProfile.DEFAULT)
+            // Holdings at market: 0.0 when nothing is open (a fact), null when
+            // a holding could not be priced (unknown — cost basis is not equity).
             val equity = runCatching {
                 val open = container.portfolio.positionsNow()
                     .filter { PortfolioRepository.isOpen(it) }
                 if (open.isEmpty()) {
-                    null
+                    0.0
                 } else {
                     val quotes = container.market.getQuotes(open.map { it.symbol })
-                    // Only quote-priced holdings count — cost basis is not equity.
                     val priced = open.mapNotNull { p -> quotes[p.symbol]?.let { p.shares * it.price } }
                     if (priced.size < open.size) null else priced.sum()
                 }
             }.getOrNull()
             val cash = runCatching { container.cash.observeCash().first() }.getOrNull()
-            val totalEquity = equity?.plus(if (cash?.tracked == true) cash.balance else 0.0)
+            // Spendable cash, best source first: the brokerage cash ledger when
+            // the user tracks it, otherwise the stated wallet's liquidity —
+            // which already carries the proceeds of every sell. Without this,
+            // a wallet-only user's cash was invisible here and the plan fell
+            // back to a fixed budget while their money sat idle.
+            val available =
+                if (cash?.tracked == true) cash.balance
+                else runCatching { container.wallet.liquidityNow() }.getOrNull()?.coerceAtLeast(0.0)
+            val totalEquity = when {
+                equity != null && available != null -> equity + available
+                else -> equity
+            }
 
             val plan =
                 if (analysis != null && price != null && price > 0.0) {
@@ -131,7 +143,7 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
                             accountEquity = totalEquity,
                             riskPerTradePct = profile.riskPerTradePct,
                             maxPositionPct = profile.maxPositionPct,
-                            cashAvailable = if (cash?.tracked == true) cash.balance else null,
+                            cashAvailable = available,
                             policyNote = profile.label()
                         )
                     }.getOrNull()

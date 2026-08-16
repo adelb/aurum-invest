@@ -11,6 +11,7 @@ import com.aurum.invest.core.Dates
 import com.aurum.invest.data.db.TransactionEntity
 import com.aurum.invest.data.model.TradeSide
 import com.aurum.invest.data.repo.PortfolioRepository
+import com.aurum.invest.data.repo.WalletState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,7 +30,14 @@ data class ReportsState(
     val walletTotal: Double = 0.0,
     val walletConfigured: Boolean = false,
     val invested: Double = 0.0,
-    val liquidity: Double = 0.0
+    val liquidity: Double = 0.0,
+    /**
+     * Accumulated realized P/L across the whole ledger — the part of
+     * [liquidity] that came from selling rather than from the stated wallet.
+     * Shown beside the tiles so the cash number is traceable to the sells
+     * that produced it.
+     */
+    val realizedPl: Double = 0.0
 )
 
 class ReportsViewModel(app: Application) : AndroidViewModel(app) {
@@ -56,7 +64,11 @@ class ReportsViewModel(app: Application) : AndroidViewModel(app) {
             }.collectLatest { (txs, positions, walletTotal, walletConfigured) ->
                 txById = txs.associateBy { it.id }
                 val invested = positions.filter { PortfolioRepository.isOpen(it) }.sumOf { it.investedCost }
-                val liquidity = (walletTotal - invested).coerceAtLeast(0.0)
+                // Realized P/L over ALL positions, closed ones included — a
+                // fully-sold winner is gone from the book but its proceeds are
+                // sitting in cash, so it must still count toward liquidity.
+                val realizedPl = positions.sumOf { it.realizedPl }
+                val liquidity = WalletState.liquidityOf(walletTotal, invested, realizedPl)
                 val (daily, weekly, monthly, yearly) = withContext(Dispatchers.Default) {
                     Quad(
                         ReportsEngine.build(txs, ReportPeriod.DAY),
@@ -79,7 +91,8 @@ class ReportsViewModel(app: Application) : AndroidViewModel(app) {
                     walletTotal = walletTotal,
                     walletConfigured = walletConfigured,
                     invested = invested,
-                    liquidity = liquidity
+                    liquidity = liquidity,
+                    realizedPl = realizedPl
                 )
             }
         }

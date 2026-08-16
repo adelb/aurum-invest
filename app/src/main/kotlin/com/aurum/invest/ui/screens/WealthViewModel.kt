@@ -22,7 +22,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -175,27 +174,23 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * How much of the stated wallet's uninvested cash to deploy, and where.
-     * Liquidity is the wallet's stated total minus the ledger's own invested
-     * cost — the same math [com.aurum.invest.data.repo.WalletState] uses —
-     * so a wallet top-up or a new trade both recompute this the same way a
-     * ledger change recomputes the portfolio review.
+     * Liquidity comes from [com.aurum.invest.data.repo.WalletRepository.liquidityNow]
+     * — the one cash identity (total − invested + realized P/L) the dashboard
+     * and the reports card also read — so a wallet top-up, a new buy, and the
+     * proceeds of a sell all recompute this the same way a ledger change
+     * recomputes the portfolio review.
      */
     private fun refreshLiquidityPlan() {
         liquidityPlanJob?.cancel()
         liquidityPlanJob = viewModelScope.launch {
             _state.update { it.copy(liquidityPlanLoading = true) }
-            val open = try {
-                container.portfolio.positionsNow().filter { PortfolioRepository.isOpen(it) }
-            } catch (_: Exception) {
-                emptyList()
-            }
-            val investedCost = open.sumOf { it.investedCost }
-            val walletTotal = try {
-                container.wallet.total.first()
+            // Null wallet = unknown cash, which the engine reads as nothing to
+            // deploy — never as free money.
+            val liquidity = try {
+                container.wallet.liquidityNow() ?: 0.0
             } catch (_: Exception) {
                 0.0
             }
-            val liquidity = (walletTotal - investedCost).coerceAtLeast(0.0)
             val plan = wealth.getLiquidityPlan(liquidity, _state.value.book)
             _state.update {
                 it.copy(liquidityPlan = plan ?: it.liquidityPlan, liquidityPlanLoading = false)
@@ -295,18 +290,11 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 _state.update { it.copy(liquidityPlanLoading = true) }
-                val open = try {
-                    container.portfolio.positionsNow().filter { PortfolioRepository.isOpen(it) }
-                } catch (_: Exception) {
-                    emptyList()
-                }
-                val investedCost = open.sumOf { it.investedCost }
-                val walletTotal = try {
-                    container.wallet.total.first()
+                val liquidity = try {
+                    container.wallet.liquidityNow() ?: 0.0
                 } catch (_: Exception) {
                     0.0
                 }
-                val liquidity = (walletTotal - investedCost).coerceAtLeast(0.0)
                 val plan = wealth.recomputeLiquidityPlan(liquidity, _state.value.book)
                 _state.update {
                     it.copy(liquidityPlan = plan ?: it.liquidityPlan, liquidityPlanLoading = false)

@@ -101,6 +101,31 @@ class BuyPlanTest {
     }
 
     @Test
+    fun `a fully deployed wallet is told the plan needs a sale to fund it`() {
+        val cs = candles()
+        val analysis = Techniques.analyze("TEST", cs)!!
+        val plan = BuyPlanEngine.build(
+            "TEST", cs, analysis, cs.last().close,
+            accountEquity = 20_000.0,
+            cashAvailable = 0.0
+        )
+        assertTrue(plan.budgetBasis.contains("no uninvested cash"))
+        assertTrue(plan.budgetBasis.contains("selling something first"))
+    }
+
+    @Test
+    fun `unknown cash is not reported as an empty balance`() {
+        val cs = candles()
+        val analysis = Techniques.analyze("TEST", cs)!!
+        val plan = BuyPlanEngine.build(
+            "TEST", cs, analysis, cs.last().close,
+            accountEquity = 20_000.0,
+            cashAvailable = null
+        )
+        assertTrue(!plan.budgetBasis.contains("no uninvested cash"))
+    }
+
+    @Test
     fun `stop sits below every planned entry`() {
         val cs = candles()
         val analysis = Techniques.analyze("TEST", cs)!!

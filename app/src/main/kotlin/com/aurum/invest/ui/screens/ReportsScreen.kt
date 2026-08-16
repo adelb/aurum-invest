@@ -212,7 +212,28 @@ private fun WalletSummaryCard(state: ReportsState) {
                 StatTile(
                     label = "Liquidity",
                     value = Fmt.money(state.liquidity),
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    valueColor = if (state.liquidity < -0.005) AurumColors.loss else AurumColors.text
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            // Where the cash number comes from. A sell returns the shares'
+            // cost basis AND the P/L booked on them, so liquidity moves by the
+            // full proceeds — this line names the realized part of it.
+            Text(
+                text = "Liquidity = wallet − invested " +
+                    (if (state.realizedPl < 0) "− " else "+ ") +
+                    Fmt.money(kotlin.math.abs(state.realizedPl)) +
+                    " realized P/L booked by your sells.",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+            if (state.liquidity < -0.005) {
+                Text(
+                    text = "Your ledger has more deployed than the stated wallet covers — " +
+                        "raise the total from the Portfolio tab if you've added money.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.gold
                 )
             }
         } else {

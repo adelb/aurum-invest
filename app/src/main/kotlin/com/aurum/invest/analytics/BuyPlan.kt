@@ -128,13 +128,23 @@ object BuyPlanEngine {
                 if (budget == positionCap) append(", capped at ${pct1(maxPositionPct)} position size")
                 if (cashAvailable != null && budget == cashCap) append(", capped by available cash")
                 append(".")
+                // A known-zero balance is not the same as an unknown one: the
+                // risk policy still sizes the plan, but funding it would mean
+                // selling something first, and the plan has to say so.
+                if (cashAvailable != null && cashAvailable <= 0.0) {
+                    append(
+                        " You have no uninvested cash right now — this is sized by your risk " +
+                            "policy, so funding it means selling something first."
+                    )
+                }
                 if (policyNote.isNotBlank()) append(" $policyNote")
             }
         } else {
             budget = fallbackBudget
             budgetBasis = "Default ${com.aurum.invest.core.Fmt.money(fallbackBudget)} order " +
                 "budget — the app doesn't know your account equity, so this is NOT sized by " +
-                "the 2% account rule. Record your holdings (and cash) to size it properly."
+                "the 2% account rule. Set your total wallet on the Portfolio tab (or record " +
+                "your holdings and cash) to size it properly."
         }
         return buildInternal(
             symbol, candles, analysis, price, budget,

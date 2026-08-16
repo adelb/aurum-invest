@@ -58,6 +58,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -439,8 +440,19 @@ private fun SectorAllocation(book: BookContext) {
     }
 }
 
+/**
+ * One wallet figure. [signed] switches to +/- formatting and the gain/loss
+ * colour — used for the P/L lines, which must read as movement, not as a
+ * balance.
+ */
 @Composable
-private fun WalletStat(label: String, value: Double, modifier: Modifier = Modifier) {
+private fun WalletStat(
+    label: String,
+    value: Double,
+    modifier: Modifier = Modifier,
+    signed: Boolean = false,
+    valueColor: Color = AurumColors.text
+) {
     Column(modifier = modifier) {
         Text(
             text = label,
@@ -450,9 +462,9 @@ private fun WalletStat(label: String, value: Double, modifier: Modifier = Modifi
             overflow = TextOverflow.Ellipsis
         )
         Text(
-            text = Fmt.money(value),
+            text = if (signed) Fmt.signedMoney(value) else Fmt.money(value),
             style = MaterialTheme.typography.bodyMedium,
-            color = AurumColors.text,
+            color = if (signed) AurumColors.deltaColor(value) else valueColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -557,7 +569,50 @@ private fun HeroSummary(
                 WalletStat(
                     label = "Liquidity",
                     value = wallet.liquidity,
+                    modifier = Modifier.weight(1f),
+                    valueColor = if (wallet.shortfall) AurumColors.loss else AurumColors.text
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            // The second row closes the loop: what the sells booked, the
+            // accumulated P/L, and what the wallet is actually worth today.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                WalletStat(
+                    label = "Realized",
+                    value = wallet.realizedPl,
+                    modifier = Modifier.weight(1f),
+                    signed = true
+                )
+                WalletStat(
+                    label = "Total P/L",
+                    value = wallet.totalPl,
+                    modifier = Modifier.weight(1f),
+                    signed = true
+                )
+                WalletStat(
+                    label = "Net worth",
+                    value = wallet.netWorth,
                     modifier = Modifier.weight(1f)
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            // Says out loud how the three cash figures relate, so a sell that
+            // moves liquidity is never mistaken for a number drifting on its own.
+            Text(
+                text = "Liquidity = wallet − invested + realized · " +
+                    "net worth = liquidity + holdings",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+            if (wallet.shortfall) {
+                Text(
+                    text = "Your ledger has ${Fmt.money(-wallet.liquidity)} more deployed than " +
+                        "the stated wallet covers — raise the total if you've added money.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.gold
                 )
             }
         }
@@ -1004,8 +1059,10 @@ private fun WalletSetupDialog(
         text = {
             Column {
                 Text(
-                    text = "Enter the total cash you hold for investing. The app works out " +
-                        "what's invested from your ledger and shows the rest as liquidity.",
+                    text = "Enter the money you put in for investing — the capital itself, " +
+                        "before any profit. Aurum reads what's invested from your ledger, " +
+                        "and every sell returns its cost plus the P/L it booked to your " +
+                        "liquidity. Only change this when you actually add or withdraw cash.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
