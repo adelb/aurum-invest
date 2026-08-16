@@ -45,6 +45,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurum.invest.analytics.PeriodReport
+import com.aurum.invest.analytics.TradeGrouping
+import com.aurum.invest.analytics.TradeGroup
 import com.aurum.invest.analytics.TradeLine
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.db.TransactionEntity
@@ -304,12 +306,22 @@ private fun ReportCard(
                 }
                 Spacer(Modifier.height(12.dp))
                 HorizontalDivider(color = AurumColors.hairline, thickness = 1.dp)
-                report.trades.forEach { trade ->
-                    TradeRow(
-                        trade = trade,
-                        onEdit = { onEditTrade(trade) },
-                        onDelete = { onDeleteTrade(trade) }
-                    )
+                if (report.grouping == TradeGrouping.NONE) {
+                    report.trades.forEach { trade ->
+                        TradeRow(
+                            trade = trade,
+                            onEdit = { onEditTrade(trade) },
+                            onDelete = { onDeleteTrade(trade) }
+                        )
+                    }
+                } else {
+                    report.groups.forEach { group ->
+                        TradeGroupRow(
+                            group = group,
+                            onEditTrade = onEditTrade,
+                            onDeleteTrade = onDeleteTrade
+                        )
+                    }
                 }
                 Text(
                     text = "Tap a trade to correct it — position, P/L, and every report " +
@@ -327,6 +339,62 @@ private fun ReportCard(
         )
     }
 }
+
+/** One finer bucket (a day inside a week, a week inside a month, a month inside a year). */
+@Composable
+private fun TradeGroupRow(
+    group: TradeGroup,
+    onEditTrade: (TradeLine) -> Unit,
+    onDeleteTrade: (TradeLine) -> Unit
+) {
+    var open by rememberSaveable(group.key) { mutableStateOf(false) }
+
+    Column(modifier = Modifier.fillMaxWidth().animateContentSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .clickable { open = !open }
+                .padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = group.label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "${group.trades.size} trade${if (group.trades.size == 1) "" else "s"}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+            DeltaMoney(value = group.realizedPl, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text = if (open) "︿" else "﹀",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.textDim,
+                modifier = Modifier.padding(start = 8.dp)
+            )
+        }
+        AnimatedVisibility(visible = open) {
+            Column(modifier = Modifier.padding(start = 8.dp)) {
+                group.trades.forEach { trade ->
+                    TradeRow(
+                        trade = trade,
+                        onEdit = { onEditTrade(trade) },
+                        onDelete = { onDeleteTrade(trade) }
+                    )
+                }
+            }
+        }
+        HorizontalDivider(color = AurumColors.hairline, thickness = 1.dp)
+    }
+}
+
 
 @Composable
 private fun TradeRow(trade: TradeLine, onEdit: () -> Unit, onDelete: () -> Unit) {

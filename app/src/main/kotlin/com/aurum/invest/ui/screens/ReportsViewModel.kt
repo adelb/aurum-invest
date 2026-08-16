@@ -7,6 +7,7 @@ import com.aurum.invest.AurumApp
 import com.aurum.invest.analytics.PeriodReport
 import com.aurum.invest.analytics.ReportPeriod
 import com.aurum.invest.analytics.ReportsEngine
+import com.aurum.invest.core.Dates
 import com.aurum.invest.data.db.TransactionEntity
 import com.aurum.invest.data.model.TradeSide
 import com.aurum.invest.data.repo.PortfolioRepository
@@ -64,8 +65,13 @@ class ReportsViewModel(app: Application) : AndroidViewModel(app) {
                         ReportsEngine.build(txs, ReportPeriod.YEAR)
                     )
                 }
+                // The Daily tab only ever shows the current week's days — older
+                // days are reached via the Weekly tab, which collapses them
+                // under their week.
+                val currentWeekStart = Dates.currentWeekStartIso()
+                val dailyThisWeek = daily.filter { it.periodKey >= currentWeekStart }
                 _state.value = ReportsState(
-                    daily = daily,
+                    daily = dailyThisWeek,
                     weekly = weekly,
                     monthly = monthly,
                     yearly = yearly,

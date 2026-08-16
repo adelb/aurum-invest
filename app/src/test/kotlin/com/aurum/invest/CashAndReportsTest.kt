@@ -148,4 +148,79 @@ class CashAndReportsTest {
         assertEquals(totalRealized, newest.accumulatedPl, 1e-9)
         assertEquals(oldest.realizedPl, oldest.accumulatedPl, 1e-9)
     }
+
+    @Test
+    fun `week report groups its trades by day`() {
+        // Monday and Wednesday of the same week.
+        val monday = java.time.LocalDate.of(2025, 6, 2).atStartOfDay(java.time.ZoneId.systemDefault())
+            .toInstant().toEpochMilli()
+        val wednesday = java.time.LocalDate.of(2025, 6, 4).atStartOfDay(java.time.ZoneId.systemDefault())
+            .toInstant().toEpochMilli()
+        val reports = ReportsEngine.build(
+            listOf(
+                txAt("AAPL", TxSide.BUY, 10.0, 100.0, monday),
+                txAt("AAPL", TxSide.SELL, 10.0, 110.0, monday + 1000),
+                txAt("MSFT", TxSide.BUY, 5.0, 50.0, wednesday),
+                txAt("MSFT", TxSide.SELL, 5.0, 40.0, wednesday + 1000)
+            ),
+            ReportPeriod.WEEK
+        )
+        assertEquals(1, reports.size)
+        val week = reports.single()
+        assertEquals(com.aurum.invest.analytics.TradeGrouping.DAY, week.grouping)
+        assertEquals(2, week.groups.size)
+        assertEquals(4, week.groups.sumOf { it.trades.size })
+        assertEquals(100.0, week.groups.first { it.trades.any { t -> t.symbol == "AAPL" } }.realizedPl, 1e-9)
+        assertEquals(-50.0, week.groups.first { it.trades.any { t -> t.symbol == "MSFT" } }.realizedPl, 1e-9)
+    }
+
+    @Test
+    fun `month report groups its trades by week and year report groups by month`() {
+        val week1 = java.time.LocalDate.of(2025, 6, 2).atStartOfDay(java.time.ZoneId.systemDefault())
+            .toInstant().toEpochMilli()
+        val week3 = java.time.LocalDate.of(2025, 6, 16).atStartOfDay(java.time.ZoneId.systemDefault())
+            .toInstant().toEpochMilli()
+        val monthReports = ReportsEngine.build(
+            listOf(
+                txAt("AAPL", TxSide.BUY, 10.0, 100.0, week1),
+                txAt("AAPL", TxSide.SELL, 10.0, 110.0, week1 + 1000),
+                txAt("MSFT", TxSide.BUY, 5.0, 50.0, week3),
+                txAt("MSFT", TxSide.SELL, 5.0, 60.0, week3 + 1000)
+            ),
+            ReportPeriod.MONTH
+        )
+        assertEquals(1, monthReports.size)
+        assertEquals(com.aurum.invest.analytics.TradeGrouping.WEEK, monthReports.single().grouping)
+        assertEquals(2, monthReports.single().groups.size)
+
+        val jan = java.time.LocalDate.of(2025, 1, 15).atStartOfDay(java.time.ZoneId.systemDefault())
+            .toInstant().toEpochMilli()
+        val mar = java.time.LocalDate.of(2025, 3, 15).atStartOfDay(java.time.ZoneId.systemDefault())
+            .toInstant().toEpochMilli()
+        val yearReports = ReportsEngine.build(
+            listOf(
+                txAt("AAPL", TxSide.BUY, 10.0, 100.0, jan),
+                txAt("AAPL", TxSide.SELL, 10.0, 110.0, jan + 1000),
+                txAt("MSFT", TxSide.BUY, 5.0, 50.0, mar),
+                txAt("MSFT", TxSide.SELL, 5.0, 60.0, mar + 1000)
+            ),
+            ReportPeriod.YEAR
+        )
+        assertEquals(1, yearReports.size)
+        assertEquals(com.aurum.invest.analytics.TradeGrouping.MONTH, yearReports.single().grouping)
+        assertEquals(2, yearReports.single().groups.size)
+    }
+
+    @Test
+    fun `day report has no grouping`() {
+        val reports = ReportsEngine.build(
+            listOf(
+                tx("AAPL", TxSide.BUY, 10.0, 100.0),
+                tx("AAPL", TxSide.SELL, 10.0, 110.0)
+            ),
+            ReportPeriod.DAY
+        )
+        assertEquals(com.aurum.invest.analytics.TradeGrouping.NONE, reports.single().grouping)
+        assertTrue(reports.single().groups.isEmpty())
+    }
 }

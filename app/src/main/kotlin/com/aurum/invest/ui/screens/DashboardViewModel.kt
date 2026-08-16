@@ -87,6 +87,15 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
     private val refreshTick = MutableStateFlow(0)
     private val forceFresh = AtomicBoolean(false)
 
+    /**
+     * Every position ever traded — including fully closed ones — from the
+     * last full [load]. The 1-second ticker reuses this so it can recompute
+     * an honest cumulative realized P/L instead of only summing the realized
+     * P/L of positions still open right now.
+     */
+    @Volatile
+    private var lastAllPositions: List<Position> = emptyList()
+
     init {
         viewModelScope.launch {
             combine(container.portfolio.observePositions(), refreshTick) { positions, _ -> positions }
@@ -142,7 +151,7 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
         val dayStart = Dates.todayStartMs()
         val dayPl = PortfolioRepository.dayPlBySymbol(ordered, quotes, dayStart)
 
-        val allPositions = holdings.map { it.view.position }
+        val allPositions = lastAllPositions.ifEmpty { holdings.map { it.view.position } }
         val openViews = holdings.map { row ->
             val sym = row.view.position.symbol
             val fresh = quotes[sym] ?: row.view.quote
@@ -206,6 +215,7 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun load(allPositions: List<Position>) {
         _state.update { it.copy(loading = true) }
+        lastAllPositions = allPositions
         val fresh = forceFresh.getAndSet(false)
         val quoteMaxAge = if (fresh) 0L else 60_000L
 

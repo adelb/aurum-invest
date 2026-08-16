@@ -253,10 +253,10 @@ fun PositionDetailScreen(
                                     closes = series.closes,
                                     timestamps = series.timestamps,
                                     baseline = baseline,
-                                    modifier = Modifier.fillMaxWidth().height(230.dp)
+                                    modifier = Modifier.fillMaxWidth().height(250.dp)
                                 )
                             }
-                            Spacer(Modifier.height(8.dp))
+                            Spacer(Modifier.height(12.dp))
                             Text(
                                 text = "Pinch to zoom · drag to pan · hold for crosshair",
                                 style = MaterialTheme.typography.labelSmall,
