@@ -9,11 +9,13 @@ import com.aurum.invest.analytics.ReportPeriod
 import com.aurum.invest.analytics.ReportsEngine
 import com.aurum.invest.data.db.TransactionEntity
 import com.aurum.invest.data.model.TradeSide
+import com.aurum.invest.data.repo.PortfolioRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -21,12 +23,19 @@ data class ReportsState(
     val daily: List<PeriodReport> = emptyList(),
     val weekly: List<PeriodReport> = emptyList(),
     val monthly: List<PeriodReport> = emptyList(),
-    val loading: Boolean = true
+    val yearly: List<PeriodReport> = emptyList(),
+    val loading: Boolean = true,
+    val walletTotal: Double = 0.0,
+    val walletConfigured: Boolean = false,
+    val invested: Double = 0.0,
+    val liquidity: Double = 0.0
 )
 
 class ReportsViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val portfolio = (app as AurumApp).container.portfolio
+    private val container = (app as AurumApp).container
+    private val portfolio = container.portfolio
+    private val wallet = container.wallet
 
     private val _state = MutableStateFlow(ReportsState())
     val state: StateFlow<ReportsState> = _state.asStateFlow()
@@ -36,24 +45,42 @@ class ReportsViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch {
-            portfolio.observeTransactions().collectLatest { txs ->
+            combine(
+                portfolio.observeTransactions(),
+                portfolio.observePositions(),
+                wallet.total,
+                wallet.configured
+            ) { txs, positions, walletTotal, walletConfigured ->
+                Quad(txs, positions, walletTotal, walletConfigured)
+            }.collectLatest { (txs, positions, walletTotal, walletConfigured) ->
                 txById = txs.associateBy { it.id }
-                val (daily, weekly, monthly) = withContext(Dispatchers.Default) {
-                    Triple(
+                val invested = positions.filter { PortfolioRepository.isOpen(it) }.sumOf { it.investedCost }
+                val liquidity = (walletTotal - invested).coerceAtLeast(0.0)
+                val (daily, weekly, monthly, yearly) = withContext(Dispatchers.Default) {
+                    Quad(
                         ReportsEngine.build(txs, ReportPeriod.DAY),
                         ReportsEngine.build(txs, ReportPeriod.WEEK),
-                        ReportsEngine.build(txs, ReportPeriod.MONTH)
+                        ReportsEngine.build(txs, ReportPeriod.MONTH),
+                        ReportsEngine.build(txs, ReportPeriod.YEAR)
                     )
                 }
                 _state.value = ReportsState(
                     daily = daily,
                     weekly = weekly,
                     monthly = monthly,
-                    loading = false
+                    yearly = yearly,
+                    loading = false,
+                    walletTotal = walletTotal,
+                    walletConfigured = walletConfigured,
+                    invested = invested,
+                    liquidity = liquidity
                 )
             }
         }
     }
+
+    /** Small local tuple to carry four combined values without extra allocations elsewhere. */
+    private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
 
     /** The ledger row behind a report line; null when it no longer exists. */
     fun transaction(txId: Long): TransactionEntity? = txById[txId]

@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
 import com.aurum.invest.analytics.BookContext
+import com.aurum.invest.analytics.LiquidityPlan
 import com.aurum.invest.analytics.MarketRating
 import com.aurum.invest.analytics.MoneyFlowReport
 import com.aurum.invest.analytics.NextSessionReport
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -58,6 +60,9 @@ data class WealthState(
     /** Reconstructed performance & risk (H2); null when too little could be measured. */
     val performance: PortfolioPerformance? = null,
     val performanceLoading: Boolean = false,
+    /** How much of the uninvested wallet cash to deploy, and where. */
+    val liquidityPlan: LiquidityPlan? = null,
+    val liquidityPlanLoading: Boolean = true,
     /** True while a pull-to-refresh recompute is in flight. */
     val refreshing: Boolean = false
 )
@@ -85,6 +90,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
     private var nextSessionJob: Job? = null
     private var previewJob: Job? = null
     private var performanceJob: Job? = null
+    private var liquidityPlanJob: Job? = null
 
     init {
         // The live loop: keeps the review current between manual refreshes.
@@ -127,6 +133,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                     refreshStrategy()
                     refreshNextSession()
                     refreshPreview()
+                    refreshLiquidityPlan()
                     return@collectLatest
                 }
                 val quotes = container.market.getQuotes(open.map { it.symbol })
@@ -151,6 +158,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                 refreshNextSession()
                 refreshPreview()
                 refreshPerformance()
+                refreshLiquidityPlan()
             }
         }
     }
@@ -162,6 +170,36 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(performanceLoading = true) }
             val perf = wealth.getPerformance()
             _state.update { it.copy(performance = perf ?: it.performance, performanceLoading = false) }
+        }
+    }
+
+    /**
+     * How much of the stated wallet's uninvested cash to deploy, and where.
+     * Liquidity is the wallet's stated total minus the ledger's own invested
+     * cost — the same math [com.aurum.invest.data.repo.WalletState] uses —
+     * so a wallet top-up or a new trade both recompute this the same way a
+     * ledger change recomputes the portfolio review.
+     */
+    private fun refreshLiquidityPlan() {
+        liquidityPlanJob?.cancel()
+        liquidityPlanJob = viewModelScope.launch {
+            _state.update { it.copy(liquidityPlanLoading = true) }
+            val open = try {
+                container.portfolio.positionsNow().filter { PortfolioRepository.isOpen(it) }
+            } catch (_: Exception) {
+                emptyList()
+            }
+            val investedCost = open.sumOf { it.investedCost }
+            val walletTotal = try {
+                container.wallet.total.first()
+            } catch (_: Exception) {
+                0.0
+            }
+            val liquidity = (walletTotal - investedCost).coerceAtLeast(0.0)
+            val plan = wealth.getLiquidityPlan(liquidity, _state.value.book)
+            _state.update {
+                it.copy(liquidityPlan = plan ?: it.liquidityPlan, liquidityPlanLoading = false)
+            }
         }
     }
 
@@ -222,6 +260,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
         reviewJob?.cancel()
         nextSessionJob?.cancel()
         previewJob?.cancel()
+        liquidityPlanJob?.cancel()
         viewModelScope.launch {
             try {
                 _state.update { it.copy(flowLoading = true, pulseLoading = true) }
@@ -253,6 +292,24 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                     _state.update {
                         it.copy(preview = preview ?: it.preview, previewLoading = false)
                     }
+                }
+
+                _state.update { it.copy(liquidityPlanLoading = true) }
+                val open = try {
+                    container.portfolio.positionsNow().filter { PortfolioRepository.isOpen(it) }
+                } catch (_: Exception) {
+                    emptyList()
+                }
+                val investedCost = open.sumOf { it.investedCost }
+                val walletTotal = try {
+                    container.wallet.total.first()
+                } catch (_: Exception) {
+                    0.0
+                }
+                val liquidity = (walletTotal - investedCost).coerceAtLeast(0.0)
+                val plan = wealth.recomputeLiquidityPlan(liquidity, _state.value.book)
+                _state.update {
+                    it.copy(liquidityPlan = plan ?: it.liquidityPlan, liquidityPlanLoading = false)
                 }
             } finally {
                 _state.update { it.copy(refreshing = false) }

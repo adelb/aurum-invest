@@ -331,9 +331,12 @@ private fun DrawScope.drawTimeAxis(textMeasurer: TextMeasurer, ts: List<Long>) {
     val style = chartLabelStyle(AurumColors.textDim)
     val y = axisTop + 8f
     val labels = min(5, max(3, (size.width / 240f).toInt() + 1))
+    // A window spanning a year or more needs the year in each label — "MMM d"
+    // alone repeats the same month across different years indistinguishably.
+    val yearsApart = (ts.last() - ts.first()) >= 300L * 24 * 3_600_000L
     for (li in 0 until labels) {
         val idx = ((ts.size - 1).toFloat() * li / (labels - 1)).roundToInt().coerceIn(0, ts.size - 1)
-        val text = Fmt.dateShort(ts[idx])
+        val text = if (yearsApart) Fmt.dateWithYear(ts[idx]) else Fmt.dateShort(ts[idx])
         val m = textMeasurer.measure(AnnotatedString(text), style)
         val cx = size.width * li / (labels - 1)
         val tx = when (li) {

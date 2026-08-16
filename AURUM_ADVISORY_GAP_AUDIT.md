@@ -1,10 +1,139 @@
-# Aurum Advisory-Grade Information Gap Audit
+# Aurum Advisory-Grade Information Gap Audit and Remediation Re-Audit
 
-**Audit date:** 2026-08-16
+**Original audit date:** 2026-08-16
 
-**App version:** 5.3.1
+**Re-audit date:** 2026-08-16
+
+**Baseline:** v5.3.1 (`89f0604`)
+
+**Current version:** v6.0 (`fd394bb`)
 
 **Scope:** Android application code, user-facing screens, analytics engines, data sources, persistence, tests, and product documentation.
+
+## Remediation re-audit result
+
+Eight independent agents re-audited the current working tree by domain, and an eighth adversarial agent classified all 21 original findings. Status is measured against the **original acceptance gates**, not whether some implementation work landed:
+
+- **Fixed:** the original gate is met or the misleading claim was removed.
+- **Partial:** meaningful remediation shipped, but a material part of the original gate remains open.
+- **Open:** no meaningful remediation was verified.
+- **Regressed:** current behavior is worse than the v5.3.1 baseline.
+
+### Executive update
+
+The remediation is substantial and directionally strong, but `AUDIT_FIXES_v6.md` overstates closure. The verified result is:
+
+| Severity | Fixed | Partial | Open | Regressed |
+|---|---:|---:|---:|---:|
+| Critical (C1-C7) | 0 | 7 | 0 | 0 |
+| High (H1-H6) | 1 | 5 | 0 | 0 |
+| Medium (M1-M8) | 2 | 6 | 0 | 0 |
+| **Total** | **3** | **18** | **0** | **0** |
+
+The three closed gates are:
+
+1. **H4:** user-facing “whole market” claims were replaced with the actual Yahoo eight-screen sample, and scan coverage is surfaced.
+2. **M7:** technical-only advice variants are now explicitly labeled, while detail advice remains news-aware.
+3. **M8:** sell targets are consistently labeled “before fees & tax.”
+
+No Critical gate is fully closed. Aurum is materially safer and more transparent than v5.3.1, but portfolio mutation integrity, stale-data action gating, suitability completeness, statistical validation, privacy/restore safety, and release-quality controls still block an advisory-grade claim.
+
+## Current finding status
+
+| ID | Status | Verified remediation | Remaining gate / defect |
+|---|---|---|---|
+| C1 | **Partial** | A persisted `InvestorProfile` now drives several position, sector, loss, profit, and sizing thresholds; Wealth cache keys include the policy (`SettingsRepository.kt:20-56,115-133`; `PortfolioAdvisor.kt:335-352`; `WealthRepository.kt:262-288`). | `PortfolioGradeEngine` still uses hardcoded 22/30/35% thresholds, and the profile lacks objective, liquidity, experience, tax, restrictions, consent, and versioning (`PortfolioGrade.kt:343-401`). No test exercises `InvestorProfile` through advisor/grade behavior. |
+| C2 | **Partial** | Primary add/edit flows reject oversells; cash entries, splits, fees, currency/FX fields, clamped report replay, and “Holdings value” landed (`AddTransactionViewModel.kt:63-81,246-258`; `Entities.kt:6-66`; `ReportsEngine.kt:84-121`; `DashboardScreen.kt:491-517`). | Bank import, Reports edit, and deleting earlier buys can still create oversells (`BankFeedRepository.kt:73-87`; `ReportsViewModel.kt:74-86`; `EditPositionViewModel.kt:99-100`). Broker references are parsed but not persisted or uniquely constrained. Accounts, taxes, transfers, atomic reconciliation, and the 12-statement gate remain open. |
+| C3 | **Partial** | News, candle history, scan coverage, unpriced holdings, and market-pulse incomplete states are now distinguished (`Models.kt:100-160`; `NewsRepository.kt:44-92`; `AnalysisScreen.kt:162-173`; `MarketPulse.kt:289-301`). | Quote/candle caches can still be returned with unbounded age, per-symbol advice does not enforce an SLA or become `INCOMPLETE`, and `Advice`/`BuyPlan` lack source/as-of/coverage contracts (`MarketRepository.kt:38-45,96-101,138-146`; `DashboardViewModel.kt:198-206`; `PositionDetailViewModel.kt:180-188`). |
+| C4 | **Partial** | Indicator agreement and ATR limitations are disclosed; evaluator replay adds stride-five samples, stock base rates, and Wilson intervals (`AnalysisScreen.kt:335,354-356,706-707`; `TechniqueEvaluator.kt:179-287`). | Current weighting/ranking still uses overlapping hit-rate samples, trust can start at 10 independent calls, and next-session/next-week surfaces retain probability/confidence language. There is no walk-forward holdout, cost model, regime validation, or multiple-testing control (`TechniqueEvaluator.kt:90-143`; `NextSessionEngine.kt:168-174,269-289,434-440`). |
+| C5 | **Partial** | The engine sizes from account risk, position cap, and cash when inputs are known, and labels the fallback as not the account 2% rule (`BuyPlan.kt:97-145,227-233,297-306`). | A cash-only account and any portfolio with one unpriced holding discard known cash/equity and fall back to $3,000; unknown equity still emits a plan instead of blocking (`AnalysisViewModel.kt:111-124`). Production wiring for these cases is untested. |
+| C6 | **Partial** | Fundamentals client/model/cache/UI now show profile, health, valuation, analyst data, scenarios, and dated events with explicit unavailable/stale/failed states (`Fundamentals.kt:8-60`; `FundamentalsRepository.kt:20-113`; `PositionDetailScreen.kt:954-1290`). | `enterpriseValue` can be mislabeled as market cap, dividend yield may be multiplied by 100 incorrectly, and debt/equity units are ambiguous (`FundamentalsClient.kt:141,148,157`). Statements/history, period metadata, estimates, ownership, peers, editable assumptions, and the 90% coverage gate remain absent. |
+| C7 | **Partial** | 50 unit tests across seven suites now pass; CI runs test/lint/debug build; Room exports schema 3 and registers migration 2→3 (`app\build.gradle.kts`; `.github\workflows\android.yml`; `AurumDatabase.kt:21-22,36,46,93`). | There are no Room migration tests, UI tests, randomized/property suites, coverage gate, release-artifact workflow, or required branch protection. Critical cache, bank-import, restore, suitability, and recommendation paths remain untested. |
+| H1 | **Partial** | Stock detail shows next earnings, ex-dividend, and payment dates with explicit unavailable states and a seven-day warning (`FundamentalsClient.kt:122-127`; `PositionDetailScreen.kt:1241-1284`). | Estimated/past earnings dates are not handled safely; event risk does not gate advice. Filings, results/guidance history, primary-source links, and macro/regulatory calendars remain absent. |
+| H2 | **Partial** | Portfolio performance now includes an equity curve, TWR, SPY comparison, volatility, drawdown, beta, Sharpe, and correlation (`PortfolioPerformance.kt:121-145,285-304`; `WealthScreen.kt:2301-2338`). | Missing-price holdings can be omitted while metrics still render; SPY is price-only rather than total return. VaR/CVaR, attribution, factor exposure, and stress scenarios remain open. |
+| H3 | **Partial** | Headline sentiment gained negation handling, source tiers, duplicate clustering, and explicit feed states (`NewsSentiment.kt:1-232`; `NewsRepository.kt:44-92`; `NewsSentimentTest.kt`). | Ambiguous tickers are not entity-validated, article content/event typing/confidence are absent, and the displayed delta is still same-day open/close movement rather than timestamp-aware abnormal return (`NewsClient.kt:36-38`; `NewsRepository.kt:146-153`; `PositionDetailScreen.kt:738-741`). |
+| H4 | **Fixed** | User-facing copy identifies Yahoo’s eight predefined screens as a broad liquid sample, not every US stock; scan screen/row/status/as-of coverage is shown (`README.md:20-26`; `Models.kt:145-159`; `PicksScreen.kt:291,393,664,1064,1483-1492`). | A complete security master is still future work, but the app no longer claims complete-market coverage. |
+| H5 | **Partial** | Ledger export/restore, device authentication, bank-event retention, delete-all, and privacy disclosure were added (`SettingsViewModel.kt:141-278`; `MainActivity.kt:39-88`; `BankFeedRepository.kt:104-112`). | Restore exports but does not restore the watchlist, is not transactional, and uses incomplete dedup keys. App lock does not re-lock after backgrounding and unlocks on authentication exceptions. Room is unencrypted and Android backups remain enabled. |
+| H6 | **Partial** | Trade notes and a reachable advice-history screen now exist; Wealth verdicts record action, price, reason, and release version (`AdviceLogRepository.kt:19-42`; `WealthRepository.kt:326-333`; `AurumRoot.kt:228-234`). | Only Wealth is logged; detail/Picks actions, input snapshots, durable unique event IDs, thesis/invalidation, decisions, peers, and audit-log export remain absent. |
+| M1 | **Partial** | Durable above/below price alerts and a 15-minute worker are wired (`AlertsRepository.kt:18-76`; `AlertsWorker.kt:25-43`; `Schedules.kt:74-80`). | Volume, indicator, filing, earnings, and portfolio-risk alerts are absent. Arbitrarily stale quotes can fire alerts, and an alert is consumed before notification delivery is known to succeed. |
+| M2 | **Partial** | 1Y, 5Y, and Max ranges were added and lazy-loaded (`PositionDetailViewModel.kt:104-128`; `PositionDetailScreen.kt:217-238`). | 3Y, adjusted/total-return labeling, benchmark overlays, and drawdown charts remain absent. |
+| M3 | **Partial** | Disclosures state US-listed equities/ETFs in USD and bank review asks for FX on detected non-USD trades (`DisclosureScreen.kt:118-127`; `BankFeedScreen.kt:261-270,385-395`). | Manual transactions accept arbitrary symbols/currency assumptions, search excludes ETFs, and missing parsed currency can be treated as USD (`AddTransactionViewModel.kt:235-269`; `BankNotificationListener.kt:68-70`). Multi-account support remains absent. |
+| M4 | **Partial** | A substantive, versioned methodology/privacy/risk disclosure center is reachable from Settings (`DisclosureScreen.kt:70-151`; `SettingsScreen.kt:430-434`). | Recommendation, target, and alert action cards do not link to it. |
+| M5 | **Partial** | Major “whole market,” technique-count, and account-risk wording was corrected; score definitions are centralized. | Residual “whole market” wording remains in Stocks/engine copy, and $3,000 language remains visible on Analysis/Picks fallback paths (`StocksScreen.kt:77,340`; `AnalysisScreen.kt:134,184`; `PicksScreen.kt:820,1024`). |
+| M6 | **Partial** | Advice history records a release version and shows price movement since a Wealth verdict (`AdviceHistoryScreen.kt:127-193`). | It is not a consolidated action-aware outcome system: SELL/HOLD/TRIM direction, horizon, benchmark, costs, adverse excursion, drawdown, calibration, and drift are not measured. |
+| M7 | **Fixed** | Dashboard and Watchlist explicitly label their no-news result as a technical read, while detail retains headline tone (`DashboardScreen.kt:672-685`; `StocksScreen.kt:822-831`; `PositionDetailViewModel.kt:170-188`). | A single canonical snapshot remains preferable, but the original labeling alternative is met. |
+| M8 | **Fixed** | Target rows and dialogs consistently say “before fees & tax” (`DashboardScreen.kt:763-782,849-865`). | The selling-cost preference is informational and is not part of target math, which is acceptable while the gross label remains explicit. |
+
+## Newly verified release blockers
+
+These defects were introduced or exposed by tracing the remediation end to end:
+
+1. **Ledger mutation bypasses:** bank import, Reports edit, and deletion paths can still produce an invalid oversold ledger.
+2. **No durable broker identity:** a notification reference is required for some auto-imports but is discarded before persistence; deduplication is heuristic and non-atomic.
+3. **Cash-only sizing bug:** a fully known cash balance is discarded when there are no open positions, causing a $3,000 fallback.
+4. **Policy inconsistency:** holding verdicts use the investor profile while Portfolio Grade still uses hardcoded concentration thresholds.
+5. **Stale actions remain possible:** cached quotes/candles have no maximum age for advice or alerts.
+6. **Unsafe restore:** watchlist data is not restored, malformed imports can partially write, and duplicate detection can collapse distinct trades or duplicate rows within one file.
+7. **Fail-open app lock:** background/resume is not re-gated, and authentication exceptions reveal the app.
+8. **Fundamental unit errors:** market cap, dividend yield, and debt/equity can be mislabeled or mis-scaled.
+9. **Alert loss:** alerts are deactivated before notification delivery/permission success.
+10. **Audit trail incompleteness:** only Wealth verdicts are logged, same-day events can collapse, and outcomes are raw price drift rather than recommendation performance.
+
+## What to fix next
+
+### P0 — release-blocking integrity
+
+1. Route **every** transaction insert/update/delete/import/restore through one atomic ledger validator; reject non-finite values, oversells, invalid splits/FX, and cash invariant breaks.
+2. Persist an immutable broker execution ID with a unique database constraint; make notification import idempotent in one transaction.
+3. Fix cash-only/partially priced account equity and make incomplete account/profile inputs produce `INCOMPLETE`, not a default-sized personalized plan.
+4. Carry source, feed status, as-of time, stale age, and coverage into every quote, candle set, alert, advice, and plan; enforce explicit maximum ages.
+5. Make restore transactional and complete, re-lock on lifecycle backgrounding, fail closed on auth errors, and disable backup or encrypt sensitive storage.
+6. Correct fundamentals units with golden Yahoo payload fixtures before using those fields in decisions.
+
+### P1 — advisory evidence
+
+1. Make Portfolio Grade consume the same versioned investor policy as holding verdicts; add missing suitability, constraint, consent, and policy-version fields.
+2. Remove residual probability/confidence claims until walk-forward, regime-aware, benchmarked, net-cost calibration is demonstrated.
+3. Add primary filings, statement history, period/source metadata, estimate revisions, peer anchors, editable valuation assumptions, and event-risk advice gates.
+4. Log every emitted recommendation with immutable ID, model/policy/input snapshot, and fixed-horizon action-aware outcomes.
+5. Correct portfolio performance for unpriced holdings and total-return benchmarks; then add attribution and stress testing.
+
+### P2 — quality and workflow depth
+
+1. Add migration, UI, restore, bank-import, stale-cache, app-lock, alert-delivery, suitability, and recommendation-rule tests.
+2. Add property/invariant testing, coverage thresholds, required branch protection, and reproducible release artifacts.
+3. Complete alert types, 3Y/benchmark/total-return charting, asset enforcement, action-card disclosure links, thesis/journal, and exportable advice history.
+
+## Re-audit validation
+
+The current working tree passed:
+
+- `gradlew.bat :app:testDebugUnitTest --rerun-tasks --no-daemon --console=plain` — **50 tests across 7 suites; 0 failures, 0 errors, 0 skipped**.
+- `gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --no-daemon --console=plain` — **BUILD SUCCESSFUL**.
+- `gradlew.bat :app:assembleRelease --no-daemon --console=plain` — **BUILD SUCCESSFUL**, including R8 and release lint.
+
+Passing builds do not close C7: there are still no migration tests, instrumentation tests, coverage gate, release publishing/verification workflow, or protected required checks.
+
+## Eight-agent method and resolution
+
+The successful independent passes covered:
+
+1. Suitability and account-aware sizing.
+2. Ledger, cash, FX, bank import, and reporting.
+3. Freshness, failure states, scan coverage, and advice consistency.
+4. Statistical calibration and recommendation monitoring.
+5. Fundamentals, catalysts, news, and research workflow.
+6. Tests, CI, migrations, schema, and release gates.
+7. UX, privacy, export/restore, alerts, disclosures, and scope.
+8. Adversarial classification of all 21 findings and new regressions.
+
+Two initial agent launches rejected unsupported model settings before executing; they were replaced, leaving eight completed evidence-producing audits. Where agents disagreed, the report used the original baseline and acceptance gate: C3 is **Partial**, not regressed from v5.3.1; H4 is **Fixed** because complete-market claims were removed; M3 remains **Partial** because documented scope is not consistently enforced.
+
+---
+
+## Original v5.3.1 baseline
+
+The sections below preserve the pre-remediation findings and acceptance gates for traceability. Their original `Status` labels describe v5.3.1; the current classifications above supersede them.
 
 ## Executive finding
 

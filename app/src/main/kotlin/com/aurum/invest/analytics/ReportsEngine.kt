@@ -13,7 +13,7 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.TemporalAdjusters
 import java.util.Locale
 
-enum class ReportPeriod { DAY, WEEK, MONTH }
+enum class ReportPeriod { DAY, WEEK, MONTH, YEAR }
 
 /** One transaction as it appears inside a period report. */
 data class TradeLine(
@@ -40,6 +40,7 @@ data class PeriodReport(
     val sellsCount: Int,
     val sellsTotal: Double,
     val realizedPl: Double,
+    val accumulatedPl: Double,    // cumulative realizedPl from the ledger's start through this period, inclusive
     val bestTrade: TradeLine?,    // highest realizedPl among the period sells
     val worstTrade: TradeLine?,   // lowest realizedPl among the period sells
     val trades: List<TradeLine>   // chronological
@@ -56,6 +57,7 @@ object ReportsEngine {
     private val monthKeyFmt = DateTimeFormatter.ofPattern("yyyy-MM", Locale.US)
     private val monthLabelFmt = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.US)
     private val dayLabelFmt = DateTimeFormatter.ofPattern("EEEE, MMM d", Locale.US)
+    private val yearKeyFmt = DateTimeFormatter.ofPattern("yyyy", Locale.US)
 
     fun build(transactions: List<TransactionEntity>, period: ReportPeriod): List<PeriodReport> {
         if (transactions.isEmpty()) return emptyList()
@@ -128,6 +130,8 @@ object ReportsEngine {
                     day.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)).toString()
                 ReportPeriod.MONTH ->
                     day.format(monthKeyFmt)
+                ReportPeriod.YEAR ->
+                    day.format(yearKeyFmt)
             }
 
             val bucket = buckets.getOrPut(key) { Bucket() }
@@ -173,6 +177,13 @@ object ReportsEngine {
                     startTs = ym.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
                     endTs = ym.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1
                 }
+                ReportPeriod.YEAR -> {
+                    val year = key.toInt()
+                    label = key
+                    val start = LocalDate.of(year, 1, 1)
+                    startTs = start.atStartOfDay(zone).toInstant().toEpochMilli()
+                    endTs = start.plusYears(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1
+                }
             }
             val sells = bucket.trades.filter { it.realizedPl != null }
             PeriodReport(
@@ -185,10 +196,19 @@ object ReportsEngine {
                 sellsCount = bucket.sellsCount,
                 sellsTotal = bucket.sellsTotal,
                 realizedPl = sells.sumOf { it.realizedPl ?: 0.0 },
+                accumulatedPl = 0.0,
                 bestTrade = sells.maxByOrNull { it.realizedPl ?: 0.0 },
                 worstTrade = sells.minByOrNull { it.realizedPl ?: 0.0 },
                 trades = bucket.trades
             )
-        }.sortedByDescending { it.periodKey }
+        }.sortedBy { it.periodKey }
+            .let { ascending ->
+                var running = 0.0
+                ascending.map { report ->
+                    running += report.realizedPl
+                    report.copy(accumulatedPl = running)
+                }
+            }
+            .sortedByDescending { it.periodKey }
     }
 }

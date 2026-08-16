@@ -54,6 +54,12 @@ object Fmt {
     fun dateShort(ts: Long): String =
         SimpleDateFormat("MMM d", Locale.US).format(Date(ts))
 
+    /** "MMM yyyy" — for chart date axes spanning a year or more, where "MMM d"
+     * alone would repeat the same month across different years with no way
+     * to tell which is which (e.g. a 1Y or 5Y price chart). */
+    fun dateWithYear(ts: Long): String =
+        SimpleDateFormat("MMM yyyy", Locale.US).format(Date(ts))
+
     fun dateTime(ts: Long): String =
         SimpleDateFormat("MMM d, HH:mm", Locale.US).format(Date(ts))
 

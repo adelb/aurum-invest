@@ -11,11 +11,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
@@ -35,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -148,12 +152,16 @@ fun EditPositionScreen(
                 Text(
                     text = "Edit ${state.symbol}",
                     style = MaterialTheme.typography.titleLarge,
-                    color = AurumColors.text
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = "${state.trades.size} trade${if (state.trades.size == 1) "" else "s"} on record",
                     style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             IconButton(onClick = { onAddTrade(state.symbol) }) {
@@ -258,7 +266,9 @@ private fun TradeRow(tx: TransactionEntity, onEdit: () -> Unit, onDelete: () -> 
                     text = if (isSplit) "${Fmt.qty(tx.shares)}-for-1 split"
                     else "${Fmt.qty(tx.shares)} @ ${Fmt.money(tx.price)}",
                     style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = Fmt.dateShort(tx.ts) +
@@ -270,14 +280,18 @@ private fun TradeRow(tx: TransactionEntity, onEdit: () -> Unit, onDelete: () -> 
                             " · outcome pinned ${Fmt.signedMoney(it)}"
                         } ?: ""),
                     style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim
+                    color = AurumColors.textDim,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             if (!isSplit) {
                 Text(
                     text = Fmt.money(tx.shares * tx.price + if (isBuy) tx.fees else -tx.fees),
                     style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
@@ -304,12 +318,13 @@ private fun SplitDialog(
     val valid = ratio != null && ratio > 0.0 && ratio != 1.0
     AlertDialog(
         onDismissRequest = onDismiss,
+        modifier = Modifier.imePadding(),
         containerColor = AurumColors.surface,
         titleContentColor = AurumColors.text,
         textContentColor = AurumColors.textDim,
         title = { Text("Record $symbol split") },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     "Enter the new-shares-per-old-share ratio: 4 for a 4-for-1 split, " +
                         "0.25 for a 1-for-4 reverse split. Shares multiply and average cost " +

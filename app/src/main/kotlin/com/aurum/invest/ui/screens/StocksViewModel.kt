@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /** One fully-hydrated watchlist row. */
@@ -108,6 +109,9 @@ class StocksViewModel(app: Application) : AndroidViewModel(app) {
 
         /** Trading days behind the "2 weeks" read. */
         private const val TWO_WEEK_BARS = 10
+
+        /** How often the live price ticker re-quotes the watchlist while it's on screen. */
+        private const val LIVE_PRICE_TICK_MS = 1_000L
     }
 
     init {
@@ -146,6 +150,28 @@ class StocksViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
             }
+        }
+        // Live price ticker: re-quotes every watchlist row once a second
+        // while this screen is actually on screen. Only the quote refreshes
+        // on this cadence — sparklines/advice/gold-link stay from the last
+        // full loadRows(), which would be far too expensive to redo every second.
+        viewModelScope.launch {
+            while (isActive) {
+                delay(LIVE_PRICE_TICK_MS)
+                if (_state.subscriptionCount.value == 0) continue
+                runCatching { tickLiveQuotes() }
+            }
+        }
+    }
+
+    private suspend fun tickLiveQuotes() {
+        val rows = _state.value.rows
+        if (rows.isEmpty()) return
+        val symbols = rows.map { it.symbol }.distinct()
+        val quotes = market.getQuotes(symbols, maxAgeMs = LIVE_PRICE_TICK_MS - 100L)
+        if (quotes.isEmpty()) return
+        _state.update { st ->
+            st.copy(rows = st.rows.map { row -> quotes[row.symbol]?.let { row.copy(quote = it) } ?: row })
         }
     }
 

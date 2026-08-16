@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -314,6 +315,7 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun OutlookCard(analysis: TechniqueAnalysis, price: Double?) {
     val outlook = analysis.outlook
@@ -324,13 +326,13 @@ private fun OutlookCard(analysis: TechniqueAnalysis, price: Double?) {
             color = AurumColors.text
         )
         Spacer(Modifier.height(10.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             PillTag(text = "${outlook.bullishCount} bullish", color = AurumColors.gain)
-            Spacer(Modifier.width(8.dp))
             PillTag(text = "${outlook.bearishCount} bearish", color = AurumColors.loss)
-            Spacer(Modifier.width(8.dp))
             PillTag(text = "${outlook.neutralCount} neutral", color = AurumColors.textDim)
-            Spacer(Modifier.weight(1f))
             Text(
                 text = "${outlook.confidence}% agree",
                 style = MaterialTheme.typography.labelMedium,
@@ -449,7 +451,9 @@ private fun TechniqueCard(
                 text = result.name,
                 style = MaterialTheme.typography.titleSmall,
                 color = AurumColors.text,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             if (trusted) {
                 PillTag(text = "Trusted", color = AurumColors.gold)
@@ -460,7 +464,9 @@ private fun TechniqueCard(
             Text(
                 text = "Strength ${result.strength}",
                 style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.textDim
+                color = AurumColors.textDim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
         Spacer(Modifier.height(14.dp))

@@ -379,7 +379,8 @@ private fun TargetCard(state: PreMarketState, tab: DeskTab, onEdit: () -> Unit) 
                     text = Fmt.pct(state.targetPct),
                     style = MaterialTheme.typography.displaySmall,
                     color = AurumColors.gold,
-                    maxLines = 1
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             // Capped so the count can never squeeze the goal beside it.
@@ -393,7 +394,8 @@ private fun TargetCard(state: PreMarketState, tab: DeskTab, onEdit: () -> Unit) 
                         text = "$reliable of $rowsShown",
                         style = MaterialTheme.typography.titleMedium,
                         color = if (reliable > 0) AurumColors.gain else AurumColors.loss,
-                        maxLines = 1
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = when (tab) {
@@ -414,7 +416,9 @@ private fun TargetCard(state: PreMarketState, tab: DeskTab, onEdit: () -> Unit) 
             text = if (asOf > 0L) "Prices ${Fmt.timeAgo(asOf)} · tap to change the target"
             else "Tap to change the target",
             style = MaterialTheme.typography.labelSmall,
-            color = AurumColors.textDim
+            color = AurumColors.textDim,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -888,7 +892,8 @@ private fun PickHeader(
             text = rank.toString().padStart(2, '0'),
             style = MaterialTheme.typography.headlineMedium,
             color = AurumColors.gold,
-            maxLines = 1
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
         Spacer(Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
@@ -897,7 +902,8 @@ private fun PickHeader(
                     text = symbol,
                     style = MaterialTheme.typography.titleMedium,
                     color = AurumColors.text,
-                    maxLines = 1
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 if (name.isNotBlank()) {
                     Spacer(Modifier.width(8.dp))
@@ -997,7 +1003,8 @@ private fun OddsBlock(
                 text = String.format(java.util.Locale.US, "%.0f%% hit rate", hitRatePct),
                 style = MaterialTheme.typography.labelMedium,
                 color = oddsColor,
-                maxLines = 1
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }

@@ -40,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -134,21 +135,25 @@ fun ReportsScreen(onBack: () -> Unit, onOpenAdviceHistory: () -> Unit = {}) {
 
         Column(modifier = Modifier.padding(horizontal = 20.dp)) {
             Spacer(Modifier.height(8.dp))
+            WalletSummaryCard(state = state)
+            Spacer(Modifier.height(14.dp))
             SegmentedToggle(
-                options = listOf("Daily", "Weekly", "Monthly"),
+                options = listOf("Daily", "Weekly", "Monthly", "Yearly"),
                 selected = when (period) {
                     "DAY" -> 0
                     "WEEK" -> 1
-                    else -> 2
+                    "MONTH" -> 2
+                    else -> 3
                 },
-                onSelect = { period = listOf("DAY", "WEEK", "MONTH")[it] }
+                onSelect = { period = listOf("DAY", "WEEK", "MONTH", "YEAR")[it] }
             )
         }
 
         val reports = when (period) {
             "DAY" -> state.daily
             "WEEK" -> state.weekly
-            else -> state.monthly
+            "MONTH" -> state.monthly
+            else -> state.yearly
         }
 
         if (state.loading) {
@@ -188,6 +193,38 @@ fun ReportsScreen(onBack: () -> Unit, onOpenAdviceHistory: () -> Unit = {}) {
 }
 
 @Composable
+private fun WalletSummaryCard(state: ReportsState) {
+    AurumCard(modifier = Modifier.fillMaxWidth()) {
+        if (state.walletConfigured) {
+            Row(modifier = Modifier.fillMaxWidth()) {
+                StatTile(
+                    label = "Wallet",
+                    value = Fmt.money(state.walletTotal),
+                    modifier = Modifier.weight(1f)
+                )
+                StatTile(
+                    label = "Invested",
+                    value = Fmt.money(state.invested),
+                    modifier = Modifier.weight(1f)
+                )
+                StatTile(
+                    label = "Liquidity",
+                    value = Fmt.money(state.liquidity),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        } else {
+            Text(
+                text = "Set your total wallet from the Portfolio tab to see invested vs. " +
+                    "liquidity here.",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.textDim
+            )
+        }
+    }
+}
+
+@Composable
 private fun ReportCard(
     report: PeriodReport,
     onEditTrade: (TradeLine) -> Unit,
@@ -204,7 +241,9 @@ private fun ReportCard(
                 text = report.label,
                 style = MaterialTheme.typography.titleSmall,
                 color = AurumColors.text,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
             DeltaMoney(
                 value = report.realizedPl,
@@ -217,57 +256,52 @@ private fun ReportCard(
             color = AurumColors.textDim,
             modifier = Modifier.align(Alignment.End)
         )
-        Spacer(Modifier.height(12.dp))
-        Row(modifier = Modifier.fillMaxWidth()) {
-            StatTile(
-                label = "Buys",
-                value = "${report.buysCount} · ${Fmt.money(report.buysTotal)}",
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Accumulated P/L",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim,
                 modifier = Modifier.weight(1f)
             )
-            StatTile(
-                label = "Sells",
-                value = "${report.sellsCount} · ${Fmt.money(report.sellsTotal)}",
-                modifier = Modifier.weight(1f)
-            )
-            StatTile(
-                label = "Trades",
-                value = "${report.trades.size}",
-                modifier = Modifier.weight(0.6f)
+            DeltaMoney(
+                value = report.accumulatedPl,
+                style = MaterialTheme.typography.titleSmall
             )
         }
+        Spacer(Modifier.height(12.dp))
 
         val best = report.bestTrade
         val worst = report.worstTrade
-        if (best != null && best.realizedPl != null) {
-            Spacer(Modifier.height(10.dp))
-            Row {
-                Text(
-                    text = "Best  ",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim
-                )
-                Text(
-                    text = "${best.symbol} ${Fmt.signedMoney(best.realizedPl)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.deltaColor(best.realizedPl)
-                )
-                if (worst != null && worst.realizedPl != null && worst !== best) {
-                    Text(
-                        text = "   ·   Worst  ",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AurumColors.textDim
-                    )
-                    Text(
-                        text = "${worst.symbol} ${Fmt.signedMoney(worst.realizedPl)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AurumColors.deltaColor(worst.realizedPl)
-                    )
-                }
-            }
-        }
 
         AnimatedVisibility(visible = expanded) {
             Column {
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    StatTile(
+                        label = "Buys",
+                        value = "${report.buysCount} · ${Fmt.money(report.buysTotal)}",
+                        modifier = Modifier.weight(1f)
+                    )
+                    StatTile(
+                        label = "Sells",
+                        value = "${report.sellsCount} · ${Fmt.money(report.sellsTotal)}",
+                        modifier = Modifier.weight(1f)
+                    )
+                    StatTile(
+                        label = "Trades",
+                        value = "${report.trades.size}",
+                        modifier = Modifier.weight(0.6f)
+                    )
+                }
+                if (best != null && best.realizedPl != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        BestWorstLine(label = "Best", trade = best)
+                        if (worst != null && worst.realizedPl != null && worst !== best) {
+                            BestWorstLine(label = "Worst", trade = worst)
+                        }
+                    }
+                }
                 Spacer(Modifier.height(12.dp))
                 HorizontalDivider(color = AurumColors.hairline, thickness = 1.dp)
                 report.trades.forEach { trade ->
@@ -313,7 +347,9 @@ private fun TradeRow(trade: TradeLine, onEdit: () -> Unit, onDelete: () -> Unit)
             Text(
                 text = "${trade.symbol}  ·  ${Fmt.qty(trade.shares)} @ ${Fmt.money(trade.price)}",
                 style = MaterialTheme.typography.bodySmall,
-                color = AurumColors.text
+                color = AurumColors.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             Text(
                 text = Fmt.dateShort(trade.ts),
@@ -350,5 +386,24 @@ private fun TradeRow(trade: TradeLine, onEdit: () -> Unit, onDelete: () -> Unit)
                 modifier = Modifier.size(15.dp)
             )
         }
+    }
+}
+
+@Composable
+private fun BestWorstLine(label: String, trade: TradeLine) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = "$label  ",
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+        Text(
+            text = "${trade.symbol} ${Fmt.signedMoney(trade.realizedPl ?: 0.0)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.deltaColor(trade.realizedPl ?: 0.0),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
     }
 }

@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
@@ -58,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -67,8 +69,8 @@ import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.PortfolioSummary
-import com.aurum.invest.data.repo.CashState
 import com.aurum.invest.data.repo.TargetsRepository
+import com.aurum.invest.data.repo.WalletState
 import com.aurum.invest.ui.components.ActionBadge
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
@@ -95,14 +97,15 @@ fun DashboardScreen(
     val state by vm.state.collectAsStateWithLifecycle()
     var confirmRemove by remember { mutableStateOf<String?>(null) }
     var targetFor by remember { mutableStateOf<HoldingRow?>(null) }
-    var showCashDialog by remember { mutableStateOf(false) }
+    var showWalletDialog by remember { mutableStateOf(false) }
 
-    if (showCashDialog) {
-        CashEventDialog(
-            onDismiss = { showCashDialog = false },
-            onSave = { type, amount, symbol, note ->
-                vm.addCashEvent(type, amount, symbol, note)
-                showCashDialog = false
+    if (showWalletDialog) {
+        WalletSetupDialog(
+            current = state.wallet.total,
+            onDismiss = { showWalletDialog = false },
+            onSave = { amount ->
+                vm.setWalletTotal(amount)
+                showWalletDialog = false
             }
         )
     }
@@ -173,7 +176,7 @@ fun DashboardScreen(
                     Spacer(Modifier.height(20.dp))
                     HeroSummary(
                         summary = state.summary,
-                        cash = state.cash,
+                        wallet = state.wallet,
                         pricesAsOf = state.pricesAsOf
                     )
                 }
@@ -181,12 +184,12 @@ fun DashboardScreen(
                 item {
                     Spacer(Modifier.height(20.dp))
                     SummaryTiles(summary = state.summary)
-                    TextButton(onClick = { showCashDialog = true }) {
+                    TextButton(onClick = { showWalletDialog = true }) {
                         Text(
-                            text = if (state.cash.tracked) {
-                                "Record cash · deposit, dividend, fee…"
+                            text = if (state.wallet.configured) {
+                                "Edit total wallet"
                             } else {
-                                "Track brokerage cash · record a deposit to start"
+                                "Set your total wallet"
                             },
                             style = MaterialTheme.typography.labelMedium,
                             color = AurumColors.gold
@@ -416,7 +419,9 @@ private fun SectorAllocation(book: BookContext) {
                 Text(
                     text = "  ${slice.sector}",
                     style = MaterialTheme.typography.labelMedium,
-                    color = AurumColors.text
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Spacer(Modifier.weight(1f))
                 Text(
@@ -424,10 +429,33 @@ private fun SectorAllocation(book: BookContext) {
                         (if (slice.symbols.size > 4) " +${slice.symbols.size - 4}" else "") +
                         "  ·  " + Fmt.pct(slice.weightPct),
                     style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 180.dp)
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun WalletStat(label: String, value: Double, modifier: Modifier = Modifier) {
+    Column(modifier = modifier) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = Fmt.money(value),
+            style = MaterialTheme.typography.bodyMedium,
+            color = AurumColors.text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -482,7 +510,7 @@ private fun HeaderRow(
 @Composable
 private fun HeroSummary(
     summary: PortfolioSummary?,
-    cash: CashState = CashState.UNTRACKED,
+    wallet: WalletState = WalletState.UNSET,
     pricesAsOf: Long = 0L
 ) {
     val s = summary ?: PortfolioSummary(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
@@ -510,14 +538,28 @@ private fun HeroSummary(
                 color = AurumColors.gold
             )
         }
-        if (cash.tracked) {
+        if (wallet.configured) {
             Spacer(Modifier.height(2.dp))
-            Text(
-                text = "Cash ${Fmt.money(cash.balance)} · Total equity " +
-                    Fmt.money(cash.balance + s.marketValue),
-                style = MaterialTheme.typography.bodySmall,
-                color = AurumColors.textDim
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                WalletStat(
+                    label = "Wallet",
+                    value = wallet.total,
+                    modifier = Modifier.weight(1f)
+                )
+                WalletStat(
+                    label = "Invested",
+                    value = wallet.invested,
+                    modifier = Modifier.weight(1f)
+                )
+                WalletStat(
+                    label = "Liquidity",
+                    value = wallet.liquidity,
+                    modifier = Modifier.weight(1f)
+                )
+            }
         }
         if (pricesAsOf > 0L && System.currentTimeMillis() - pricesAsOf > 15 * 60_000L) {
             Text(
@@ -608,13 +650,17 @@ private fun HoldingCard(
                     Text(
                         text = position.symbol,
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
+                        color = AurumColors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 Text(
                     text = "${Fmt.qty(position.shares)} shares · ${Fmt.money(view.marketValue)}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             if (row.spark.size >= 2) {
@@ -629,7 +675,9 @@ private fun HoldingCard(
                     Text(
                         text = Fmt.money(price),
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
+                        color = AurumColors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (quote != null) {
                         DeltaPct(
@@ -643,57 +691,70 @@ private fun HoldingCard(
                     Text(
                         text = "no price",
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.gold
+                        color = AurumColors.gold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = "at cost ${Fmt.money(position.avgCost)}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = AurumColors.textDim
+                        color = AurumColors.textDim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
         }
         Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "Unrealized  ",
-                style = MaterialTheme.typography.bodySmall,
-                color = AurumColors.textDim
-            )
-            DeltaMoney(value = view.unrealizedPl, style = MaterialTheme.typography.bodySmall)
-            Text(
-                text = "  ·  ",
-                style = MaterialTheme.typography.bodySmall,
-                color = AurumColors.textDim
-            )
-            DeltaPct(value = view.unrealizedPlPct, style = MaterialTheme.typography.bodySmall)
-            Spacer(Modifier.weight(1f))
-            // Dashboard advice is computed WITHOUT news tone (the detail
-            // screen's full read includes it) — the label keeps that honest.
-            row.advice?.let {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "tech read ",
-                    style = MaterialTheme.typography.labelSmall,
+                    text = "Unrealized  ",
+                    style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
-                ActionBadge(action = it.action)
-            }
-            Spacer(Modifier.width(6.dp))
-            IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
-                Icon(
-                    Icons.Rounded.Edit,
-                    contentDescription = "Edit ${position.symbol} trades",
-                    tint = AurumColors.textDim,
-                    modifier = Modifier.size(16.dp)
+                DeltaMoney(value = view.unrealizedPl, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    text = "  ·  ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
                 )
+                DeltaPct(value = view.unrealizedPlPct, style = MaterialTheme.typography.bodySmall)
             }
-            IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
-                Icon(
-                    Icons.Rounded.Close,
-                    contentDescription = "Remove ${position.symbol} from portfolio",
-                    tint = AurumColors.textDim,
-                    modifier = Modifier.size(16.dp)
-                )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Dashboard advice is computed WITHOUT news tone (the detail
+                // screen's full read includes it) — the label keeps that honest.
+                row.advice?.let {
+                    Text(
+                        text = "tech read ",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    ActionBadge(action = it.action)
+                }
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        Icons.Rounded.Edit,
+                        contentDescription = "Edit ${position.symbol} trades",
+                        tint = AurumColors.textDim,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+                IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        Icons.Rounded.Close,
+                        contentDescription = "Remove ${position.symbol} from portfolio",
+                        tint = AurumColors.textDim,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         }
         if (row.ext?.preMarketPct != null || row.ext?.postMarketPct != null) {
@@ -763,7 +824,9 @@ private fun SellTargetFlag(row: HoldingRow, onClick: () -> Unit) {
                 text = if (reached) "Target reached — sell at ${Fmt.money(targetPrice)}"
                 else "Sell at ${Fmt.money(targetPrice)}",
                 style = MaterialTheme.typography.titleSmall,
-                color = accent
+                color = accent,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             Spacer(Modifier.height(2.dp))
             val distance = row.distanceToTargetPct
@@ -782,7 +845,9 @@ private fun SellTargetFlag(row: HoldingRow, onClick: () -> Unit) {
                     append(" · before fees & tax")
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = AurumColors.textDim
+                color = AurumColors.textDim,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
         }
         val gain = row.targetPct?.let { row.view.position.shares * row.view.position.avgCost * it / 100.0 }
@@ -790,7 +855,10 @@ private fun SellTargetFlag(row: HoldingRow, onClick: () -> Unit) {
             Text(
                 text = Fmt.signedMoney(gain),
                 style = MaterialTheme.typography.titleSmall,
-                color = accent
+                color = accent,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 96.dp)
             )
         }
     }
@@ -911,18 +979,19 @@ private fun SellTargetDialog(
 }
 
 /**
- * Records a brokerage-cash event. Cash tracking is opt-in truth: the first
- * DEPOSIT starts it, and until then the dashboard never invents a balance.
+ * Lets the user state the single number the wallet math is built on: their
+ * total investing cash. Invested / liquidity / net worth are all derived
+ * from this plus the ledger — never asked for separately.
  */
 @Composable
-private fun CashEventDialog(
+private fun WalletSetupDialog(
+    current: Double,
     onDismiss: () -> Unit,
-    onSave: (type: String, amount: Double, symbol: String, note: String) -> Unit
+    onSave: (Double) -> Unit
 ) {
-    var type by remember { mutableStateOf(com.aurum.invest.data.db.CashType.DEPOSIT) }
-    var amountText by remember { mutableStateOf("") }
-    var symbol by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
+    var amountText by remember {
+        mutableStateOf(if (current > 0.0) Fmt.money(current).filter { it.isDigit() || it == '.' } else "")
+    }
     val amount = amountText.replace(",", "").trim().toDoubleOrNull()
     val valid = amount != null && amount > 0.0
 
@@ -931,63 +1000,29 @@ private fun CashEventDialog(
         containerColor = AurumColors.surface,
         titleContentColor = AurumColors.text,
         textContentColor = AurumColors.textDim,
-        title = { Text("Record cash event") },
+        title = { Text("Set your total wallet") },
         text = {
             Column {
                 Text(
-                    text = "Deposits and withdrawals track your brokerage cash; dividends, " +
-                        "interest, and fees keep the account's P/L complete. Amounts are USD.",
+                    text = "Enter the total cash you hold for investing. The app works out " +
+                        "what's invested from your ledger and shows the rest as liquidity.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
                 Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    com.aurum.invest.data.db.CashType.ALL.forEach { t ->
-                        val selected = t == type
-                        Text(
-                            text = t.lowercase().replaceFirstChar { it.uppercase() },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (selected) AurumColors.bg else AurumColors.textDim,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(if (selected) AurumColors.gold else AurumColors.surfaceHigh)
-                                .clickable { type = t }
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                        )
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
                     value = amountText,
                     onValueChange = { amountText = it },
-                    label = { Text("Amount ($)") },
+                    label = { Text("Total wallet ($)") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                if (type == com.aurum.invest.data.db.CashType.DIVIDEND) {
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(
-                        value = symbol,
-                        onValueChange = { input -> symbol = input.uppercase().filter { it.isLetter() }.take(5) },
-                        label = { Text("Paying symbol (optional)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = note,
-                    onValueChange = { note = it.take(100) },
-                    label = { Text("Note (optional)") },
-                    singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
         },
         confirmButton = {
             Button(
-                onClick = { if (amount != null) onSave(type, amount, symbol, note) },
+                onClick = { if (amount != null) onSave(amount) },
                 enabled = valid,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = AurumColors.gold,
@@ -995,7 +1030,7 @@ private fun CashEventDialog(
                     disabledContainerColor = AurumColors.surfaceHigh,
                     disabledContentColor = AurumColors.textDim
                 )
-            ) { Text("Record") }
+            ) { Text("Save") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel", color = AurumColors.textDim) }

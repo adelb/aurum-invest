@@ -1,6 +1,12 @@
 package com.aurum.invest.data.repo
 
 import com.aurum.invest.analytics.BookContext
+import com.aurum.invest.analytics.FlowVerdict
+import com.aurum.invest.analytics.Indicators
+import com.aurum.invest.analytics.LiquidityAllocationEngine
+import com.aurum.invest.analytics.LiquidityAllocationLine
+import com.aurum.invest.analytics.LiquidityCandidate
+import com.aurum.invest.analytics.LiquidityPlan
 import com.aurum.invest.analytics.MarketPulse
 import com.aurum.invest.analytics.MarketRating
 import com.aurum.invest.analytics.MoneyFlowEngine
@@ -11,16 +17,21 @@ import com.aurum.invest.analytics.NextWeekPlan
 import com.aurum.invest.analytics.NextWeekPlanner
 import com.aurum.invest.analytics.PortfolioAdvisor
 import com.aurum.invest.analytics.PortfolioPerformance
+import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.analytics.PortfolioPerformanceEngine
 import com.aurum.invest.analytics.PortfolioReview
+import com.aurum.invest.analytics.SectorAllocationTarget
 import com.aurum.invest.analytics.SectorStrategy
 import com.aurum.invest.analytics.SectorTrend
 import com.aurum.invest.analytics.SectorTrends
+import com.aurum.invest.analytics.TechniqueVerdict
 import com.aurum.invest.analytics.UnverifiedHolding
 import com.aurum.invest.analytics.WeeklyStrategy
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.db.CacheDao
 import com.aurum.invest.data.db.CacheEntity
+import com.aurum.invest.data.model.EntryPick
+import com.aurum.invest.data.model.PowerPick
 import com.aurum.invest.data.model.Position
 import com.aurum.invest.data.model.PositionView
 import com.aurum.invest.data.model.Quote
@@ -29,6 +40,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlin.math.abs
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -49,7 +61,11 @@ class WealthRepository(
     /** Immutable trail of emitted recommendations, for later outcome review. */
     private val adviceLog: AdviceLogRepository? = null,
     /** Cash ledger — part of the equity curve when the user tracks it. */
-    private val cash: CashRepository? = null
+    private val cash: CashRepository? = null,
+    /** Today's entry/power-hour picks — the candidate universe for the liquidity plan. */
+    private val picks: PicksRepository? = null,
+    /** Best-effort analyst rating / market cap enrichment for liquidity candidates. */
+    private val fundamentals: FundamentalsRepository? = null
 ) {
 
     companion object {
@@ -60,6 +76,7 @@ class WealthRepository(
         private const val NEXT_SESSION_KEY = "nextsession:v2"
         private const val NS_NOTIFIED_PREFIX = "nextsession:notified:"
         private const val PREVIEW_KEY_PREFIX = "wealthplan:next:v2:"
+        private const val LIQUIDITY_KEY = "liquidityplan:v1"
 
         /** Stable identity for every ledger input that can change portfolio advice. */
         fun portfolioFingerprint(open: List<Position>): String =
@@ -431,6 +448,313 @@ class WealthRepository(
         } catch (_: Exception) {
             null
         }
+
+    // ---- liquidity allocation ------------------------------------------------
+
+    /** Stable identity for a plan's inputs — a wallet top-up or ledger change invalidates it. */
+    private fun liquidityFingerprint(liquidity: Double, book: BookContext): String =
+        "${liquidity.toBits()}|${book.totalValue.toBits()}|" +
+            book.heldWeights.entries.sortedBy { it.key }
+                .joinToString(",") { "${it.key}:${it.value.toBits()}" }
+
+    /**
+     * How much of the user's liquidity to deploy, and where — cached 30
+     * minutes per exact (liquidity, book) fingerprint, the same
+     * fingerprint-invalidation idiom as [getPortfolioReview]. Null only when
+     * nothing at all could be computed (e.g. market unreachable and no
+     * stale copy of this exact plan exists).
+     */
+    suspend fun getLiquidityPlan(
+        liquidity: Double,
+        book: BookContext,
+        maxAgeMs: Long = 1_800_000L
+    ): LiquidityPlan? {
+        val fp = liquidityFingerprint(liquidity, book)
+        val cached = getCache(LIQUIDITY_KEY)
+        val now = System.currentTimeMillis()
+        if (cached != null && now - cached.updatedAt <= maxAgeMs) {
+            cachedLiquidityPlan(cached.json, fp)?.let { return it }
+        }
+        return recomputeLiquidityPlan(liquidity, book)
+            ?: cached?.let { cachedLiquidityPlan(it.json, fp) }
+    }
+
+    suspend fun recomputeLiquidityPlan(liquidity: Double, book: BookContext): LiquidityPlan? {
+        return try {
+            val candidates = gatherLiquidityCandidates()
+            val flow = getMoneyFlow()
+            val trends = sectorTrendsCached()
+            val profile = settings?.let {
+                runCatching { it.investorProfile.first() }.getOrNull()
+            } ?: InvestorProfile.DEFAULT
+            val marketNote = runCatching { getMarketPulse() }.getOrNull()?.headline ?: ""
+            val plan = LiquidityAllocationEngine.build(
+                liquidity = liquidity,
+                book = book,
+                moneyFlow = flow,
+                sectorTrends = trends,
+                candidates = candidates,
+                profile = profile,
+                marketNote = marketNote
+            )
+            putCache(
+                LIQUIDITY_KEY,
+                JSONObject().apply {
+                    put("fp", liquidityFingerprint(liquidity, book))
+                    put("plan", liquidityPlanToJson(plan))
+                }.toString()
+            )
+            plan
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * The candidate universe for liquidity deployment: today's entry and
+     * power-hour picks, deduplicated by symbol (entry picks preferred — they
+     * carry the analyst rating field). Every per-symbol enrichment (candles,
+     * quote, sector, fundamentals) is wrapped so one bad symbol never aborts
+     * the whole gather.
+     */
+    private suspend fun gatherLiquidityCandidates(): List<LiquidityCandidate> {
+        val entries = try {
+            picks?.ensureEntries() ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val power = try {
+            picks?.ensurePower() ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        if (entries.isEmpty() && power.isEmpty()) return emptyList()
+
+        val bySymbol = LinkedHashMap<String, Pair<EntryPick?, PowerPick?>>()
+        entries.forEach { e ->
+            val sym = e.symbol.trim().uppercase()
+            bySymbol[sym] = e to bySymbol[sym]?.second
+        }
+        power.forEach { p ->
+            val sym = p.symbol.trim().uppercase()
+            val existing = bySymbol[sym]
+            bySymbol[sym] = existing?.first to p
+        }
+
+        val symbols = bySymbol.keys.toList()
+        val sectors = try {
+            market.getSectors(symbols)
+        } catch (_: Exception) {
+            emptyMap()
+        }
+        val quotes = try {
+            market.getQuotes(symbols)
+        } catch (_: Exception) {
+            emptyMap()
+        }
+        return coroutineScope {
+            symbols.map { sym ->
+                async {
+                    runCatching { buildLiquidityCandidate(sym, bySymbol.getValue(sym), sectors, quotes) }
+                        .getOrNull()
+                }
+            }.awaitAll()
+        }.filterNotNull()
+    }
+
+    /** One symbol's [LiquidityCandidate], best-effort — never throws, may return null. */
+    private suspend fun buildLiquidityCandidate(
+        symbol: String,
+        pick: Pair<EntryPick?, PowerPick?>,
+        sectors: Map<String, String>,
+        quotes: Map<String, Quote>
+    ): LiquidityCandidate? {
+        val (entry, power) = pick
+        if (entry == null && power == null) return null
+        val name = entry?.name ?: power?.name ?: symbol
+        val quote = quotes[symbol]
+        val candles = try {
+            market.getDailyCandles(symbol, 210)
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val closes = candles.map { it.close }
+        val fiftyDayAvg = Indicators.sma(closes, 50) ?: 0.0
+        val twoHundredDayAvg = Indicators.sma(closes, 200) ?: 0.0
+        val volumeRatio = power?.volumeRatio ?: run {
+            if (candles.size < 21) {
+                1.0
+            } else {
+                val recent = candles.takeLast(21)
+                val last = recent.last().volume.toDouble()
+                val avg = recent.dropLast(1).map { it.volume.toDouble() }.average()
+                if (avg > 0.0) last / avg else 1.0
+            }
+        }
+        val rsi = entry?.rsi ?: power?.rsi ?: Indicators.rsi(closes) ?: 50.0
+        val techDirection = runCatching {
+            TechniqueVerdict.valueOf(entry?.techDirection ?: power?.techDirection ?: "NEUTRAL")
+        }.getOrDefault(TechniqueVerdict.NEUTRAL)
+        val techConfidence = entry?.techConfidence ?: power?.techConfidence ?: 0
+        val price = quote?.price?.takeIf { it > 0.0 }
+            ?: entry?.price ?: power?.price ?: candles.lastOrNull()?.close ?: 0.0
+        val dayChangePct = quote?.dayChangePct ?: entry?.dayChangePct ?: power?.dayChangePct ?: 0.0
+        val entryScore = entry?.score ?: power?.score ?: 0.0
+        val newsScore = power?.newsScore ?: 0
+        val newsHeadline = power?.headline ?: ""
+        val sector = sectors[symbol] ?: PortfolioLens.UNCLASSIFIED
+
+        var analystRating = entry?.analystRating
+        var marketCap = 0.0
+        runCatching {
+            fundamentals?.getFundamentals(symbol)?.data?.let { f ->
+                marketCap = f.marketCap ?: 0.0
+                if (analystRating == null) analystRating = f.recommendationMean
+            }
+        }
+
+        val historyNote = if (fiftyDayAvg > 0.0 && price > 0.0) {
+            val vs50 = (price - fiftyDayAvg) / fiftyDayAvg * 100.0
+            "%s is %.1f%% %s its 50-day average".format(
+                symbol, abs(vs50), if (vs50 >= 0) "above" else "below"
+            )
+        } else {
+            ""
+        }
+        val reason = entry?.reason ?: power?.reason ?: ""
+
+        return LiquidityCandidate(
+            symbol = symbol,
+            name = name,
+            sector = sector,
+            price = price,
+            entryScore = entryScore,
+            volumeRatio = volumeRatio,
+            dayChangePct = dayChangePct,
+            rsi = rsi,
+            techDirection = techDirection,
+            techConfidence = techConfidence,
+            newsScore = newsScore,
+            newsHeadline = newsHeadline,
+            analystRating = analystRating,
+            fiftyDayAvg = fiftyDayAvg,
+            twoHundredDayAvg = twoHundredDayAvg,
+            marketCap = marketCap,
+            historyNote = historyNote,
+            reason = reason
+        )
+    }
+
+    private fun liquidityPlanToJson(plan: LiquidityPlan): String = JSONObject().apply {
+        put("computedAt", plan.computedAt)
+        put("liquidity", plan.liquidity)
+        put("headline", plan.headline)
+        put("marketNote", plan.marketNote)
+        put("reserveCash", plan.reserveCash)
+        put("reserveReason", plan.reserveReason)
+        put("policyNote", plan.policyNote)
+        put("caveat", plan.caveat)
+        put(
+            "sectorTargets",
+            JSONArray().apply {
+                plan.sectorTargets.forEach { t ->
+                    put(
+                        JSONObject().apply {
+                            put("sector", t.sector)
+                            put("currentPct", t.currentPct)
+                            put("targetPct", t.targetPct)
+                            put("flow", t.flow.name)
+                            put("note", t.note)
+                        }
+                    )
+                }
+            }
+        )
+        put(
+            "lines",
+            JSONArray().apply {
+                plan.lines.forEach { l ->
+                    put(
+                        JSONObject().apply {
+                            put("rank", l.rank)
+                            put("symbol", l.symbol)
+                            put("name", l.name)
+                            put("sector", l.sector)
+                            put("amount", l.amount)
+                            put("approxShares", l.approxShares)
+                            put("price", l.price)
+                            put("confidence", l.confidence)
+                            put("rationale", JSONArray(l.rationale))
+                        }
+                    )
+                }
+            }
+        )
+    }.toString()
+
+    private fun liquidityPlanFromJson(json: String): LiquidityPlan? = try {
+        val o = JSONObject(json)
+        val sectorTargets = buildList {
+            val arr = o.optJSONArray("sectorTargets") ?: JSONArray()
+            for (i in 0 until arr.length()) {
+                val s = arr.getJSONObject(i)
+                add(
+                    SectorAllocationTarget(
+                        sector = s.optString("sector"),
+                        currentPct = s.optDouble("currentPct"),
+                        targetPct = s.optDouble("targetPct"),
+                        flow = runCatching { FlowVerdict.valueOf(s.optString("flow")) }
+                            .getOrDefault(FlowVerdict.NEUTRAL),
+                        note = s.optString("note")
+                    )
+                )
+            }
+        }
+        val lines = buildList {
+            val arr = o.optJSONArray("lines") ?: JSONArray()
+            for (i in 0 until arr.length()) {
+                val l = arr.getJSONObject(i)
+                val rationaleArr = l.optJSONArray("rationale") ?: JSONArray()
+                val rationale = buildList {
+                    for (j in 0 until rationaleArr.length()) add(rationaleArr.optString(j))
+                }
+                add(
+                    LiquidityAllocationLine(
+                        rank = l.optInt("rank"),
+                        symbol = l.optString("symbol"),
+                        name = l.optString("name"),
+                        sector = l.optString("sector"),
+                        amount = l.optDouble("amount"),
+                        approxShares = l.optDouble("approxShares"),
+                        price = l.optDouble("price"),
+                        confidence = l.optInt("confidence"),
+                        rationale = rationale
+                    )
+                )
+            }
+        }
+        LiquidityPlan(
+            computedAt = o.optLong("computedAt"),
+            liquidity = o.optDouble("liquidity"),
+            headline = o.optString("headline"),
+            marketNote = o.optString("marketNote"),
+            sectorTargets = sectorTargets,
+            lines = lines,
+            reserveCash = o.optDouble("reserveCash"),
+            reserveReason = o.optString("reserveReason"),
+            policyNote = o.optString("policyNote"),
+            caveat = o.optString("caveat")
+        )
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun cachedLiquidityPlan(json: String, fingerprint: String): LiquidityPlan? = try {
+        val o = JSONObject(json)
+        if (o.optString("fp") == fingerprint) liquidityPlanFromJson(o.optString("plan")) else null
+    } catch (_: Exception) {
+        null
+    }
 
     // ---- next session -------------------------------------------------------
 

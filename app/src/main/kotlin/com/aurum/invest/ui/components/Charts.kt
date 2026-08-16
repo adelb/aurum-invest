@@ -269,11 +269,18 @@ fun ZoomablePriceChart(
         )
 
         // Date axis: first / middle / last visible bar. Intraday windows get
-        // times, multi-day windows get dates.
+        // times; multi-day windows get dates; windows spanning a year or more
+        // (1Y, 5Y, Max) must show the year — otherwise labels like "Jan" /
+        // "Jun" / "Jan" repeat with no way to tell which year is which.
         if (ts.isNotEmpty()) {
-            val intraday = ts.last() - ts.first() <= 48L * 3_600_000L
-            fun axisLabel(t: Long): String =
-                if (intraday) Fmt.timeShort(t) else Fmt.dateShort(t)
+            val visibleSpanMs = ts.last() - ts.first()
+            val intraday = visibleSpanMs <= 48L * 3_600_000L
+            val yearsApart = visibleSpanMs >= 300L * 24 * 3_600_000L
+            fun axisLabel(t: Long): String = when {
+                intraday -> Fmt.timeShort(t)
+                yearsApart -> Fmt.dateWithYear(t)
+                else -> Fmt.dateShort(t)
+            }
             val slots = listOf(0, win.size / 2, win.size - 1).distinct()
             for (i in slots) {
                 val text = AnnotatedString(axisLabel(ts[i]))

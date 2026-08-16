@@ -2,7 +2,9 @@
 
 **Date:** 2026-08-16 · **Against:** `AURUM_ADVISORY_GAP_AUDIT.md` (2026-08-16) · **Version:** 5.3.1 → 6.0 (versionCode 38)
 
-Every finding in the audit was addressed. Verification: `:app:testDebugUnitTest` — **50/50 pass** (was 0 tests); `:app:assembleDebug` — **BUILD SUCCESSFUL**; Room schema exported (`app/schemas/…/3.json`).
+> **Superseded implementation-claim report.** The eight-agent re-audit in `AURUM_ADVISORY_GAP_AUDIT.md` verified **3 Fixed and 18 Partial** findings against the original acceptance gates. The tables below describe intended remediation slices; their “Fixed” labels do not mean the full original gates were closed.
+
+Verification remains accurate: `:app:testDebugUnitTest` — **50/50 pass** (was 0 tests); `:app:assembleDebug` — **BUILD SUCCESSFUL**; Room schema exported (`app/schemas/…/3.json`).
 
 ## Critical findings
 

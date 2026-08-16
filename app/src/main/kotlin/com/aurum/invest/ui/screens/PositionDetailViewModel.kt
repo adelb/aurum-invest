@@ -23,10 +23,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /** One chart series: closes with index-aligned bar timestamps. */
@@ -81,6 +83,36 @@ class PositionDetailViewModel(app: Application) : AndroidViewModel(app) {
     private val symKey: String get() = symbol.trim().uppercase()
     private var loadJob: Job? = null
     private var alertsJob: Job? = null
+
+    companion object {
+        /** How often the live price ticker re-prices the header quote while this screen is visible. */
+        private const val LIVE_PRICE_TICK_MS = 1_000L
+    }
+
+    init {
+        // Live price ticker: re-quotes the symbol once a second while this
+        // screen is actually on screen. Only the quote (and the numbers
+        // derived from it — market value, unrealized P/L) refresh on this
+        // cadence; charts, news, and fundamentals stay from the last full
+        // reload(), which would be far too expensive to redo every second.
+        viewModelScope.launch {
+            while (isActive) {
+                delay(LIVE_PRICE_TICK_MS)
+                if (_state.subscriptionCount.value == 0) continue
+                if (symbol.isBlank() || _state.value.loading) continue
+                runCatching { tickLivePrice() }
+            }
+        }
+    }
+
+    private suspend fun tickLivePrice() {
+        val sym = symKey
+        val fresh = container.market.getQuote(sym, maxAgeMs = LIVE_PRICE_TICK_MS - 100L) ?: return
+        _state.update { s ->
+            val view = s.position?.let { PortfolioRepository.toView(it, fresh) }
+            s.copy(quote = fresh, view = view ?: s.view)
+        }
+    }
 
     /** Idempotent entry point: sets the symbol and loads (once) for it. */
     fun start(symbol: String) {

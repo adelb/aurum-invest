@@ -8,6 +8,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -60,7 +63,6 @@ import com.aurum.invest.analytics.RotationState
 import com.aurum.invest.analytics.StockCatalog
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.GoldLink
-import java.util.Locale
 import com.aurum.invest.ui.components.ActionBadge
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
@@ -71,6 +73,7 @@ import com.aurum.invest.ui.components.SectionHeader
 import com.aurum.invest.ui.components.SegmentedToggle
 import com.aurum.invest.ui.components.Sparkline
 import com.aurum.invest.ui.theme.AurumColors
+import java.util.Locale
 
 /**
  * The Stocks tab: one toggle between the personal Watchlist and market Search.
@@ -405,7 +408,9 @@ private fun SectorBrowse(
                     Text(
                         text = sector.name,
                         style = MaterialTheme.typography.labelMedium,
-                        color = if (selected) AurumColors.bg else AurumColors.textDim
+                        color = if (selected) AurumColors.bg else AurumColors.textDim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -555,7 +560,10 @@ private fun SectorPulseCard(state: StocksState) {
                         state.breakouts.joinToString(", ") { it.symbol } +
                         " — pressing highs on volume.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.gain
+                    color = AurumColors.gain,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
             }
             else -> Text(
@@ -569,6 +577,7 @@ private fun SectorPulseCard(state: StocksState) {
 
 // -------------------------------------------------------------------- pieces
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun BrowseRowCard(
     row: BrowseRow,
@@ -585,29 +594,13 @@ private fun BrowseRowCard(
     AurumCard(modifier = cardModifier, onClick = onOpen) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = row.symbol,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
-                    )
-                    if (row.top) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        PillTag(text = "Top 2 weeks", color = AurumColors.gold)
-                    }
-                    if (row.breakout != null) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        PillTag(text = "Next week", color = AurumColors.gain)
-                    }
-                    val held = row.heldPct
-                    if (held != null) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        PillTag(
-                            text = String.format(Locale.US, "Held · %.0f%%", held),
-                            color = AurumColors.gold
-                        )
-                    }
-                }
+                Text(
+                    text = row.symbol,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
                 if (row.name.isNotBlank()) {
                     Text(
                         text = row.name,
@@ -616,6 +609,26 @@ private fun BrowseRowCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                }
+                if (row.top || row.breakout != null || row.heldPct != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (row.top) {
+                            PillTag(text = "Top 2 weeks", color = AurumColors.gold)
+                        }
+                        if (row.breakout != null) {
+                            PillTag(text = "Next week", color = AurumColors.gain)
+                        }
+                        row.heldPct?.let { held ->
+                            PillTag(
+                                text = String.format(Locale.US, "Held · %.0f%%", held),
+                                color = AurumColors.gold
+                            )
+                        }
+                    }
                 }
             }
             Sparkline(
@@ -631,7 +644,10 @@ private fun BrowseRowCard(
                     Text(
                         text = Fmt.money(quote.price),
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
+                        color = AurumColors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 110.dp)
                     )
                     DeltaPct(
                         value = quote.dayChangePct,
@@ -641,7 +657,8 @@ private fun BrowseRowCard(
                     Text(
                         text = "—",
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.textDim
+                        color = AurumColors.textDim,
+                        maxLines = 1
                     )
                 }
             }
@@ -660,7 +677,10 @@ private fun BrowseRowCard(
                 Text(
                     text = breakout.reason,
                     style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.gain
+                    color = AurumColors.gain,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
             }
             if (breakout.newsNote.isNotBlank()) {
@@ -747,6 +767,7 @@ private fun SuggestionRow(symbol: String, name: String, onAdd: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun WatchRowCard(
     row: WatchRow,
@@ -774,7 +795,9 @@ private fun WatchRowCard(
                 Text(
                     text = row.symbol,
                     style = MaterialTheme.typography.titleMedium,
-                    color = AurumColors.text
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 if (row.name.isNotBlank()) {
                     Text(
@@ -799,7 +822,10 @@ private fun WatchRowCard(
                     Text(
                         text = Fmt.money(quote.price),
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
+                        color = AurumColors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 110.dp)
                     )
                     DeltaPct(
                         value = quote.dayChangePct,
@@ -809,66 +835,85 @@ private fun WatchRowCard(
                     Text(
                         text = "—",
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.textDim
+                        color = AurumColors.textDim,
+                        maxLines = 1
                     )
                 }
             }
         }
         Spacer(modifier = Modifier.height(10.dp))
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
             val advice = row.advice
-            if (advice != null) {
-                // Watchlist advice is technical-only (no news read) — the
-                // detail screen's full view includes headline tone.
-                Text(
-                    text = "tech read",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
-                ActionBadge(action = advice.action)
-                val entry = advice.suggestedBuyPrice
-                if (entry != null) {
-                    Text(
-                        text = "Entry ≈ " + Fmt.money(entry),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
-                    )
+            if (advice != null || (row.pinned && row.goldLink != null)) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (advice != null) {
+                        // Watchlist advice is technical-only (no news read) — the
+                        // detail screen's full view includes headline tone.
+                        Text(
+                            text = "tech read",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AurumColors.textDim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        ActionBadge(action = advice.action)
+                        advice.suggestedBuyPrice?.let { entry ->
+                            Text(
+                                text = "Entry ≈ " + Fmt.money(entry),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = AurumColors.gold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    if (row.pinned) {
+                        when (row.goldLink) {
+                            GoldLink.WITH_GOLD ->
+                                PillTag(text = "Moves with gold", color = AurumColors.gold)
+                            GoldLink.INVERSE_GOLD ->
+                                PillTag(text = "Inverse to gold", color = AurumColors.loss)
+                            GoldLink.NEUTRAL ->
+                                PillTag(text = "—", color = AurumColors.textDim)
+                            null -> Unit
+                        }
+                    }
                 }
+                Spacer(modifier = Modifier.height(8.dp))
             } else {
                 Text(
                     text = "Analyzing…",
                     style = MaterialTheme.typography.labelMedium,
                     color = AurumColors.textDim
                 )
+                Spacer(modifier = Modifier.height(8.dp))
             }
-            Spacer(modifier = Modifier.weight(1f))
-            if (row.pinned) {
-                when (row.goldLink) {
-                    GoldLink.WITH_GOLD -> PillTag(text = "Moves with gold", color = AurumColors.gold)
-                    GoldLink.INVERSE_GOLD -> PillTag(text = "Inverse to gold", color = AurumColors.loss)
-                    GoldLink.NEUTRAL -> PillTag(text = "—", color = AurumColors.textDim)
-                    null -> Unit
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Spacer(modifier = Modifier.weight(1f))
+                IconButton(onClick = onAnalyze, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        imageVector = Icons.Rounded.QueryStats,
+                        contentDescription = "Analyze ${row.symbol}",
+                        tint = AurumColors.gold,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
-            }
-            IconButton(onClick = onAnalyze, modifier = Modifier.size(36.dp)) {
-                Icon(
-                    imageVector = Icons.Rounded.QueryStats,
-                    contentDescription = "Analyze ${row.symbol}",
-                    tint = AurumColors.gold,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-            Spacer(modifier = Modifier.width(2.dp))
-            IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
-                Icon(
-                    imageVector = Icons.Rounded.Close,
-                    contentDescription = "Remove ${row.symbol}",
-                    tint = AurumColors.textDim,
-                    modifier = Modifier.size(16.dp)
-                )
+                Spacer(modifier = Modifier.width(2.dp))
+                IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Remove ${row.symbol}",
+                        tint = AurumColors.textDim,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         }
     }

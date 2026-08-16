@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -76,7 +78,9 @@ fun SegmentedToggle(
                 Text(
                     text = label,
                     style = MaterialTheme.typography.labelLarge,
-                    color = textColor
+                    color = textColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -87,12 +91,17 @@ fun SegmentedToggle(
  * Extended-hours chips: "Pre-market +1.2%" and "After hours −0.3%".
  * Renders nothing when the session has neither print.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ExtHoursChips(ext: ExtendedHours?, modifier: Modifier = Modifier) {
     val pre = ext?.preMarketPct
     val post = ext?.postMarketPct
     if (pre == null && post == null) return
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         if (pre != null) ExtHoursChip(label = "Pre-market", value = pre)
         if (post != null) ExtHoursChip(label = "After hours", value = post)
     }
@@ -145,13 +154,16 @@ fun SectionHeader(
 ) {
     Row(
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             text = title,
             style = MaterialTheme.typography.titleSmall,
-            color = AurumColors.textDim
+            color = AurumColors.textDim,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
         )
         trailing?.invoke()
     }

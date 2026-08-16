@@ -6,6 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow as WrappingFlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -50,6 +52,8 @@ import com.aurum.invest.analytics.FlowVerdict
 import com.aurum.invest.analytics.GapStatus
 import com.aurum.invest.analytics.HoldingAction
 import com.aurum.invest.analytics.HoldingVerdict
+import com.aurum.invest.analytics.LiquidityAllocationLine
+import com.aurum.invest.analytics.LiquidityPlan
 import com.aurum.invest.analytics.MarketCall
 import com.aurum.invest.analytics.MarketMover
 import com.aurum.invest.analytics.MarketRating
@@ -68,6 +72,7 @@ import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.analytics.PortfolioPerformance
 import com.aurum.invest.analytics.PortfolioReview
 import com.aurum.invest.analytics.RebalanceMove
+import com.aurum.invest.analytics.SectorAllocationTarget
 import com.aurum.invest.analytics.SectorFlow
 import com.aurum.invest.analytics.UnverifiedHolding
 import com.aurum.invest.analytics.WeeklyStrategy
@@ -155,12 +160,10 @@ private fun WealthContent(
     // Which sections the user has folded away. The review and the next-session
     // engine open by default — the rest starts folded so a first look reads in
     // seconds, not scrolls.
-    var collapsed by rememberSaveable {
-        mutableStateOf(HashSet(setOf("pulse", "flow", "book", "gaps", "weekmoney", "movers")))
-    }
+    var collapsed by rememberSaveable { mutableStateOf<Set<String>>(setOf("pulse", "flow", "book", "gaps", "weekmoney", "movers")) }
     fun open(key: String) = key !in collapsed
     fun toggle(key: String) {
-        collapsed = HashSet(collapsed).apply { if (!add(key)) remove(key) }
+        collapsed = if (key in collapsed) collapsed - key else collapsed + key
     }
 
     LazyColumn(
@@ -221,6 +224,25 @@ private fun WealthContent(
                         item { RebalanceCard(review.rebalance, onOpenAnalysis, onOpenDetail) }
                     }
                 }
+            }
+        }
+
+        // 1.5 — how much of the wallet's uninvested cash to deploy, and where.
+        item {
+            WealthSectionHeader(
+                title = "Your liquidity — where to put it to work",
+                expanded = open("liquidity"),
+                trailing = state.liquidityPlan?.let { Fmt.money(it.liquidity) }
+            ) { toggle("liquidity") }
+        }
+        if (open("liquidity")) {
+            item {
+                LiquidityPlanCard(
+                    plan = state.liquidityPlan,
+                    loading = state.liquidityPlanLoading,
+                    onOpenAnalysis = onOpenAnalysis,
+                    onOpenDetail = onOpenDetail
+                )
             }
         }
 
@@ -478,13 +500,17 @@ private fun WealthSectionHeader(
             text = title,
             style = MaterialTheme.typography.titleMedium,
             color = AurumColors.text,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
         )
         if (trailing != null) {
             Text(
                 text = trailing,
                 style = MaterialTheme.typography.titleSmall,
-                color = AurumColors.textDim
+                color = AurumColors.textDim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             Spacer(Modifier.width(8.dp))
         }
@@ -1487,6 +1513,181 @@ private fun FlowRow(s: SectorFlow) {
     }
 }
 
+// ---------------------------------------------------------------- liquidity plan
+
+@Composable
+private fun LiquidityPlanCard(
+    plan: LiquidityPlan?,
+    loading: Boolean,
+    onOpenAnalysis: (String) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
+    AurumCard {
+        if (plan == null) {
+            if (loading) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = AurumColors.gold,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        text = "Reading the entry board and sector flows for your liquidity…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.textDim
+                    )
+                }
+            } else {
+                Text(
+                    text = "Set your total wallet from the Portfolio tab to get a liquidity plan.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+            }
+            return@AurumCard
+        }
+        Text(
+            text = plan.headline,
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "Updated ${Fmt.timeAgo(plan.computedAt)} · liquidity ${Fmt.money(plan.liquidity)}" +
+                if (plan.marketNote.isNotBlank()) " · ${plan.marketNote}" else "",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+        if (plan.sectorTargets.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            plan.sectorTargets.forEach { t ->
+                LiquiditySectorRow(t)
+                Spacer(Modifier.height(6.dp))
+            }
+        }
+        if (plan.lines.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            HorizontalDivider(color = AurumColors.hairline, modifier = Modifier.padding(vertical = 6.dp))
+            plan.lines.forEach { line ->
+                LiquidityLineRow(line, onOpenAnalysis, onOpenDetail)
+                Spacer(Modifier.height(10.dp))
+            }
+        } else {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "No candidate cleared this profile's bar today — nothing was force-deployed.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
+        if (plan.reserveCash > 0.0) {
+            Spacer(Modifier.height(10.dp))
+            StatTile(label = "Reserve cash", value = Fmt.money(plan.reserveCash))
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = plan.reserveReason,
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = plan.policyNote,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = plan.caveat,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+    }
+}
+
+@Composable
+private fun LiquiditySectorRow(target: SectorAllocationTarget) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = target.sector,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = AurumColors.text
+            )
+            Text(
+                text = "${Fmt.pct(target.currentPct)} → ${Fmt.pct(target.targetPct)} · ${target.note}",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        when (target.flow) {
+            FlowVerdict.INFLOW -> PillTag(text = "Money in", color = AurumColors.gain)
+            FlowVerdict.OUTFLOW -> PillTag(text = "Money out", color = AurumColors.loss)
+            FlowVerdict.NEUTRAL -> PillTag(text = "Balanced", color = AurumColors.textDim)
+        }
+    }
+}
+
+@Composable
+private fun LiquidityLineRow(
+    line: LiquidityAllocationLine,
+    onOpenAnalysis: (String) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
+    Column(modifier = Modifier.clickable { onOpenDetail(line.symbol) }) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "#${line.rank}  ${line.symbol} · ${line.name}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "${line.sector} · ${Fmt.money(line.price)}/sh · " +
+                        "~${String.format(Locale.US, "%.2f", line.approxShares)} sh",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = Fmt.money(line.amount),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.gold
+                )
+                Text(
+                    text = "${line.confidence}% conf",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        line.rationale.take(2).forEach { r ->
+            Row(modifier = Modifier.padding(top = 2.dp)) {
+                Text(
+                    text = "•  ",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.gold
+                )
+                Text(
+                    text = r,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------- book
 
 /**
@@ -2051,6 +2252,7 @@ private fun NextWeekSectorsCard(sectors: List<NextWeekSector>) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun NextWeekStockCard(
     stock: NextWeekStock,
@@ -2060,13 +2262,15 @@ private fun NextWeekStockCard(
     AurumCard(onClick = { onOpenDetail(stock.symbol) }) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                WrappingFlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     Text(
                         text = stock.symbol,
                         style = MaterialTheme.typography.titleMedium,
                         color = AurumColors.text
                     )
-                    Spacer(Modifier.width(8.dp))
                     if (stock.sectorLabel.isNotEmpty()) {
                         PillTag(text = stock.sectorLabel, color = AurumColors.info)
                     }
@@ -2112,19 +2316,20 @@ private fun NextWeekStockCard(
             )
         }
         Spacer(Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        WrappingFlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             if (stock.techTotal > 0) {
                 PillTag(
                     text = "${stock.techBullish}/${stock.techTotal} bullish",
                     color = AurumColors.gain
                 )
-                Spacer(Modifier.width(8.dp))
             }
             PillTag(
                 text = String.format(Locale.US, "R:R %.1f", stock.rewardRisk),
                 color = if (stock.rewardRisk >= 1.5) AurumColors.gain else AurumColors.textDim
             )
-            Spacer(Modifier.weight(1f))
             Text(
                 text = "Score ${stock.score}",
                 style = MaterialTheme.typography.labelSmall,

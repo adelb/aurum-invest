@@ -7,6 +7,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -47,6 +49,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -124,7 +127,9 @@ fun PositionDetailScreen(
                     Text(
                         text = shortName,
                         style = MaterialTheme.typography.bodySmall,
-                        color = AurumColors.textDim
+                        color = AurumColors.textDim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -228,7 +233,10 @@ fun PositionDetailScreen(
                         if (range == "1D") state.quote?.prevClose
                         else state.position?.avgCost
                     AurumCard(contentPadding = PaddingValues(14.dp)) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             RangeChip(label = "1D", selected = range == "1D") { range = "1D" }
                             RangeChip(label = "1W", selected = range == "1W") { range = "1W" }
                             RangeChip(label = "1M", selected = range == "1M") { range = "1M" }
@@ -726,13 +734,17 @@ private fun NewsRow(item: NewsItem) {
             Text(
                 text = item.title,
                 style = MaterialTheme.typography.bodyMedium,
-                color = AurumColors.text
+                color = AurumColors.text,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
             Spacer(Modifier.height(2.dp))
             Text(
                 text = "${item.source} • ${Fmt.timeAgo(item.publishedAt)}",
                 style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.textDim
+                color = AurumColors.textDim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
         item.priceImpactPct?.let {
@@ -784,7 +796,9 @@ private fun AlertsSection(
                                 Fmt.money(alert.threshold) +
                                 (if (alert.note.isNotBlank()) " · ${alert.note}" else ""),
                             style = MaterialTheme.typography.bodyMedium,
-                            color = AurumColors.text
+                            color = AurumColors.text,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = if (alert.active) {
@@ -794,7 +808,9 @@ private fun AlertsSection(
                                     (alert.priceAtTrigger?.let { Fmt.money(it) } ?: "—")
                             },
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (alert.active) AurumColors.gold else AurumColors.textDim
+                            color = if (alert.active) AurumColors.gold else AurumColors.textDim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                     Text(
@@ -836,7 +852,10 @@ private fun AddAlertDialog(
         title = { Text("Alert on $symbol") },
         text = {
             Column {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     listOf("ABOVE" to "Rises above", "BELOW" to "Falls below").forEach { (key, label) ->
                         val selected = key == direction
                         Text(
@@ -873,7 +892,10 @@ private fun AddAlertDialog(
                 )
                 if (suggestedTarget != null || suggestedStop != null) {
                     Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         suggestedTarget?.let { t ->
                             Text(
                                 text = "Target ${Fmt.money(t)}",

@@ -474,7 +474,9 @@ private fun PowerPickCard(
                     Text(
                         text = pick.symbol,
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
+                        color = AurumColors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (pick.name.isNotBlank()) {
                         Spacer(modifier = Modifier.width(8.dp))
@@ -483,7 +485,8 @@ private fun PowerPickCard(
                             style = MaterialTheme.typography.bodySmall,
                             color = AurumColors.textDim,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                     }
                 }
@@ -592,7 +595,9 @@ private fun PowerPickCard(
                 Text(
                     text = Fmt.money(pick.price),
                     style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 DeltaPct(value = pick.dayChangePct, style = MaterialTheme.typography.labelMedium)
                 Text(
@@ -720,7 +725,9 @@ private fun EntryPickCard(
                     Text(
                         text = pick.symbol,
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
+                        color = AurumColors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (pick.name.isNotBlank()) {
                         Spacer(modifier = Modifier.width(8.dp))
@@ -729,7 +736,8 @@ private fun EntryPickCard(
                             style = MaterialTheme.typography.bodySmall,
                             color = AurumColors.textDim,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                     }
                 }
@@ -828,7 +836,9 @@ private fun EntryPickCard(
                 Text(
                     text = Fmt.money(pick.price),
                     style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 DeltaPct(value = pick.dayChangePct, style = MaterialTheme.typography.labelMedium)
                 Text(
@@ -884,7 +894,9 @@ private fun UPatternCard(
                     Text(
                         text = pick.symbol,
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
+                        color = AurumColors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (pick.name.isNotBlank()) {
                         Spacer(modifier = Modifier.width(8.dp))
@@ -893,7 +905,8 @@ private fun UPatternCard(
                             style = MaterialTheme.typography.bodySmall,
                             color = AurumColors.textDim,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                     }
                 }
@@ -980,7 +993,7 @@ private fun UPatternCard(
                         }
                         val rr = pick.rewardRisk
                         if (rr != null && rr > 0.0) {
-                            Column {
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = "R:R",
                                     style = MaterialTheme.typography.labelSmall,
@@ -989,7 +1002,9 @@ private fun UPatternCard(
                                 Text(
                                     text = String.format(Locale.US, "%.1f", rr),
                                     style = MaterialTheme.typography.titleSmall,
-                                    color = AurumColors.text
+                                    color = AurumColors.text,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
@@ -1032,7 +1047,9 @@ private fun UPatternCard(
                 Text(
                     text = Fmt.money(pick.price),
                     style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 DeltaPct(value = pick.dayChangePct, style = MaterialTheme.typography.labelMedium)
                 val dip = pick.dipTodayPct
@@ -1161,7 +1178,9 @@ private fun PickCard(
                     Text(
                         text = pick.symbol,
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
+                        color = AurumColors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (pick.name.isNotBlank()) {
                         Spacer(modifier = Modifier.width(8.dp))
@@ -1170,7 +1189,8 @@ private fun PickCard(
                             style = MaterialTheme.typography.bodySmall,
                             color = AurumColors.textDim,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                     }
                 }
@@ -1218,7 +1238,9 @@ private fun PickCard(
                 Text(
                     text = Fmt.money(pick.priceAtPick),
                     style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = "at pick",
@@ -1327,7 +1349,9 @@ private fun RelationGroupCard(
                     Text(
                         text = group.symbol,
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
+                        color = AurumColors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (group.name.isNotBlank()) {
                         Spacer(modifier = Modifier.width(8.dp))
@@ -1336,7 +1360,8 @@ private fun RelationGroupCard(
                             style = MaterialTheme.typography.bodySmall,
                             color = AurumColors.textDim,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                     }
                 }
@@ -1365,7 +1390,9 @@ private fun RelationGroupCard(
                 Text(
                     text = Fmt.money(group.price),
                     style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 IconButton(
                     onClick = { onOpenAnalysis(group.symbol) },

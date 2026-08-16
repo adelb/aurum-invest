@@ -95,4 +95,57 @@ class CashAndReportsTest {
         // Realized: 40 shares sold at 30 vs a post-split basis of 25.
         assertEquals(40 * 5.0, report.realizedPl, 1e-9)
     }
+
+    /** Two calendar years apart so YEAR buckets separately from MONTH/WEEK. */
+    private fun txAt(symbol: String, side: String, shares: Double, price: Double, epochMs: Long) =
+        TransactionEntity(id = ++id, symbol = symbol, side = side, shares = shares, price = price, ts = epochMs)
+
+    @Test
+    fun `year period buckets trades by calendar year`() {
+        val y2024 = java.time.LocalDate.of(2024, 6, 1).atStartOfDay(java.time.ZoneId.systemDefault())
+            .toInstant().toEpochMilli()
+        val y2025 = java.time.LocalDate.of(2025, 3, 1).atStartOfDay(java.time.ZoneId.systemDefault())
+            .toInstant().toEpochMilli()
+        val reports = ReportsEngine.build(
+            listOf(
+                txAt("AAPL", TxSide.BUY, 10.0, 100.0, y2024),
+                txAt("AAPL", TxSide.SELL, 10.0, 120.0, y2024 + 1000),
+                txAt("MSFT", TxSide.BUY, 5.0, 200.0, y2025),
+                txAt("MSFT", TxSide.SELL, 5.0, 180.0, y2025 + 1000)
+            ),
+            ReportPeriod.YEAR
+        )
+        assertEquals(2, reports.size)
+        val r2024 = reports.single { it.periodKey == "2024" }
+        val r2025 = reports.single { it.periodKey == "2025" }
+        assertEquals("2024", r2024.label)
+        assertEquals(200.0, r2024.realizedPl, 1e-9)   // 10 * (120-100)
+        assertEquals(-100.0, r2025.realizedPl, 1e-9)   // 5 * (180-200)
+    }
+
+    @Test
+    fun `accumulated P L is a running cumulative total across periods`() {
+        val reports = ReportsEngine.build(
+            listOf(
+                tx("AAPL", TxSide.BUY, 10.0, 100.0),
+                tx("AAPL", TxSide.SELL, 10.0, 110.0)   // +100, month 1
+            ) + run {
+                // A second month with its own buy/sell, two months later.
+                val base = id
+                listOf(
+                    TransactionEntity(id = base + 1, symbol = "MSFT", side = TxSide.BUY, shares = 5.0, price = 50.0, ts = (base + 1) * 1000L + 5_184_000_000L),
+                    TransactionEntity(id = base + 2, symbol = "MSFT", side = TxSide.SELL, shares = 5.0, price = 40.0, ts = (base + 2) * 1000L + 5_184_000_000L)
+                )
+            },
+            ReportPeriod.MONTH
+        )
+        // Newest-first order preserved; accumulated P/L is monotonically
+        // built from oldest to newest, so the newest report's accumulated
+        // figure equals the sum of every period's own realizedPl.
+        val totalRealized = reports.sumOf { it.realizedPl }
+        val newest = reports.maxByOrNull { it.startTs }!!
+        val oldest = reports.minByOrNull { it.startTs }!!
+        assertEquals(totalRealized, newest.accumulatedPl, 1e-9)
+        assertEquals(oldest.realizedPl, oldest.accumulatedPl, 1e-9)
+    }
 }

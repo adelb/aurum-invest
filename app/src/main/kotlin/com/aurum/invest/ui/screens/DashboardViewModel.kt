@@ -13,19 +13,23 @@ import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.PortfolioSummary
 import com.aurum.invest.data.model.Position
 import com.aurum.invest.data.model.PositionView
-import com.aurum.invest.data.repo.CashState
 import com.aurum.invest.data.repo.PortfolioRepository
+import com.aurum.invest.data.repo.WalletState
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /** One holding as shown on the dashboard. */
@@ -67,8 +71,8 @@ data class DashboardState(
     val holdings: List<HoldingRow> = emptyList(),
     /** The book sliced by sector — shared math with Picks and Wealth. */
     val book: BookContext = BookContext.EMPTY,
-    /** Brokerage cash, when the user tracks it; UNTRACKED otherwise. */
-    val cash: CashState = CashState.UNTRACKED,
+    /** The user's stated total wallet, derived invested/liquidity/P&L, and net worth. */
+    val wallet: WalletState = WalletState.UNSET,
     /** Oldest fetch time among the quotes shown; 0 when nothing was priced. */
     val pricesAsOf: Long = 0L
 )
@@ -96,14 +100,71 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
         }
-        // Cash is optional truth: shown only when the user actually tracks it.
+        // Wallet: the single user-stated total, kept in sync with the latest summary.
         viewModelScope.launch {
             runCatching {
-                container.cash.observeCash().collectLatest { cash ->
-                    _state.update { it.copy(cash = cash) }
-                }
+                combine(
+                    container.wallet.total,
+                    container.wallet.configured,
+                    _state.map { it.summary }.distinctUntilChanged()
+                ) { total, configured, summary -> WalletState.of(total, configured, summary) }
+                    .collectLatest { wallet -> _state.update { it.copy(wallet = wallet) } }
             }
         }
+        // Live price ticker: re-prices every open holding once a second while
+        // the dashboard is actually on screen (subscriptionCount == 0 once the
+        // composable stops collecting, e.g. backgrounded or navigated away).
+        // Only quotes + the numbers derived from them refresh on this cadence
+        // — sparklines, advice, and extended-hours stay from the last full
+        // load(), which would be far too expensive to redo every second.
+        viewModelScope.launch {
+            while (isActive) {
+                delay(LIVE_PRICE_TICK_MS)
+                if (_state.subscriptionCount.value == 0) continue
+                runCatching { tickLivePrices() }
+            }
+        }
+    }
+
+    private suspend fun tickLivePrices() {
+        val current = _state.value
+        val holdings = current.holdings
+        if (holdings.isEmpty()) return
+        val symbols = holdings.map { it.view.position.symbol }.distinct()
+
+        // A tiny maxAge (rather than 0) avoids a redundant network hit if two
+        // ticks land within the same second, while still reading "live" —
+        // the cache itself is always at least this fresh on this screen.
+        val quotes = container.market.getQuotes(symbols, maxAgeMs = LIVE_PRICE_TICK_MS - 100L)
+        if (quotes.isEmpty()) return
+
+        val ordered = container.portfolio.orderedTransactionsNow()
+        val dayStart = Dates.todayStartMs()
+        val dayPl = PortfolioRepository.dayPlBySymbol(ordered, quotes, dayStart)
+
+        val allPositions = holdings.map { it.view.position }
+        val openViews = holdings.map { row ->
+            val sym = row.view.position.symbol
+            val fresh = quotes[sym] ?: row.view.quote
+            PortfolioRepository.toView(row.view.position, fresh, dayPl[sym])
+        }
+        val summary = PortfolioRepository.summarize(openViews, allPositions, dayPl.values.sum())
+        val newRows = holdings.mapIndexed { i, row -> row.copy(view = openViews[i]) }
+        val pricesAsOf = quotes.values.map { it.fetchedAt }.filter { it > 0L }.minOrNull()
+            ?: current.pricesAsOf
+
+        _state.update {
+            it.copy(
+                holdings = newRows.sortedByDescending { r -> r.view.marketValue },
+                summary = summary,
+                pricesAsOf = pricesAsOf
+            )
+        }
+    }
+
+    companion object {
+        /** How often the live price ticker re-prices holdings while the dashboard is visible. */
+        private const val LIVE_PRICE_TICK_MS = 1_000L
     }
 
     /** Re-runs the whole pipeline with fresh quotes (bypasses the quote cache). */
@@ -126,11 +187,10 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Records a cash-account event (deposit, withdrawal, dividend, interest, fee). */
-    fun addCashEvent(type: String, amount: Double, symbol: String = "", note: String = "") {
-        if (amount <= 0.0) return
+    /** Sets the user-stated total wallet — the single number the wallet card derives from. */
+    fun setWalletTotal(amount: Double) {
         viewModelScope.launch {
-            runCatching { container.cash.addEvent(type = type, amount = amount, symbol = symbol, note = note) }
+            runCatching { container.wallet.setTotal(amount) }
         }
     }
 
