@@ -3,7 +3,6 @@ package com.aurum.invest.analytics
 import com.aurum.invest.data.repo.InvestorProfile
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -189,11 +188,14 @@ object LiquidityAllocationEngine {
         val qualifying = scored.filter { it.conviction >= MIN_CONFIDENCE }
 
         // ---- 2) sector targets (from flow / trends / current weights) -------
-        val sectorTargets = buildSectorTargets(
-            book = book,
-            totalBook = totalBook,
+        // Shared derivation with the whole-book allocation plan — the two
+        // engines must never quote a different target for the same sector.
+        val sectorTargets = AllocationMath.sectorTargets(
             sectorValueNow = sectorValueNow,
-            candidates = qualifying,
+            totalBase = totalBook,
+            candidateSectors = qualifying.mapNotNull { sc ->
+                sc.c.sector.takeIf { it.isNotBlank() && it != PortfolioLens.UNCLASSIFIED }
+            }.toSet(),
             flowByKey = flowByKey,
             trendByKey = trendByKey,
             maxSectorPct = profile.maxSectorPct.coerceIn(10.0, 100.0)
@@ -471,134 +473,6 @@ object LiquidityAllocationEngine {
         }
     }
 
-    // ---------------------------------------------------------- sector targets
-
-    private fun buildSectorTargets(
-        book: BookContext,
-        totalBook: Double,
-        sectorValueNow: Map<String, Double>,
-        candidates: List<ScoredCandidate>,
-        flowByKey: Map<String, SectorFlow>,
-        trendByKey: Map<String, SectorTrend>,
-        maxSectorPct: Double
-    ): List<SectorAllocationTarget> {
-        if (totalBook <= 0.0) return emptyList()
-
-        // Universe of sectors we have any measurable read on.
-        val sectors = LinkedHashSet<String>().apply {
-            book.slices.forEach { if (it.sector != PortfolioLens.UNCLASSIFIED) add(it.sector) }
-            candidates.forEach {
-                val s = it.c.sector
-                if (s.isNotBlank() && s != PortfolioLens.UNCLASSIFIED) add(s)
-            }
-        }
-        if (sectors.isEmpty()) return emptyList()
-
-        // Score each sector by its measured flow / trend read (fixed 0..100 scale).
-        data class Read(val flow: SectorFlow?, val verdict: FlowVerdict, val score: Double)
-
-        val reads: Map<String, Read> = sectors.associateWith { sector ->
-            val themeKeys = PortfolioLens.themesForSector(sector)
-            val flows = themeKeys.mapNotNull { flowByKey[it] }
-            when {
-                flows.isNotEmpty() && (flows.size == 1 || flows.all { it.verdict == flows.first().verdict }) -> {
-                    val f = flows.maxBy { it.flowScore }
-                    Read(f, f.verdict, f.flowScore.toDouble())
-                }
-                flows.size >= 2 -> Read(null, FlowVerdict.NEUTRAL, 50.0) // disagreement -> neutral
-                else -> {
-                    val trend = themeKeys.firstNotNullOfOrNull { trendByKey[it] }
-                    if (trend != null) {
-                        val s = (50.0 + trend.score).coerceIn(0.0, 100.0)
-                        val v = when {
-                            trend.r5Pct >= 0.4 -> FlowVerdict.INFLOW
-                            trend.r5Pct <= -0.4 -> FlowVerdict.OUTFLOW
-                            else -> FlowVerdict.NEUTRAL
-                        }
-                        Read(null, v, s)
-                    } else Read(null, FlowVerdict.NEUTRAL, 50.0)
-                }
-            }
-        }
-
-        // Max fill possible in each sector from the qualifying candidates (dollars).
-        // Anti-hallucination: never propose more sector weight than candidates can fill.
-        val capacityBySector: Map<String, Double> = candidates
-            .groupBy { it.c.sector }
-            .mapValues { (_, list) -> list.sumOf { it.c.price * 1_000_000.0 } } // effectively uncapped in $ terms
-        // (individual-candidate liquidity depth isn't part of the input contract; treating capacity
-        // as "at least one line exists" is the honest bound we can defend.)
-
-        // Compute a raw tilt: shift base share toward high-scoring sectors, but weighted by how
-        // large the sector already is (avoid recommending 40% into a sector we have $0 in).
-        // We work in *fractions of totalBook*.
-        val rawTargets = HashMap<String, Double>()
-        val sumScore = reads.values.sumOf { max(0.0, it.score) }.coerceAtLeast(1.0)
-        for (sector in sectors) {
-            val curPct = ((sectorValueNow[sector] ?: 0.0) / totalBook) * 100.0
-            val read = reads.getValue(sector)
-            val flowTilt = (read.score - 50.0) / 50.0 // -1..+1
-            val bias = when (read.verdict) {
-                FlowVerdict.INFLOW -> 1.0
-                FlowVerdict.OUTFLOW -> -1.0
-                FlowVerdict.NEUTRAL -> 0.0
-            }
-            // move up to ~6 percentage points toward the tilt direction.
-            val move = (flowTilt * 4.0 + bias * 2.0).coerceIn(-6.0, 6.0)
-            val target = (curPct + move).coerceIn(0.0, maxSectorPct)
-            // A sector with no candidates in this batch cannot be actually filled — pin to current.
-            val hasCandidate = capacityBySector.containsKey(sector) && (capacityBySector[sector]!! > 0.0)
-            rawTargets[sector] = if (!hasCandidate && target > curPct) curPct else target
-        }
-        // Suppress lint warning on unused sumScore variable — we chose an additive tilt rather than
-        // a normalized-share approach because it composes with existing weights more honestly.
-        @Suppress("UNUSED_VARIABLE") val _s = sumScore
-
-        return sectors.map { sector ->
-            val curPct = ((sectorValueNow[sector] ?: 0.0) / totalBook) * 100.0
-            val tgt = rawTargets.getValue(sector)
-            val read = reads.getValue(sector)
-            val note = buildSectorNote(sector, curPct, tgt, read.flow, read.verdict, maxSectorPct)
-            SectorAllocationTarget(
-                sector = sector,
-                currentPct = round1(curPct),
-                targetPct = round1(tgt),
-                flow = read.verdict,
-                note = note
-            )
-        }.sortedByDescending { abs(it.targetPct - it.currentPct) }
-    }
-
-    private fun buildSectorNote(
-        sector: String,
-        curPct: Double,
-        targetPct: Double,
-        flow: SectorFlow?,
-        verdict: FlowVerdict,
-        maxSectorPct: Double
-    ): String {
-        val delta = targetPct - curPct
-        val direction = when {
-            delta > 0.5 -> "add"
-            delta < -0.5 -> "trim"
-            else -> "hold"
-        }
-        val flowFragment = when {
-            flow != null -> "money flow ${flow.flowScore}/100, ${verdict.name.lowercase(Locale.US)}"
-            verdict == FlowVerdict.INFLOW -> "flow read: inflow"
-            verdict == FlowVerdict.OUTFLOW -> "flow read: outflow"
-            else -> "flow read: neutral"
-        }
-        val capNote = if (targetPct >= maxSectorPct - 0.05) String.format(
-            Locale.US, "; pinned at your %.0f%% sector cap", maxSectorPct
-        ) else ""
-        return String.format(
-            Locale.US,
-            "%s at %.1f%% of book, %s at %.1f%% — %s (%s)%s.",
-            sector, curPct, direction, targetPct, direction, flowFragment, capNote
-        )
-    }
-
     // -------------------------------------------------------------- allocation
 
     private fun allocate(
@@ -807,19 +681,10 @@ object LiquidityAllocationEngine {
         )
     }
 
-    /** Round dollar amounts to the nearest $5, keeping small amounts at $1 granularity. */
-    private fun roundToTicket(v: Double): Double = when {
-        v <= 0.0 -> 0.0
-        v < 100.0 -> round2(v)
-        v < 1000.0 -> (Math.round(v / 5.0) * 5).toDouble()
-        else -> (Math.round(v / 10.0) * 10).toDouble()
-    }
-
-    private fun round1(v: Double): Double = Math.round(v * 10.0) / 10.0
-    private fun round2(v: Double): Double = Math.round(v * 100.0) / 100.0
-    private fun round4(v: Double): Double = Math.round(v * 10_000.0) / 10_000.0
-
-    private fun money(v: Double): String =
-        if (abs(v) >= 1000.0) String.format(Locale.US, "$%,.0f", v)
-        else String.format(Locale.US, "$%.2f", v)
+    // Rounding and money formatting are shared with the whole-book allocation
+    // plan so a ticket printed by one engine reads identically in the other.
+    private fun roundToTicket(v: Double): Double = AllocationMath.roundToTicket(v)
+    private fun round2(v: Double): Double = AllocationMath.round2(v)
+    private fun round4(v: Double): Double = AllocationMath.round4(v)
+    private fun money(v: Double): String = AllocationMath.money(v)
 }

@@ -1,13 +1,11 @@
 package com.aurum.invest.analytics
 
-import com.aurum.invest.core.Fmt
+import com.aurum.invest.data.model.Candle
 import com.aurum.invest.data.model.PositionView
 import com.aurum.invest.data.repo.InvestorProfile
 import com.aurum.invest.data.repo.MarketRepository
 import com.aurum.invest.data.repo.NewsRepository
 import java.util.Locale
-import kotlin.math.abs
-import kotlin.math.max
 import kotlin.math.min
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -15,56 +13,11 @@ import kotlinx.coroutines.coroutineScope
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** What to do with one holding. */
-enum class HoldingAction { HOLD, TAKE_PROFIT, TRIM, SELL, CUT_LOSS }
-
-/** One holding's full verdict: the action, the why, and the when. */
-data class HoldingVerdict(
-    val symbol: String,
-    val name: String,
-    val sector: String,            // Yahoo sector, or "Unclassified"
-    val action: HoldingAction,
-    val headline: String,          // one sentence: what to do
-    val whenText: String,          // when to do it, concretely
-    val whyPoints: List<String>,   // measured reasons, numbers included
-    val price: Double,
-    val avgCost: Double,
-    val marketValue: Double,
-    val weightPct: Double,         // share of the invested book
-    val unrealizedPl: Double,
-    val unrealizedPlPct: Double,
-    val target: Double,            // forward take-profit level
-    val stop: Double,              // forward protective stop
-    val techBullish: Int,
-    val techTotal: Int,
-    val techConfidence: Int,
-    val techDirection: TechniqueVerdict,
-    val rsi: Double,
-    val newsScore: Int,
-    val newsNote: String,          // "" when nothing headline-worthy
-    /** Latest session move %, from the live quote (or the last two daily closes); null when not measurable. */
-    val sessionMovePct: Double? = null,
-    /** Price at/above its own 50-day average; null when the listing is too young to measure. */
-    val above50: Boolean? = null,
-    /** 20-day return minus the S&P 500's, percentage points; null without a measured SPY baseline. */
-    val rel20Pct: Double? = null,
-    /** The holding's own sector money-flow verdict name (INFLOW/NEUTRAL/OUTFLOW); "" when unmapped. */
-    val flowVerdictName: String = ""
-)
-
 /** A holding the engine could NOT measure this run — named, with the reason, never guessed around. */
 data class UnverifiedHolding(
     val symbol: String,
     val shares: Double,
     val reason: String
-)
-
-/** One line of the allocation plan: where the position is vs where it should be. */
-data class AllocationLine(
-    val symbol: String,
-    val currentPct: Double,
-    val suggestedPct: Double,
-    val note: String
 )
 
 /** One concrete rebalancing move: what to sell, what to buy instead, and why. */
@@ -84,8 +37,6 @@ data class PortfolioReview(
     val totalValue: Double,
     val headline: String,
     val verdicts: List<HoldingVerdict>,   // by book weight, largest first
-    val allocation: List<AllocationLine>,
-    val suggestedCashPct: Double,         // what the allocation plan frees up
     val sectorNotes: List<String>,        // over/under-weight observations, measured
     val rebalance: List<RebalanceMove>,
     val caveat: String,
@@ -100,19 +51,30 @@ data class PortfolioReview(
      * caps, loss rule, and profit rule all derive from it, and a review made
      * under default policy says so.
      */
-    val policyNote: String = ""
+    val policyNote: String = "",
+    /** The standalone allocation engine's whole-book answer; null when nothing could be sized. */
+    val allocationPlan: AllocationPlan? = null,
+    /** The account line the verdicts were sized against. */
+    val equityNote: String = "",
+    /** Total risk-to-stop across the book as a share of equity; null when unmeasurable. */
+    val openRiskPct: Double? = null,
+    /** Inputs the verdict engine could not measure this run, named. */
+    val verdictNotes: List<String> = emptyList()
 ) {
     companion object {
         fun toJson(r: PortfolioReview): String = JSONObject().apply {
             put("computedAt", r.computedAt)
             put("totalValue", r.totalValue)
             put("headline", r.headline)
-            put("cashPct", r.suggestedCashPct)
             put("caveat", r.caveat)
             put("marketNote", r.marketNote)
             put("policyNote", r.policyNote)
+            put("equityNote", r.equityNote)
+            r.openRiskPct?.let { put("openRiskPct", it) }
             r.grade?.let { put("grade", PortfolioGrade.toJson(it)) }
+            r.allocationPlan?.let { put("allocationPlan", AllocationPlanJson.toJson(it)) }
             put("sectorNotes", JSONArray(r.sectorNotes))
+            put("verdictNotes", JSONArray(r.verdictNotes))
             put("unverified", JSONArray().apply {
                 r.unverified.forEach { u ->
                     put(JSONObject().apply {
@@ -137,14 +99,18 @@ data class PortfolioReview(
                         v.above50?.let { put("above50", it) }
                         v.rel20Pct?.let { put("rel20", it) }
                         if (v.flowVerdictName.isNotEmpty()) put("flowVerdict", v.flowVerdictName)
-                    })
-                }
-            })
-            put("allocation", JSONArray().apply {
-                r.allocation.forEach { a ->
-                    put(JSONObject().apply {
-                        put("symbol", a.symbol); put("cur", a.currentPct)
-                        put("sug", a.suggestedPct); put("note", a.note)
+                        put("conv", v.conviction); put("convMax", v.convictionMax)
+                        put("risk", v.riskScore); put("riskMax", v.riskScoreMax)
+                        put("stage", v.stage.name)
+                        v.trailStop?.let { put("trail", it) }
+                        v.lockedGainPct?.let { put("locked", it) }
+                        v.runwayPct?.let { put("runway", it) }
+                        v.riskReward?.let { put("rr", it) }
+                        v.riskAtStop?.let { put("riskAtStop", it) }
+                        v.riskAtStopEquityPct?.let { put("riskAtStopPct", it) }
+                        if (v.ridingNote.isNotEmpty()) put("riding", v.ridingNote)
+                        put("keep", v.keepSharePct)
+                        if (v.notMeasured.isNotEmpty()) put("blind", JSONArray(v.notMeasured))
                     })
                 }
             })
@@ -169,6 +135,10 @@ data class PortfolioReview(
                     val why = ArrayList<String>()
                     v.optJSONArray("why")?.let { w ->
                         for (j in 0 until w.length()) why.add(w.optString(j))
+                    }
+                    val blind = ArrayList<String>()
+                    v.optJSONArray("blind")?.let { b ->
+                        for (j in 0 until b.length()) blind.add(b.optString(j))
                     }
                     verdicts.add(
                         HoldingVerdict(
@@ -203,21 +173,23 @@ data class PortfolioReview(
                                 if (v.has("above50")) v.optBoolean("above50") else null,
                             rel20Pct =
                                 if (v.has("rel20")) v.optDouble("rel20") else null,
-                            flowVerdictName = v.optString("flowVerdict", "")
-                        )
-                    )
-                }
-            }
-            val allocation = ArrayList<AllocationLine>()
-            o.optJSONArray("allocation")?.let { arr ->
-                for (i in 0 until arr.length()) {
-                    val a = arr.optJSONObject(i) ?: continue
-                    allocation.add(
-                        AllocationLine(
-                            symbol = a.getString("symbol"),
-                            currentPct = a.optDouble("cur", 0.0),
-                            suggestedPct = a.optDouble("sug", 0.0),
-                            note = a.optString("note", "")
+                            flowVerdictName = v.optString("flowVerdict", ""),
+                            conviction = v.optInt("conv", 0),
+                            convictionMax = v.optInt("convMax", 0),
+                            riskScore = v.optInt("risk", 0),
+                            riskScoreMax = v.optInt("riskMax", 0),
+                            stage = runCatching { HoldingStage.valueOf(v.optString("stage")) }
+                                .getOrDefault(HoldingStage.UNMEASURED),
+                            trailStop = if (v.has("trail")) v.optDouble("trail") else null,
+                            lockedGainPct = if (v.has("locked")) v.optDouble("locked") else null,
+                            runwayPct = if (v.has("runway")) v.optDouble("runway") else null,
+                            riskReward = if (v.has("rr")) v.optDouble("rr") else null,
+                            riskAtStop = if (v.has("riskAtStop")) v.optDouble("riskAtStop") else null,
+                            riskAtStopEquityPct =
+                                if (v.has("riskAtStopPct")) v.optDouble("riskAtStopPct") else null,
+                            ridingNote = v.optString("riding", ""),
+                            keepSharePct = v.optDouble("keep", 100.0),
+                            notMeasured = blind
                         )
                     )
                 }
@@ -243,6 +215,10 @@ data class PortfolioReview(
             o.optJSONArray("sectorNotes")?.let { arr ->
                 for (i in 0 until arr.length()) sectorNotes.add(arr.optString(i))
             }
+            val verdictNotes = ArrayList<String>()
+            o.optJSONArray("verdictNotes")?.let { arr ->
+                for (i in 0 until arr.length()) verdictNotes.add(arr.optString(i))
+            }
             val unverified = ArrayList<UnverifiedHolding>()
             o.optJSONArray("unverified")?.let { arr ->
                 for (i in 0 until arr.length()) {
@@ -261,15 +237,18 @@ data class PortfolioReview(
                 totalValue = o.optDouble("totalValue", 0.0),
                 headline = o.optString("headline", ""),
                 verdicts = verdicts,
-                allocation = allocation,
-                suggestedCashPct = o.optDouble("cashPct", 0.0),
                 sectorNotes = sectorNotes,
                 rebalance = rebalance,
                 caveat = o.optString("caveat", ""),
                 unverified = unverified,
                 marketNote = o.optString("marketNote", ""),
                 grade = o.optJSONObject("grade")?.let { PortfolioGrade.fromJson(it) },
-                policyNote = o.optString("policyNote", "")
+                policyNote = o.optString("policyNote", ""),
+                allocationPlan = o.optJSONObject("allocationPlan")
+                    ?.let { AllocationPlanJson.fromJson(it) },
+                equityNote = o.optString("equityNote", ""),
+                openRiskPct = if (o.has("openRiskPct")) o.optDouble("openRiskPct") else null,
+                verdictNotes = verdictNotes
             )
         } catch (_: Exception) {
             null
@@ -278,18 +257,25 @@ data class PortfolioReview(
 }
 
 /**
- * The portfolio-evaluation engine: reads every open position through the
- * 35-technique board, the news, and the book's own sector weights, then
- * answers the four questions that matter — what to hold and why, what to
- * sell and when, where to cut the loss, and how the money should be
- * allocated across positions and sectors.
+ * The portfolio review's data-gathering layer.
+ *
+ * This class does the I/O — candles, the 35-technique board, headlines, the
+ * S&P 500 baseline — and turns each holding into a [HoldingEvidence] bundle in
+ * which every field is either MEASURED or explicitly null. The reasoning then
+ * belongs to three standalone, pure engines that never touch the network:
+ *
+ *   [PortfolioVerdictEngine]  — what to do with each holding, and how to ride
+ *                               the winners
+ *   [AllocationPlanEngine]    — what the whole book should be worth, and where
+ *                               the freed money goes
+ *   [PortfolioGradeEngine]    — how the book scores against the published rules
+ *                               of elite investors
+ *
+ * Keeping the gathering here and the judgement there is what makes the
+ * verdicts testable without a network and impossible to quietly fill in with
+ * defaults: a field this class cannot measure arrives at the engines as null.
  *
  * Integrity rules:
- *  - every verdict cites the measured numbers behind it (P/L, board votes,
- *    RSI, session move, relative strength, sector money flow, weight of
- *    book) — never a mood
- *  - the stop and target on every holding are computed from that stock's own
- *    support structure and ATR, not from round numbers
  *  - a holding that cannot be measured is reported by name with the reason in
  *    [PortfolioReview.unverified] — it never silences the holdings that can,
  *    and nothing about it is guessed
@@ -331,39 +317,26 @@ class PortfolioAdvisor(
         }
     }
 
-    // ---- policy-derived thresholds (cited in the output via policyNote).
-    // The formulas live in the companion so the grade engine scores the SAME
-    // caps the advisor acts on — two derivations would drift apart. ----
-
-    private val positionCapPct: Double get() = positionCapPct(policy)
-    private val positionTrimPct: Double get() = positionTrimPct(policy)
     private val sectorOverweightPct: Double get() = sectorOverweightPct(policy)
     private val sectorTargetPct: Double get() = sectorTargetPct(policy)
 
-    /** Loss (%) beyond which a broken chart is cut — tighter for conservative money. */
-    private val cutLossPct: Double get() = cutLossPct(policy)
-
-    /** Gain (%) at which banking half becomes the default — later for long horizons. */
-    private val takeProfitPct: Double
-        get() = when (policy.horizon) {
-            InvestorProfile.HORIZON_SHORT -> 12.0
-            InvestorProfile.HORIZON_LONG -> 22.0
-            else -> 15.0
-        }
-
-    /** One holding's deep read: a verdict, or the measured reason there is none. */
-    private sealed interface Judged {
-        data class Ok(val verdict: HoldingVerdict) : Judged
-        data class Failed(val symbol: String, val shares: Double, val reason: String) : Judged
+    /** One holding's gathered evidence, or the measured reason there is none. */
+    private sealed interface Gathered {
+        data class Ok(val evidence: HoldingEvidence) : Gathered
+        data class Failed(val symbol: String, val shares: Double, val reason: String) : Gathered
     }
 
     /**
      * [views] the open positions with live quotes; [sectors] Yahoo sector per
-     * symbol; [flow] the sector money-flow report (for rebalance direction and
-     * per-holding flow context); [strategy] this week's sector-gap answer (for
-     * concrete buy candidates); [pulse] the whole-market rating (for the
-     * regime note); [unpriced] ledger positions the caller could not price —
-     * they are reported by name, never silently dropped.
+     * symbol; [flow] the sector money-flow report; [strategy] this week's
+     * sector-gap answer (for concrete buy candidates); [pulse] the whole-market
+     * rating; [unpriced] ledger positions the caller could not price — they are
+     * reported by name, never silently dropped.
+     *
+     * [equity] is the money behind the book (invested, live value, uninvested
+     * cash). [priorStops] carries the stop each holding was given last run, so
+     * the trailing stop can ratchet instead of drifting. [candidates] and
+     * [sectorTrends] feed the allocation plan's market scan.
      *
      * Verdicts are produced for every holding that CAN be measured; holdings
      * that cannot are listed in [PortfolioReview.unverified] with the reason.
@@ -375,65 +348,92 @@ class PortfolioAdvisor(
         flow: MoneyFlowReport?,
         strategy: WeeklyStrategy?,
         pulse: MarketRating? = null,
-        unpriced: List<UnverifiedHolding> = emptyList()
+        unpriced: List<UnverifiedHolding> = emptyList(),
+        equity: EquityContext = EquityContext.UNKNOWN,
+        priorStops: Map<String, Double> = emptyMap(),
+        entryTs: Map<String, Long> = emptyMap(),
+        sectorTrends: List<SectorTrend> = emptyList(),
+        candidates: List<LiquidityCandidate> = emptyList()
     ): PortfolioReview? {
         val open = views.filter { it.marketValue > 0.0 && it.position.shares > 0.0 }
         if (open.isEmpty()) return null
         val book = PortfolioLens.build(open, sectors)
         if (book.isEmpty) return null
 
-        // 1 — deep read of every holding, chunked. A holding that cannot be
-        // measured becomes a named unverified entry — it never silences the rest.
-        val verdicts = ArrayList<HoldingVerdict>()
+        // The S&P 500 baseline for relative strength, fetched once. Null when
+        // unreachable — relative-strength bands are then simply not measured.
+        val spy = try {
+            market.getDailyCandles("SPY", 140)
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val spyR20 = windowReturnPct(spy.map { it.close }, 20) ?: flow?.spyR20Pct
+        val spyR60 = windowReturnPct(spy.map { it.close }, 60)
+
+        // 1 — gather every holding's evidence, chunked. A holding that cannot
+        // be measured becomes a named unverified entry — it never silences the rest.
+        val evidence = ArrayList<HoldingEvidence>()
         val unverified = ArrayList(unpriced)
         for (chunk in open.chunked(DEEP_CHUNK)) {
             val results = coroutineScope {
                 chunk.map { v ->
                     async {
-                        judge(v, book, sectors[v.position.symbol] ?: PortfolioLens.UNCLASSIFIED, flow)
+                        gather(
+                            view = v,
+                            book = book,
+                            sector = sectors[v.position.symbol] ?: PortfolioLens.UNCLASSIFIED,
+                            flow = flow,
+                            spyR20 = spyR20,
+                            spyR60 = spyR60,
+                            priorStop = priorStops[v.position.symbol],
+                            entryTs = entryTs[v.position.symbol]
+                        )
                     }
                 }.awaitAll()
             }
-            results.forEach { judged ->
-                when (judged) {
-                    is Judged.Ok -> verdicts.add(judged.verdict)
-                    is Judged.Failed -> unverified.add(
-                        UnverifiedHolding(judged.symbol, judged.shares, judged.reason)
+            results.forEach { g ->
+                when (g) {
+                    is Gathered.Ok -> evidence.add(g.evidence)
+                    is Gathered.Failed -> unverified.add(
+                        UnverifiedHolding(g.symbol, g.shares, g.reason)
                     )
                 }
             }
         }
+        if (evidence.isEmpty()) return null
+
+        // 2 — the standalone verdict engine decides. It is pure: everything it
+        // knows arrived in the evidence bundles above.
+        // Both sides of the equity read describe the SAME set of holdings — the
+        // ones actually measured. Mixing a full-ledger cost basis with a
+        // partial market value would misstate the open P/L on every card.
+        val measuredEquity = equity.copy(
+            invested = evidence.sumOf { it.investedCost },
+            holdingsValue = evidence.sumOf { it.shares * it.price }
+        )
+        val verdictReport = PortfolioVerdictEngine.evaluate(
+            evidence = evidence,
+            equity = measuredEquity,
+            policy = policy,
+            pulse = pulse
+        )
+        val verdicts = verdictReport.verdicts
         if (verdicts.isEmpty()) return null
-        verdicts.sortByDescending { it.marketValue }
 
-        // 2 — the allocation plan: current vs suggested weight per holding.
-        val allocation = verdicts.map { v ->
-            val suggested = when (v.action) {
-                HoldingAction.CUT_LOSS -> 0.0
-                HoldingAction.SELL -> 0.0
-                HoldingAction.TAKE_PROFIT -> min(v.weightPct * 0.5, positionCapPct)
-                HoldingAction.TRIM -> min(v.weightPct, positionCapPct)
-                HoldingAction.HOLD -> min(v.weightPct, positionTrimPct)
-            }
-            AllocationLine(
-                symbol = v.symbol,
-                currentPct = round1(v.weightPct),
-                suggestedPct = round1(suggested),
-                note = when (v.action) {
-                    HoldingAction.CUT_LOSS -> "Exit — the loss rule fired."
-                    HoldingAction.SELL -> "Exit — the board turned against it."
-                    HoldingAction.TAKE_PROFIT -> "Bank half, trail the rest."
-                    HoldingAction.TRIM -> "Reduce to your ${fmt0(positionCapPct)}% position cap."
-                    HoldingAction.HOLD -> if (v.weightPct > positionTrimPct) {
-                        "Healthy but oversized — no adds."
-                    } else "Keep as is."
-                }
-            )
-        }
-        val suggestedCashPct =
-            (100.0 - allocation.sumOf { it.suggestedPct }).coerceIn(0.0, 100.0)
+        // 3 — the standalone allocation engine sizes the whole book and scans
+        // the market for what the plan frees up.
+        val allocationPlan = AllocationPlanEngine.build(
+            verdicts = verdicts,
+            equity = measuredEquity,
+            moneyFlow = flow,
+            sectorTrends = sectorTrends,
+            candidates = candidates,
+            profile = policy,
+            pulse = pulse,
+            marketNote = pulse?.headline ?: ""
+        )
 
-        // 3 — sector observations, measured from the same book math as everywhere.
+        // 4 — sector observations, measured from the same book math as everywhere.
         val sectorNotes = buildList {
             book.slices.filter { it.sector != PortfolioLens.UNCLASSIFIED }.forEach { slice ->
                 when {
@@ -483,18 +483,9 @@ class PortfolioAdvisor(
             }
         }
 
-        // 4 — rebalancing: overweight sectors fund the strongest inflowing
+        // 5 — rebalancing: overweight sectors fund the strongest inflowing
         // sector the book is light in — with a concrete, board-approved name.
         val rebalance = buildRebalance(book, verdicts, flow, strategy)
-
-        val actions = verdicts.count { it.action != HoldingAction.HOLD }
-        val headline = when {
-            actions == 0 && unverified.isEmpty() ->
-                "Every holding earns its place this week — nothing to sell."
-            actions == 0 -> "Every verified holding earns its place this week."
-            actions == 1 -> "One holding needs action this week; the rest hold."
-            else -> "$actions of ${verdicts.size} holdings need action this week."
-        }
 
         val marketNote = pulse?.let { p ->
             val regime = when (p.call) {
@@ -518,32 +509,42 @@ class PortfolioAdvisor(
         } ?: ""
 
         return PortfolioReview(
-            computedAt = System.currentTimeMillis(),
+            computedAt = verdictReport.computedAt,
             totalValue = round2(book.totalValue),
-            headline = headline,
+            // The verdict engine only sees what could be measured; the count of
+            // what could not is the advisor's to disclose.
+            headline = verdictReport.headline + if (unverified.isEmpty()) "" else String.format(
+                Locale.US, " %d more could not be measured this run.", unverified.size
+            ),
             verdicts = verdicts,
-            allocation = allocation,
-            suggestedCashPct = round1(suggestedCashPct),
             sectorNotes = sectorNotes,
             rebalance = rebalance,
-            caveat = "Every verdict is computed from the latest available market prices, the 35-technique board, " +
-                "sector money flow, each stock's own support structure and ATR, and public headlines. " +
-                "Decision support, not financial advice.",
+            caveat = verdictReport.caveat,
             unverified = unverified,
             marketNote = marketNote,
-            grade = PortfolioGradeEngine.evaluate(verdicts, book, flow, pulse, strategy, policy),
-            policyNote = policy.label()
+            grade = PortfolioGradeEngine.evaluate(
+                verdicts, book, flow, pulse, strategy, policy, measuredEquity
+            ),
+            policyNote = policy.label(),
+            allocationPlan = allocationPlan,
+            equityNote = verdictReport.equityNote,
+            openRiskPct = verdictReport.openRiskPct,
+            verdictNotes = verdictReport.notes
         )
     }
 
-    // ------------------------------------------------------------ one holding
+    // ------------------------------------------------- one holding's evidence
 
-    private suspend fun judge(
+    private suspend fun gather(
         view: PositionView,
         book: BookContext,
         sector: String,
-        flow: MoneyFlowReport?
-    ): Judged {
+        flow: MoneyFlowReport?,
+        spyR20: Double?,
+        spyR60: Double?,
+        priorStop: Double?,
+        entryTs: Long?
+    ): Gathered {
         val symbol = view.position.symbol
         val shares = view.position.shares
         return try {
@@ -553,225 +554,175 @@ class PortfolioAdvisor(
                 emptyList()
             }
             if (candles.size < MIN_SESSIONS) {
-                return Judged.Failed(
+                return Gathered.Failed(
                     symbol, shares,
                     if (candles.isEmpty()) "no daily history could be fetched"
                     else "only ${candles.size} sessions of daily history — the technique board needs $MIN_SESSIONS"
                 )
             }
             val price = view.quote?.price ?: candles.last().close
-            if (price <= 0.0) return Judged.Failed(symbol, shares, "no verifiable price")
-            val avgCost = view.position.avgCost
-            val weight = book.heldWeights[symbol] ?: 0.0
-            val marketValue = shares * price
-            val unrealizedPl = shares * (price - avgCost)
-            val plPct =
-                if (view.position.investedCost > 1e-9) {
-                    unrealizedPl / view.position.investedCost * 100.0
-                } else 0.0
+            if (price <= 0.0) return Gathered.Failed(symbol, shares, "no verifiable price")
 
             val analysis = Techniques.analyze(symbol, candles)
-                ?: return Judged.Failed(symbol, shares, "the 35-technique board could not be computed")
+                ?: return Gathered.Failed(symbol, shares, "the 35-technique board could not be computed")
             if (analysis.results.size != Techniques.TECHNIQUE_COUNT) {
-                return Judged.Failed(symbol, shares, "the technique board came back incomplete")
+                return Gathered.Failed(symbol, shares, "the technique board came back incomplete")
             }
+
             val closes = candles.map { it.close }
-            val rsi = Indicators.rsi(closes)
-                ?: return Judged.Failed(symbol, shares, "momentum (RSI) could not be measured")
-            val atr = Indicators.atr(candles)
-                ?: return Judged.Failed(symbol, shares, "volatility (ATR) could not be measured")
-            // The 50-day average is context, not a gate — a younger listing
-            // simply gets no vs-50-day read instead of no verdict at all.
+            // Averages are context, not gates — a younger listing simply gets
+            // fewer measured bands instead of no verdict at all.
+            val sma20 = Indicators.sma(closes, 20)
             val sma50 = Indicators.sma(closes, 50)
+            val sma200 = Indicators.sma(closes, 200)
+            // Is the 50-day itself rising? Compare it with where it stood ten
+            // sessions ago; null when there is not enough history for both.
+            val sma50Rising = if (closes.size >= 60) {
+                val then = Indicators.sma(closes.dropLast(10), 50)
+                if (then != null && sma50 != null) sma50 > then else null
+            } else null
 
-            val direction = analysis.outlook.direction
-            val confidence = analysis.outlook.confidence
-            val bullish = analysis.outlook.bullishCount
-            val total = analysis.results.size
+            // The peak the trail hangs from: since the position was opened when
+            // the ledger gives an entry stamp, else the visible window — and the
+            // difference is carried into the evidence, never blurred.
+            val fromEntry = entryTs?.let { ts -> candles.filter { it.ts >= ts } }
+                ?.takeIf { it.isNotEmpty() }
+            val peak = (fromEntry ?: candles.takeLast(120)).maxOfOrNull { it.close }
 
-            // ---- live-market context, all measured ----
-            // Latest session move: live quote when its previous close is real,
-            // else the last two daily closes.
-            val sessionMovePct = view.quote
-                ?.takeIf { it.prevClose > 0.0 && it.prevClose != it.price }
-                ?.let { (it.price / it.prevClose - 1.0) * 100.0 }
-                ?: candles.takeLast(2)
-                    .takeIf { it.size == 2 && it[0].close > 0.0 }
-                    ?.let { (it[1].close / it[0].close - 1.0) * 100.0 }
-            // 20-day return and relative strength vs the S&P 500 (only when the
-            // flow report carries a measured SPY baseline).
-            val r20 =
-                if (closes.size >= 21 && closes[closes.size - 21] > 0.0) {
-                    (price / closes[closes.size - 21] - 1.0) * 100.0
-                } else null
-            val rel20 = if (r20 != null && flow != null) r20 - flow.spyR20Pct else null
-            // The holding's own sector money flow, mapped honestly.
-            val (sectorFlow, flowNote) = flowContext(symbol, sector, flow)
-
-            // Forward levels from the stock's own structure, not round numbers.
-            val structural = analysis.srData.supports.filter { it < price }.maxOrNull()
-            val stop = round2(
-                max(
-                    structural?.let { min(it - 0.5 * atr, price - 1.5 * atr) }
-                        ?: (price - 2.0 * atr),
-                    price * 0.85
-                )
-            )
-            val target = round2(
-                max(analysis.outlook.expectedHigh, price + 1.2 * atr)
-            )
-
-            val newsItems = try {
-                news.getNews(symbol, candles)
-            } catch (_: Exception) {
-                emptyList()
-            }
+            val newsResult = runCatching { news.getNews(symbol, candles) }
+            val newsItems = newsResult.getOrDefault(emptyList())
             val newsScore = newsItems.sumOf { it.sentiment }.coerceIn(-3, 3)
             val newsNote = newsItems.firstOrNull { it.sentiment != 0 }
                 ?.let { "${it.title} — ${it.source}" } ?: ""
 
-            // ---- the decision, most defensive rule first ----
-            val below50 = sma50 != null && price < sma50
-            val flowLeaving = sectorFlow != null &&
-                sectorFlow.verdict == FlowVerdict.OUTFLOW && sectorFlow.confidence >= 75
-            val action: HoldingAction
-            val headline: String
-            val whenText: String
-            when {
-                plPct <= cutLossPct && (direction == TechniqueVerdict.BEARISH || below50) -> {
-                    action = HoldingAction.CUT_LOSS
-                    headline = "Cut the loss — down ${fmt1(-plPct)}% with the tape against it " +
-                        "(your ${fmt1(-cutLossPct)}% loss rule)."
-                    whenText = "Sell at the next session's open. Capital comes first; " +
-                        "re-entry is always available later."
-                }
-                direction == TechniqueVerdict.BEARISH && confidence >= 60 -> {
-                    action = HoldingAction.SELL
-                    headline = "Sell — the board reads bearish at $confidence% indicator agreement."
-                    whenText = "Sell into the next strength, or at the close of any day that " +
-                        "ends below ${Fmt.money(stop)} — whichever comes first this week."
-                }
-                plPct >= takeProfitPct && (rsi >= 70.0 || direction != TechniqueVerdict.BULLISH) -> {
-                    action = HoldingAction.TAKE_PROFIT
-                    headline = "Take profit — up ${fmt1(plPct)}% and the move is stretched " +
-                        "(your ${fmt1(takeProfitPct)}% horizon rule)."
-                    whenText = "Sell half now; trail the rest with a stop raised to " +
-                        "${Fmt.money(round2(max(stop, avgCost)))} so the win cannot become a loss."
-                }
-                flowLeaving && direction != TechniqueVerdict.BULLISH &&
-                    plPct < 0.0 && (rel20 ?: 0.0) < 0.0 -> {
-                    val f = sectorFlow!!
-                    action = HoldingAction.TRIM
-                    headline = "Trim — money is leaving ${f.label} " +
-                        "(flow ${f.flowScore}/100) and this name lags the market."
-                    whenText = "Reduce into the next bounce this week; revisit when the " +
-                        "sector's flow turns neutral or the board turns bullish."
-                }
-                weight >= positionTrimPct -> {
-                    action = HoldingAction.TRIM
-                    headline = "Trim — ${fmt0(weight)}% of the book is riding on one name."
-                    whenText = "Reduce toward your ${fmt0(positionCapPct)}% position cap this " +
-                        "week, selling into strength rather than weakness."
-                }
-                else -> {
-                    action = HoldingAction.HOLD
-                    headline = when {
-                        direction == TechniqueVerdict.BULLISH ->
-                            "Hold — the board backs it at $confidence% indicator agreement."
-                        plPct >= 0.0 -> "Hold — in profit with no exit signal on the board."
-                        else -> "Hold — the loss is inside the stop and the board has not turned."
-                    }
-                    whenText = "Re-check on a close below ${Fmt.money(stop)} (exit) or at " +
-                        "${Fmt.money(target)} (take profit); the review re-runs the board live."
-                }
-            }
+            val (sectorFlow, flowNote) = MoneyFlowEngine.flowFor(symbol, sector, flow)
 
-            val whyPoints = buildList {
-                add(
-                    String.format(
-                        Locale.US,
-                        "P/L %+.1f%% (%s) on an average cost of %s; latest price %s.",
-                        plPct, Fmt.signedMoney(unrealizedPl), Fmt.money(avgCost), Fmt.money(price)
-                    )
-                )
-                if (total > 0) {
-                    // "Agreement", not "confidence": this is the share of
-                    // correlated indicator votes, not a calibrated probability.
-                    add("$bullish of $total techniques bullish — the board reads " +
-                        direction.name.lowercase(Locale.US) + " at $confidence% indicator agreement.")
-                }
-                add(String.format(Locale.US, "RSI %.0f; 14-day ATR %s.", rsi, Fmt.money(atr)))
-                if (sma50 != null) {
-                    add(
-                        String.format(
-                            Locale.US, "Price %.1f%% %s the 50-day average %s.",
-                            abs(price / sma50 - 1.0) * 100.0,
-                            if (price >= sma50) "above" else "below", Fmt.money(sma50)
-                        )
-                    )
-                } else {
-                    add("50-day average not yet measurable — only ${closes.size} sessions listed.")
-                }
-                if (rel20 != null && r20 != null) {
-                    add(
-                        String.format(
-                            Locale.US,
-                            "20-day move %+.1f%% vs the S&P 500's %+.1f%% — %+.1fpp relative.",
-                            r20, flow!!.spyR20Pct, rel20
-                        )
-                    )
-                }
-                if (flowNote.isNotEmpty()) add(flowNote)
-                add(String.format(Locale.US, "%.0f%% of the invested book.", weight))
-                if (newsScore != 0) add("News tone ${if (newsScore > 0) "+" else ""}$newsScore over 5 days.")
-            }
+            val r20 = windowReturnPct(closes, 20, price)
+            val r60 = windowReturnPct(closes, 60, price)
 
-            Judged.Ok(
-                HoldingVerdict(
+            Gathered.Ok(
+                HoldingEvidence(
                     symbol = symbol,
                     name = view.quote?.shortName?.ifBlank { symbol } ?: symbol,
                     sector = sector,
-                    action = action,
-                    headline = headline,
-                    whenText = whenText,
-                    whyPoints = whyPoints,
-                    price = round2(price),
-                    avgCost = round2(avgCost),
-                    marketValue = round2(marketValue),
-                    weightPct = round1(weight),
-                    unrealizedPl = round2(unrealizedPl),
-                    unrealizedPlPct = round1(plPct),
-                    target = target,
-                    stop = stop,
-                    techBullish = bullish,
-                    techTotal = total,
-                    techConfidence = confidence,
-                    techDirection = direction,
-                    rsi = round1(rsi),
+                    shares = shares,
+                    avgCost = view.position.avgCost,
+                    investedCost = view.position.investedCost,
+                    price = price,
+                    weightPct = book.heldWeights[symbol] ?: 0.0,
+                    atr = Indicators.atr(candles),
+                    rsi = Indicators.rsi(closes),
+                    sma20 = sma20,
+                    sma50 = sma50,
+                    sma200 = sma200,
+                    sma50Rising = sma50Rising,
+                    peakSinceEntry = peak,
+                    peakMeasuredFromEntry = fromEntry != null,
+                    support = analysis.srData.supports.filter { it < price }.maxOrNull(),
+                    resistance = analysis.srData.resistances.filter { it > price }.minOrNull(),
+                    high52 = closes.takeLast(252).maxOrNull(),
+                    donchianLow20 = candles.takeLast(20).minOfOrNull { it.low },
+                    r5Pct = windowReturnPct(closes, 5, price),
+                    r20Pct = r20,
+                    r60Pct = r60,
+                    rel20Pct = if (r20 != null && spyR20 != null) r20 - spyR20 else null,
+                    rel60Pct = if (r60 != null && spyR60 != null) r60 - spyR60 else null,
+                    sessionMovePct = sessionMovePct(view, candles),
+                    volumeRatio = volumeRatio(candles),
+                    upDayVolumeSharePct = upDayVolumeSharePct(candles),
+                    distributionDays = distributionDays(candles),
+                    techDirection = analysis.outlook.direction,
+                    techBullish = analysis.outlook.bullishCount,
+                    techTotal = analysis.results.size,
+                    techConfidence = analysis.outlook.confidence,
+                    expectedHigh = analysis.outlook.expectedHigh.takeIf { it > 0.0 },
                     newsScore = newsScore,
                     newsNote = newsNote,
-                    sessionMovePct = sessionMovePct?.let { round1(it) },
-                    above50 = sma50?.let { price >= it },
-                    rel20Pct = rel20?.let { round1(it) },
-                    flowVerdictName = sectorFlow?.verdict?.name ?: ""
+                    // A failed feed and a verified-quiet feed must not read the same.
+                    newsMeasured = newsResult.isSuccess,
+                    sectorFlow = sectorFlow,
+                    flowNote = flowNote,
+                    priorStop = priorStop?.takeIf { it > 0.0 }
                 )
             )
         } catch (_: Exception) {
-            Judged.Failed(symbol, shares, "the read failed mid-computation — pull to retry")
+            Gathered.Failed(symbol, shares, "the read failed mid-computation — pull to retry")
         }
     }
 
+    // ------------------------------------------------------ measured helpers
+
+    /** Return over [sessions] completed sessions, in percent; null without the history. */
+    private fun windowReturnPct(
+        closes: List<Double>,
+        sessions: Int,
+        latest: Double? = null
+    ): Double? {
+        if (closes.size < sessions + 1) return null
+        val base = closes[closes.size - 1 - sessions]
+        if (base <= 0.0) return null
+        val end = latest ?: closes.last()
+        return (end / base - 1.0) * 100.0
+    }
+
+    /** Latest session move: the live quote when its previous close is real, else the last two closes. */
+    private fun sessionMovePct(view: PositionView, candles: List<Candle>): Double? =
+        view.quote
+            ?.takeIf { it.prevClose > 0.0 && it.prevClose != it.price }
+            ?.let { (it.price / it.prevClose - 1.0) * 100.0}
+            ?: candles.takeLast(2)
+                .takeIf { it.size == 2 && it[0].close > 0.0 }
+                ?.let { (it[1].close / it[0].close - 1.0) * 100.0 }
+
+    /** Latest completed session's volume against its own 20-day average; null without both. */
+    private fun volumeRatio(candles: List<Candle>): Double? {
+        if (candles.size < 21) return null
+        val recent = candles.takeLast(21)
+        val avg = recent.dropLast(1).map { it.volume.toDouble() }.average()
+        if (avg <= 0.0) return null
+        return recent.last().volume.toDouble() / avg
+    }
+
     /**
-     * The holding's own sector money flow, mapped honestly: exact watchlist or
-     * catalog membership first; else the Yahoo sector's theme(s). When several
-     * themes map to the sector and their verdicts disagree, no single flow is
-     * claimed — the disagreement itself is reported.
+     * Share of the last 20 sessions' volume that traded on up days — the
+     * cleanest read of whether buyers or sellers are the urgent side.
      */
-    private fun flowContext(
-        symbol: String,
-        sector: String,
-        flow: MoneyFlowReport?
-    ): Pair<SectorFlow?, String> = MoneyFlowEngine.flowFor(symbol, sector, flow)
+    private fun upDayVolumeSharePct(candles: List<Candle>): Double? {
+        if (candles.size < 21) return null
+        val window = candles.takeLast(21)
+        var up = 0.0
+        var total = 0.0
+        for (i in 1 until window.size) {
+            val v = window[i].volume.toDouble()
+            if (v <= 0.0) continue
+            total += v
+            if (window[i].close > window[i - 1].close) up += v
+        }
+        if (total <= 0.0) return null
+        return up / total * 100.0
+    }
+
+    /**
+     * Down sessions of more than 0.2% on above-average volume in the last 25 —
+     * the classic footprint of institutions distributing stock.
+     */
+    private fun distributionDays(candles: List<Candle>): Int? {
+        if (candles.size < 46) return null
+        val window = candles.takeLast(26)
+        var count = 0
+        for (i in 1 until window.size) {
+            val prior = candles.subList(
+                (candles.size - 26 + i - 20).coerceAtLeast(0),
+                candles.size - 26 + i
+            )
+            val avgVol = prior.map { it.volume.toDouble() }.filter { it > 0.0 }.average()
+            if (avgVol.isNaN() || avgVol <= 0.0) continue
+            val prev = window[i - 1].close
+            if (prev <= 0.0) continue
+            if (window[i].close <= prev * 0.998 && window[i].volume.toDouble() > avgVol) count++
+        }
+        return count
+    }
 
     // ------------------------------------------------------------ rebalance
 
@@ -878,10 +829,5 @@ class PortfolioAdvisor(
         return moves
     }
 
-    // ------------------------------------------------------------ helpers
-
-    private fun round1(v: Double): Double = Math.round(v * 10.0) / 10.0
     private fun round2(v: Double): Double = Math.round(v * 100.0) / 100.0
-    private fun fmt0(v: Double): String = String.format(Locale.US, "%.0f", v)
-    private fun fmt1(v: Double): String = String.format(Locale.US, "%.1f", v)
 }

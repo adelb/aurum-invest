@@ -60,10 +60,13 @@ class AppContainer(app: Application) {
     val adviceLog = AdviceLogRepository(db.adviceLogDao(), BuildConfig.VERSION_NAME)
     val cash = CashRepository(db.cashEventDao(), db.transactionDao())
     val fundamentals = FundamentalsRepository(db.cacheDao())
+    // Declared before the Wealth layer: the portfolio review needs the wallet
+    // to know the account's equity, not just the book's value.
+    val wallet = WalletRepository(app, portfolio)
     val wealth = WealthRepository(
-        db.cacheDao(), market, news, portfolio, settings, adviceLog, cash, picks, fundamentals
+        db.cacheDao(), market, news, portfolio, settings, adviceLog, cash, picks, fundamentals,
+        wallet
     )
     val targets = TargetsRepository(db.cacheDao())
     val alerts = AlertsRepository(db.priceAlertDao())
-    val wallet = WalletRepository(app, portfolio)
 }

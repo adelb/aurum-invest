@@ -45,12 +45,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.aurum.invest.analytics.AllocationLine
+import com.aurum.invest.analytics.AllocationMove
+import com.aurum.invest.analytics.AllocationPlan
+import com.aurum.invest.analytics.AllocationTarget
 import com.aurum.invest.analytics.AllocationSlice
 import com.aurum.invest.analytics.BookContext
 import com.aurum.invest.analytics.FlowVerdict
 import com.aurum.invest.analytics.GapStatus
 import com.aurum.invest.analytics.HoldingAction
+import com.aurum.invest.analytics.HoldingStage
 import com.aurum.invest.analytics.HoldingVerdict
 import com.aurum.invest.analytics.LiquidityAllocationLine
 import com.aurum.invest.analytics.LiquidityPlan
@@ -219,7 +222,9 @@ private fun WealthContent(
                     if (review.unverified.isNotEmpty()) {
                         item { UnverifiedHoldingsCard(review.unverified, onOpenDetail) }
                     }
-                    item { AllocationPlanCard(review) }
+                    review.allocationPlan?.let { plan ->
+                        item { AllocationPlanCard(plan, onOpenAnalysis, onOpenDetail) }
+                    }
                     if (review.rebalance.isNotEmpty()) {
                         item { RebalanceCard(review.rebalance, onOpenAnalysis, onOpenDetail) }
                     }
@@ -602,11 +607,36 @@ private fun ReviewSummaryCard(review: PortfolioReview) {
                 modifier = Modifier.weight(1f)
             )
             StatTile(
-                label = "Plan frees up",
-                value = Fmt.pct(review.suggestedCashPct),
+                label = "Risk at stops",
+                value = review.openRiskPct?.let { Fmt.pct(it) } ?: "—",
                 modifier = Modifier.weight(1f),
                 valueColor = AurumColors.gold
             )
+        }
+        if (review.equityNote.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = review.equityNote,
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+        }
+        if (review.verdictNotes.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            review.verdictNotes.forEach { note ->
+                Row(modifier = Modifier.padding(vertical = 2.dp)) {
+                    Text(
+                        text = "•  ",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.textDim
+                    )
+                    Text(
+                        text = note,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
         }
         if (review.sectorNotes.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
@@ -923,6 +953,16 @@ private fun HoldingCard(
             style = MaterialTheme.typography.bodySmall,
             color = if (urgent) AurumColors.loss else AurumColors.gold
         )
+        if (verdict.ridingNote.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = verdict.ridingNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.gain
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        VerdictReadRow(verdict)
         Spacer(Modifier.height(8.dp))
         verdict.whyPoints.forEach { why ->
             Row(modifier = Modifier.padding(vertical = 1.dp)) {
@@ -947,13 +987,18 @@ private fun HoldingCard(
             )
             StatTile(
                 label = "Take profit",
-                value = Fmt.money(verdict.target),
+                // A target at or below the price means none could be measured.
+                value = if (verdict.target > verdict.price) Fmt.money(verdict.target) else "—",
                 modifier = Modifier.weight(1f),
                 valueColor = AurumColors.gain
             )
             StatTile(
-                label = "Exit below",
-                value = Fmt.money(verdict.stop),
+                label = if (verdict.trailStop != null && verdict.trailStop >= verdict.stop - 0.005) {
+                    "Trail"
+                } else "Exit below",
+                // stop == 0 is the engine's "no level could be measured", not a
+                // stop at zero — printing $0.00 would read as an instruction.
+                value = if (verdict.stop > 0.0) Fmt.money(verdict.stop) else "—",
                 modifier = Modifier.weight(1f),
                 valueColor = AurumColors.loss
             )
@@ -1046,8 +1091,68 @@ private fun UnverifiedHoldingsCard(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AllocationPlanCard(review: PortfolioReview) {
+private fun VerdictReadRow(verdict: HoldingVerdict) {
+    // The two fixed-scale reads, the cycle stage, and the forward frame — each
+    // pill only appears when the number behind it was actually measured.
+    WrappingFlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        if (verdict.convictionMax > 0) {
+            val ratio = verdict.conviction * 100 / verdict.convictionMax
+            PillTag(
+                text = "Conviction ${verdict.conviction}/${verdict.convictionMax}",
+                color = when {
+                    ratio >= 70 -> AurumColors.gain
+                    ratio >= 45 -> AurumColors.gold
+                    else -> AurumColors.textDim
+                }
+            )
+        }
+        if (verdict.riskScoreMax > 0) {
+            val ratio = verdict.riskScore * 100 / verdict.riskScoreMax
+            PillTag(
+                text = "Risk ${verdict.riskScore}/${verdict.riskScoreMax}",
+                color = when {
+                    ratio >= 55 -> AurumColors.loss
+                    ratio >= 30 -> AurumColors.gold
+                    else -> AurumColors.textDim
+                }
+            )
+        }
+        when (verdict.stage) {
+            HoldingStage.ADVANCING -> PillTag(text = "Advancing", color = AurumColors.gain)
+            HoldingStage.TOPPING -> PillTag(text = "Topping", color = AurumColors.gold)
+            HoldingStage.BASING -> PillTag(text = "Basing", color = AurumColors.info)
+            HoldingStage.DECLINING -> PillTag(text = "Declining", color = AurumColors.loss)
+            HoldingStage.UNMEASURED -> Unit
+        }
+        verdict.riskReward?.let { rr ->
+            PillTag(
+                text = String.format(Locale.US, "R/R %.1f:1", rr),
+                color = if (rr >= 1.0) AurumColors.gain else AurumColors.loss
+            )
+        }
+        verdict.runwayPct?.let {
+            PillTag(text = String.format(Locale.US, "%.0f%% runway", it), color = AurumColors.textDim)
+        }
+        verdict.riskAtStopEquityPct?.let {
+            PillTag(
+                text = String.format(Locale.US, "%.2f%% of equity at risk", it),
+                color = AurumColors.textDim
+            )
+        }
+    }
+}
+
+@Composable
+private fun AllocationPlanCard(
+    plan: AllocationPlan,
+    onOpenAnalysis: (String) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
     AurumCard {
         Text(
             text = "Allocation plan",
@@ -1056,34 +1161,104 @@ private fun AllocationPlanCard(review: PortfolioReview) {
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            text = "Where each position sits against where the engine would size it.",
+            text = plan.headline,
+            style = MaterialTheme.typography.bodyMedium,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = if (plan.baseIsEquity) {
+                "Every percentage is a share of ${Fmt.money(plan.base)} equity — " +
+                    "${Fmt.money(plan.invested)} invested at cost" +
+                    (plan.liquidity?.let { " and ${Fmt.money(it)} uninvested" } ?: "") + "."
+            } else {
+                "Every percentage is a share of the ${Fmt.money(plan.base)} invested book — " +
+                    "the wallet total is not tracked, so cash is unknown."
+            },
             style = MaterialTheme.typography.labelSmall,
             color = AurumColors.textDim
         )
-        Spacer(Modifier.height(10.dp))
-        review.allocation.forEach { line ->
-            AllocationPlanRow(line)
+
+        Spacer(Modifier.height(12.dp))
+        plan.targets.forEach { target ->
+            AllocationTargetRow(target, onOpenDetail)
         }
+
+        if (plan.adds.isNotEmpty()) {
+            HorizontalDivider(
+                color = AurumColors.hairline,
+                modifier = Modifier.padding(vertical = 10.dp)
+            )
+            Text(
+                text = "New names for the money this frees",
+                style = MaterialTheme.typography.titleSmall,
+                color = AurumColors.text
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = "Scanned and scored by the same engine that answers your liquidity card.",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+            Spacer(Modifier.height(8.dp))
+            plan.adds.forEach { line ->
+                LiquidityLineRow(line, onOpenAnalysis, onOpenDetail)
+                Spacer(Modifier.height(10.dp))
+            }
+        }
+
+        if (plan.sectorTargets.isNotEmpty()) {
+            HorizontalDivider(
+                color = AurumColors.hairline,
+                modifier = Modifier.padding(vertical = 10.dp)
+            )
+            plan.sectorTargets.take(5).forEach { t ->
+                LiquiditySectorRow(t)
+                Spacer(Modifier.height(6.dp))
+            }
+        }
+
         HorizontalDivider(
             color = AurumColors.hairline,
             modifier = Modifier.padding(vertical = 8.dp)
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "Freed to cash",
+                text = "Cash after the plan",
                 style = MaterialTheme.typography.bodyMedium,
                 color = AurumColors.text,
                 modifier = Modifier.weight(1f)
             )
             Text(
-                text = Fmt.pct(review.suggestedCashPct),
+                text = Fmt.pct(plan.targetCashPct),
                 style = MaterialTheme.typography.titleSmall,
                 color = AurumColors.gold
             )
         }
         Spacer(Modifier.height(4.dp))
         Text(
-            text = "Cash is a position too — it buys the next setup the engines flag.",
+            text = plan.cashNote,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+        plan.notes.forEach { note ->
+            Spacer(Modifier.height(6.dp))
+            Row {
+                Text(
+                    text = "•  ",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.gold
+                )
+                Text(
+                    text = note,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = plan.caveat,
             style = MaterialTheme.typography.labelSmall,
             color = AurumColors.textDim
         )
@@ -1091,30 +1266,57 @@ private fun AllocationPlanCard(review: PortfolioReview) {
 }
 
 @Composable
-private fun AllocationPlanRow(line: AllocationLine) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(vertical = 4.dp)
+private fun AllocationTargetRow(target: AllocationTarget, onOpenDetail: (String) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onOpenDetail(target.symbol) }
+            .padding(vertical = 5.dp)
     ) {
-        Text(
-            text = line.symbol,
-            style = MaterialTheme.typography.titleSmall,
-            color = AurumColors.text,
-            modifier = Modifier.width(64.dp)
-        )
-        Column(modifier = Modifier.weight(1f)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "${Fmt.pct(line.currentPct)} → ${Fmt.pct(line.suggestedPct)}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (line.suggestedPct < line.currentPct) AurumColors.loss
-                else AurumColors.text
+                text = target.symbol,
+                style = MaterialTheme.typography.titleSmall,
+                color = AurumColors.text,
+                modifier = Modifier.width(64.dp)
             )
-            Text(
-                text = line.note,
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.textDim
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "${Fmt.pct(target.currentPct)} → ${Fmt.pct(target.targetPct)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = when (target.move) {
+                        AllocationMove.EXIT, AllocationMove.REDUCE -> AurumColors.loss
+                        AllocationMove.ADD -> AurumColors.gain
+                        AllocationMove.HOLD -> AurumColors.text
+                    }
+                )
+                Text(
+                    text = "${Fmt.money(target.currentValue)} → ${Fmt.money(target.targetValue)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            when (target.move) {
+                AllocationMove.EXIT -> PillTag(text = "Exit", color = AurumColors.loss)
+                AllocationMove.REDUCE -> PillTag(
+                    text = Fmt.signedMoney(target.deltaValue),
+                    color = AurumColors.loss
+                )
+                AllocationMove.ADD -> PillTag(
+                    text = Fmt.signedMoney(target.deltaValue),
+                    color = AurumColors.gain
+                )
+                AllocationMove.HOLD -> PillTag(text = "Sized", color = AurumColors.textDim)
+            }
         }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = target.note,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
     }
 }
 

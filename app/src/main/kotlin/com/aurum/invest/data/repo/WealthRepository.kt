@@ -1,6 +1,7 @@
 package com.aurum.invest.data.repo
 
 import com.aurum.invest.analytics.BookContext
+import com.aurum.invest.analytics.EquityContext
 import com.aurum.invest.analytics.FlowVerdict
 import com.aurum.invest.analytics.Indicators
 import com.aurum.invest.analytics.LiquidityAllocationEngine
@@ -65,14 +66,22 @@ class WealthRepository(
     /** Today's entry/power-hour picks — the candidate universe for the liquidity plan. */
     private val picks: PicksRepository? = null,
     /** Best-effort analyst rating / market cap enrichment for liquidity candidates. */
-    private val fundamentals: FundamentalsRepository? = null
+    private val fundamentals: FundamentalsRepository? = null,
+    /**
+     * The wallet — the only honest source of uninvested cash. Null (or an
+     * unconfigured wallet) means equity is unknown, and every engine below
+     * says so rather than treating the book as the whole account.
+     */
+    private val wallet: WalletRepository? = null
 ) {
 
     companion object {
         private const val PULSE_KEY = "marketpulse:v2"
         private const val TRENDS_KEY = "sectortrends:v2"
         private const val FLOW_KEY = "moneyflow:v2"
-        private const val REVIEW_KEY = "portfolioreview:v6"
+        // v7: standalone verdict + allocation engines, new grade scales — a v6
+        // payload would deserialize into a review that means something else.
+        private const val REVIEW_KEY = "portfolioreview:v7"
         private const val NEXT_SESSION_KEY = "nextsession:v3"
         private const val NS_NOTIFIED_PREFIX = "nextsession:notified:"
         private const val PREVIEW_KEY_PREFIX = "wealthplan:next:v2:"
@@ -327,8 +336,41 @@ class WealthRepository(
             val profile = settings?.let {
                 runCatching { it.investorProfile.first() }.getOrNull()
             } ?: InvestorProfile.DEFAULT
-            val review = PortfolioAdvisor(market, news, profile)
-                .review(views, sectors, flow, strategy, pulse, unpriced)
+
+            // The money behind the book. An unconfigured wallet leaves
+            // liquidity null — the engines then refuse to quote any percentage
+            // of the whole account instead of pretending the book is all of it.
+            val liquidity = wallet?.let { runCatching { it.liquidityNow() }.getOrNull() }
+            val equity = EquityContext(
+                invested = open.sumOf { it.investedCost },
+                holdingsValue = views.sumOf { it.marketValue },
+                liquidity = liquidity,
+                realizedPl = open.sumOf { it.realizedPl }
+            )
+            // When each position was opened, so the trail can hang from the
+            // peak SINCE PURCHASE rather than an arbitrary window high.
+            val entryTs = entryTimestamps()
+            // The stops the last run published, so the trail ratchets instead
+            // of drifting down. A stop from before the position was (re)opened
+            // is dropped — it protected a different position.
+            val priorStops = priorStops(entryTs)
+            // The market scan the allocation plan deploys freed capital into —
+            // the same candidate universe the liquidity card uses.
+            val candidates = runCatching { gatherLiquidityCandidates() }
+                .getOrDefault(emptyList())
+            val review = PortfolioAdvisor(market, news, profile).review(
+                views = views,
+                sectors = sectors,
+                flow = flow,
+                strategy = strategy,
+                pulse = pulse,
+                unpriced = unpriced,
+                equity = equity,
+                priorStops = priorStops,
+                entryTs = entryTs,
+                sectorTrends = runCatching { sectorTrendsCached() }.getOrDefault(emptyList()),
+                candidates = candidates
+            )
             if (review != null) {
                 putCache(
                     REVIEW_KEY,
@@ -355,6 +397,57 @@ class WealthRepository(
         } catch (_: Exception) {
             null
         }
+    }
+
+    /**
+     * When the CURRENT open run of each symbol began, from the ledger. A symbol
+     * that has gone flat and been rebought reports the rebuy's stamp — the peak
+     * a trail hangs from must belong to the position actually held.
+     *
+     * Empty when the ledger cannot be read; the verdict engine then measures a
+     * window high instead and labels it as such.
+     */
+    private suspend fun entryTimestamps(): Map<String, Long> = try {
+        val running = HashMap<String, Double>()
+        val start = HashMap<String, Long>()
+        portfolio.orderedTransactionsNow().forEach { t ->
+            val sym = t.symbol.trim().uppercase()
+            val prev = running[sym] ?: 0.0
+            val next = when (t.side.uppercase()) {
+                "BUY" -> prev + t.shares
+                "SELL" -> prev - t.shares
+                // SPLIT carries a ratio, not a quantity: it rescales, never opens.
+                "SPLIT" -> if (t.shares > 0.0) prev * t.shares else prev
+                else -> prev
+            }
+            if (prev <= 1e-9 && next > 1e-9) start[sym] = t.ts
+            if (next <= 1e-9) start.remove(sym)
+            running[sym] = next
+        }
+        start
+    } catch (_: Exception) {
+        emptyMap()
+    }
+
+    /**
+     * The stop each holding carried in the last stored review, so the trailing
+     * stop can only ever move UP. A stop published before the position was
+     * opened (or reopened) is dropped rather than inherited — it was protecting
+     * a different position.
+     */
+    private suspend fun priorStops(entryTs: Map<String, Long>): Map<String, Double> = try {
+        val cached = getCache(REVIEW_KEY) ?: return emptyMap()
+        val stored = JSONObject(cached.json).optString("review")
+        val review = PortfolioReview.fromJson(stored) ?: return emptyMap()
+        review.verdicts
+            .filter { it.stop > 0.0 }
+            .filter { v ->
+                val opened = entryTs[v.symbol]
+                opened == null || review.computedAt >= opened
+            }
+            .associate { it.symbol to it.stop }
+    } catch (_: Exception) {
+        emptyMap()
     }
 
     /**

@@ -1,5 +1,6 @@
 package com.aurum.invest.analytics
 
+import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.repo.InvestorProfile
 import java.util.Locale
 import kotlin.math.abs
@@ -199,6 +200,19 @@ object PortfolioGradeEngine {
     private const val MAX_STEPS = 4
     private const val MAX_CANDIDATES = 4
 
+    // The eight disciplines' FIXED point scales. They sum to exactly 100 when
+    // every one is measurable, so a score means the same thing next month.
+    // Changing any of these changes what a score means — bump the review cache
+    // key when you do.
+    private const val MAX_CONCENTRATION = 18
+    private const val MAX_LOSS = 14
+    private const val MAX_WINNERS = 16
+    private const val MAX_TREND = 14
+    private const val MAX_RS = 14
+    private const val MAX_FLOW = 8
+    private const val MAX_REGIME = 8
+    private const val MAX_RISK = 8
+
     /** The smallest whole-point score that clears the green line for [max]. */
     private fun greenTarget(max: Int): Int = (max * GREEN_PCT + 99) / 100
 
@@ -218,7 +232,13 @@ object PortfolioGradeEngine {
         pulse: MarketRating?,
         strategy: WeeklyStrategy?,
         /** The SAME profile the advisor's verdicts were sized to — the grade must score the caps the advisor acts on. */
-        policy: InvestorProfile = InvestorProfile.DEFAULT
+        policy: InvestorProfile = InvestorProfile.DEFAULT,
+        /**
+         * The money behind the book. Without it the risk-budget discipline is
+         * excluded from the score and says so — a portfolio-heat figure with no
+         * equity under it would be a fabrication.
+         */
+        equity: EquityContext = EquityContext.UNKNOWN
     ): PortfolioGrade {
         val candidates = candidates(verdicts, flow, strategy)
         // Share of the whole book the verdicts actually measured. Loss,
@@ -228,11 +248,12 @@ object PortfolioGradeEngine {
         val components = listOf(
             concentration(verdicts, book, candidates, policy),
             lossDiscipline(verdicts, policy, measuredBase),
-            winners(verdicts, candidates, measuredBase),
+            winners(verdicts, candidates, measuredBase, policy),
             trend(verdicts, candidates),
             relativeStrength(verdicts, candidates),
             flowAlignment(verdicts, candidates),
-            regimeFit(verdicts, pulse, measuredBase)
+            regimeFit(verdicts, pulse, measuredBase),
+            riskBudget(verdicts, equity, policy)
         )
         val measured = components.filter { it.measured }
         val score = measured.sumOf { it.points }
@@ -349,21 +370,21 @@ object PortfolioGradeEngine {
         val topSector = book.slices.firstOrNull { it.sector != PortfolioLens.UNCLASSIFIED }
         fun pointsFor(topPos: Double, sectorW: Double?): Int {
             val posDed = when {
-                topPos > positionTrim + 15.0 -> 14
-                topPos > positionTrim -> 8
+                topPos > positionTrim + 15.0 -> 13
+                topPos > positionTrim -> 7
                 else -> 0
             }
             val secDed = when {
                 sectorW == null -> 0
-                sectorW >= sectorOverweight + 15.0 -> 8
+                sectorW >= sectorOverweight + 15.0 -> 7
                 sectorW >= sectorOverweight -> 4
                 else -> 0
             }
-            return (20 - posDed - secDed).coerceAtLeast(0)
+            return (MAX_CONCENTRATION - posDed - secDed).coerceAtLeast(0)
         }
 
         val points = pointsFor(top.weightPct, topSector?.weightPct)
-        val target = greenTarget(20)
+        val target = greenTarget(MAX_CONCENTRATION)
         val actions = ArrayList<GradeAction>()
         // Chained simulation state.
         var curPts = points
@@ -398,7 +419,7 @@ object PortfolioGradeEngine {
                         movePct = round1(sellPct),
                         pointsNow = curPts,
                         pointsAfter = after,
-                        maxPoints = 20
+                        maxPoints = MAX_CONCENTRATION
                     )
                 )
                 curPts = after; curTop = newTop; curSector = newSector; base = newBase
@@ -456,7 +477,7 @@ object PortfolioGradeEngine {
                             movePct = round1(movePct),
                             pointsNow = curPts,
                             pointsAfter = after,
-                            maxPoints = 20
+                            maxPoints = MAX_CONCENTRATION
                         )
                     )
                     curPts = after; curSector = newSector; curTop = newTop
@@ -465,7 +486,7 @@ object PortfolioGradeEngine {
             if (curPts < target) {
                 actions.add(
                     topsOut(
-                        curPts, 20,
+                        curPts, MAX_CONCENTRATION,
                         "A single-position book cannot spread further without new names — " +
                             "add a second position from the picks the other cards flag."
                     )
@@ -485,7 +506,7 @@ object PortfolioGradeEngine {
             label = "Concentration control",
             principle = "Buffett concentrates with conviction — but no single bet may sink the book " +
                 "(your position cap ${fmt0(positionCap)}%, sector cap ${fmt0(sectorOverweight)}%).",
-            points = points, maxPoints = 20, measured = true, evidence = evidence,
+            points = points, maxPoints = MAX_CONCENTRATION, measured = true, evidence = evidence,
             actions = actions, projectedPoints = curPts
         )
     }
@@ -500,14 +521,14 @@ object PortfolioGradeEngine {
         // profile's -6% and an aggressive one's -10% must grade differently.
         val cutLoss = PortfolioAdvisor.cutLossPct(policy)
         fun pointsFor(lossShare: Double): Int =
-            (15.0 * (1.0 - (lossShare / 30.0).coerceIn(0.0, 1.0))).roundToInt()
+            (MAX_LOSS * (1.0 - (lossShare / 30.0).coerceIn(0.0, 1.0))).roundToInt()
 
         val losers = verdicts.filter { it.unrealizedPlPct <= cutLoss }.sortedBy { it.unrealizedPlPct }
         // Shares are of the MEASURED book — an unverifiable holding is not
         // silently counted as healthy weight in the denominator.
         val lossShare = losers.sumOf { it.weightPct } / measuredBase * 100.0
         val points = pointsFor(lossShare)
-        val target = greenTarget(15)
+        val target = greenTarget(MAX_LOSS)
         val actions = ArrayList<GradeAction>()
         // Chained simulation: sell deep losers worst-first until green.
         var curPts = points
@@ -534,7 +555,7 @@ object PortfolioGradeEngine {
                     movePct = round1(loser.weightPct),
                     pointsNow = curPts,
                     pointsAfter = after,
-                    maxPoints = 15
+                    maxPoints = MAX_LOSS
                 )
             )
             curPts = after; lossAbs = newLossAbs; sold = newSold
@@ -542,7 +563,7 @@ object PortfolioGradeEngine {
         if (points < target && curPts < target) {
             actions.add(
                 topsOut(
-                    curPts, 15,
+                    curPts, MAX_LOSS,
                     "The remaining underwater weight sits in positions too large to exit in one " +
                         "step — keep applying your ${fmt0(-cutLoss)}% rule as their cards direct."
                 )
@@ -559,92 +580,334 @@ object PortfolioGradeEngine {
             label = "Loss discipline",
             principle = "O'Neil's rule: cut every loss fast — your profile cuts at ${fmt0(-cutLoss)}%, " +
                 "so small losses never become big ones.",
-            points = points, maxPoints = 15, measured = true, evidence = evidence,
+            points = points, maxPoints = MAX_LOSS, measured = true, evidence = evidence,
             actions = actions, projectedPoints = curPts
         )
     }
 
-    /** Livermore: the big money is made sitting tight on winning positions. */
+    /**
+     * Livermore: the big money is made sitting tight on winners — and O'Neil's
+     * other half, that the average win must dwarf the average loss.
+     *
+     * This discipline measures RIDING, not merely owning. Three sub-bands, each
+     * dropped from BOTH sides of the scale when it cannot be measured:
+     *
+     *  a) 6 pts — the win/loss size ratio: average % gain across winners over
+     *     average % loss across losers. This is the number that separates a
+     *     book that lets winners run from one that snips gains and nurses
+     *     losses. Needs at least one winner AND one loser to exist at all.
+     *  b) 6 pts — how much of the measured book is working (4) and whether the
+     *     three biggest slots are the winners (2). Elite books are weighted
+     *     toward what is already working, not toward what needs to recover.
+     *  c) 4 pts — the share of winning weight still holding its own 50-day
+     *     line: a winner below its trend is not being ridden, it is being
+     *     hoped over. Needs a measurable 50-day on at least one winner.
+     */
     private fun winners(
         verdicts: List<HoldingVerdict>,
         candidates: List<Candidate>,
-        measuredBase: Double
+        measuredBase: Double,
+        policy: InvestorProfile
     ): GradeComponent {
-        fun pointsFor(profitShare: Double): Int =
-            (15.0 * (profitShare / 60.0).coerceIn(0.0, 1.0)).roundToInt()
-
-        // Of the MEASURED book — an unverifiable holding must not dilute the
-        // winning share as if it were measured dead weight.
-        val profitAbs = verdicts.filter { it.unrealizedPlPct > 0.0 }.sumOf { it.weightPct }
-        val profitShare = profitAbs / measuredBase * 100.0
-        val points = pointsFor(profitShare)
-        val target = greenTarget(15)
-        val actions = ArrayList<GradeAction>()
-        // Chained simulation: exit the largest non-winners; the arithmetic
-        // holds the proceeds in cash — a redeploy counts only once it is
-        // actually in profit, and each step says so.
-        var curPts = points
-        var sold = 0.0
-        if (points < target) {
-            val nonWinners = verdicts.filter { it.unrealizedPlPct <= 0.0 }
-                .sortedByDescending { it.weightPct }
-            var buyIndex = 0
-            for (holding in nonWinners) {
-                if (curPts >= target || actions.size >= MAX_STEPS) break
-                if (holding.weightPct >= measuredBase - sold) break
-                val newSold = sold + holding.weightPct
-                val newShare = (profitAbs / (measuredBase - newSold) * 100.0).coerceAtMost(100.0)
-                val after = pointsFor(newShare)
-                val buy = candidates.getOrNull(buyIndex)
-                actions.add(
-                    GradeAction(
-                        kind = GradeActionKind.SELL,
-                        title = "Exit ${holding.symbol} — the largest non-winner",
-                        detail = String.format(
-                            Locale.US,
-                            "%s (%.0f%% of the book, %+.1f%%) is dead weight. With the proceeds " +
-                                "held as cash the winning share of the remaining book becomes " +
-                                "%.0f%%. %s",
-                            holding.symbol, holding.weightPct, holding.unrealizedPlPct, newShare,
-                            buy?.let {
-                                "Redeploy option: buy ${it.pick.symbol} — ${buyLine(it)} " +
-                                    "It counts toward this discipline only once it is in profit."
-                            } ?: ""
-                        ).trim(),
-                        symbol = holding.symbol,
-                        buySymbol = buy?.pick?.symbol ?: "",
-                        buyName = buy?.pick?.name ?: "",
-                        buyEntry = buy?.pick?.entry ?: 0.0,
-                        movePct = round1(holding.weightPct),
-                        pointsNow = curPts,
-                        pointsAfter = after,
-                        maxPoints = 15
-                    )
-                )
-                curPts = after; sold = newSold
-                if (buy != null) buyIndex++
-            }
-            if (curPts < target) {
-                actions.add(
-                    topsOut(
-                        curPts, 15,
-                        if (profitShare <= 0.0) {
-                            "No position is in profit today — these points arrive only as " +
-                                "holdings move into the green, not from any sale."
-                        } else {
-                            "The winning share cannot be lifted further by exits alone — the " +
-                                "rest comes as positions turn profitable."
-                        }
-                    )
-                )
-            }
+        val principle =
+            "Livermore and O'Neil together: sit tight on winners, cut losers fast — the average " +
+                "win must be worth several average losses (your loss rule cuts at " +
+                "${fmt0(-PortfolioAdvisor.cutLossPct(policy))}%)."
+        val holdings = verdicts.map {
+            Rider(it.symbol, it.unrealizedPlPct, it.weightPct, it.above50)
         }
+        if (holdings.isEmpty() || measuredBase <= 0.0) {
+            return GradeComponent(
+                key = "winners", label = "Winners riding", principle = principle,
+                points = 0, maxPoints = MAX_WINNERS, measured = false,
+                evidence = "No holding could be measured this run."
+            )
+        }
+
+        val now = rideScore(holdings, measuredBase)
+        if (now.max <= 0) {
+            return GradeComponent(
+                key = "winners", label = "Winners riding", principle = principle,
+                points = 0, maxPoints = MAX_WINNERS, measured = false,
+                evidence = "Nothing measurable about how this book rides its winners yet: " +
+                    now.dropped.joinToString("; ") + "."
+            )
+        }
+        val target = greenTarget(now.max)
+        val actions = ArrayList<GradeAction>()
+
+        // Chained simulation. At each step every legal exit is scored on the
+        // SAME arithmetic and the best one is taken — no move is proposed
+        // unless it provably raises the discipline.
+        var live = holdings
+        var liveBase = measuredBase
+        var curPts = now.points
+        var buyIndex = 0
+        while (curPts < target && actions.size < MAX_STEPS && live.size > 1) {
+            val best = live
+                .mapNotNull { h ->
+                    if (h.weightPct >= liveBase) return@mapNotNull null
+                    val remaining = live.filter { it.symbol != h.symbol }
+                    val newBase = liveBase - h.weightPct
+                    if (newBase <= 0.0) return@mapNotNull null
+                    val after = rideScore(remaining, newBase)
+                    // Only an exit that lifts the score on today's numbers.
+                    if (after.max <= 0 || after.points <= curPts) null
+                    else Triple(h, after, newBase)
+                }
+                .maxByOrNull { it.second.points }
+                ?: break
+            val (holding, after, newBase) = best
+            val buy = candidates.getOrNull(buyIndex)
+            val why = when {
+                holding.plPct <= 0.0 && holding.above50 == false ->
+                    "a loser below its own 50-day line — the exact position the loss rule exists for"
+                holding.plPct <= 0.0 -> "dead weight the winners are carrying"
+                holding.above50 == false ->
+                    "a winner that has already lost its 50-day line, so it is no longer being ridden"
+                else -> "the position holding this discipline back on today's numbers"
+            }
+            actions.add(
+                GradeAction(
+                    kind = GradeActionKind.SELL,
+                    title = "Exit ${holding.symbol} — $why",
+                    detail = String.format(
+                        Locale.US,
+                        "%s is %+.1f%% on %.0f%% of the book. With the proceeds held as cash the " +
+                            "discipline scores %d/%d: %s. %s",
+                        holding.symbol, holding.plPct, holding.weightPct,
+                        after.points, after.max, after.evidence,
+                        buy?.let {
+                            "Redeploy option: buy ${it.pick.symbol} — ${buyLine(it)} It counts " +
+                                "toward this discipline only once it is in profit."
+                        } ?: ""
+                    ).trim(),
+                    symbol = holding.symbol,
+                    buySymbol = buy?.pick?.symbol ?: "",
+                    buyName = buy?.pick?.name ?: "",
+                    buyEntry = buy?.pick?.entry ?: 0.0,
+                    movePct = round1(holding.weightPct),
+                    pointsNow = curPts,
+                    pointsAfter = after.points,
+                    maxPoints = now.max
+                )
+            )
+            curPts = after.points
+            live = live.filter { it.symbol != holding.symbol }
+            liveBase = newBase
+            if (buy != null) buyIndex++
+        }
+        if (curPts < target) {
+            actions.add(
+                topsOut(
+                    curPts, now.max,
+                    "No further exit lifts this discipline on today's numbers — the rest arrives " +
+                        "as winners run and the average win pulls away from the average loss. " +
+                        "Selling a winner would lower this score, not raise it."
+                )
+            )
+        }
+
         return GradeComponent(
-            key = "winners",
-            label = "Winners riding",
-            principle = "Livermore: the big money is in sitting tight on winners — elite books stay weighted toward what is working.",
-            points = points, maxPoints = 15, measured = true,
-            evidence = String.format(Locale.US, "%.0f%% of the measured book is in profit.", profitShare),
+            key = "winners", label = "Winners riding", principle = principle,
+            points = now.points, maxPoints = now.max, measured = true,
+            evidence = now.evidence, actions = actions, projectedPoints = curPts
+        )
+    }
+
+    /** One holding reduced to what the winners-riding maths needs. */
+    private data class Rider(
+        val symbol: String,
+        val plPct: Double,
+        val weightPct: Double,
+        val above50: Boolean?
+    )
+
+    private data class RideScore(
+        val points: Int,
+        val max: Int,
+        val evidence: String,
+        val dropped: List<String>
+    )
+
+    /**
+     * The winners-riding arithmetic on today's numbers. Sub-bands that cannot
+     * be measured are removed from BOTH sides — never scored at a midpoint.
+     */
+    private fun rideScore(list: List<Rider>, measuredBase: Double): RideScore {
+        if (list.isEmpty() || measuredBase <= 0.0) {
+            return RideScore(0, 0, "No measurable holdings.", listOf("every sub-band"))
+        }
+        var pts = 0.0
+        var max = 0.0
+        val dropped = ArrayList<String>()
+        val facts = ArrayList<String>()
+
+        val winners = list.filter { it.plPct > 0.0 }
+        val losers = list.filter { it.plPct < 0.0 }
+
+        // (a) the ratio that defines the discipline.
+        val avgWin = if (winners.isNotEmpty()) winners.map { it.plPct }.average() else null
+        val avgLoss = if (losers.isNotEmpty()) losers.map { -it.plPct }.average() else null
+        if (avgWin != null && avgLoss != null && avgLoss > 1e-9) {
+            max += 6.0
+            val ratio = avgWin / avgLoss
+            pts += when {
+                ratio >= 3.0 -> 6.0
+                ratio >= 2.0 -> 4.5
+                ratio >= 1.5 -> 3.0
+                ratio >= 1.0 -> 1.5
+                else -> 0.0
+            }
+            facts += String.format(
+                Locale.US,
+                "average win %+.1f%% against average loss %.1f%% — a %.1f:1 ratio",
+                avgWin, avgLoss, ratio
+            )
+        } else {
+            dropped += if (winners.isEmpty()) "the win/loss ratio (no position is in profit)"
+            else "the win/loss ratio (no position is underwater to compare against)"
+        }
+
+        // (b) how much of the book is working, and whether it leads.
+        max += 6.0
+        val profitShare = winners.sumOf { it.weightPct } / measuredBase * 100.0
+        pts += 4.0 * (profitShare / 60.0).coerceIn(0.0, 1.0)
+        val top3 = list.sortedByDescending { it.weightPct }.take(3)
+        val top3W = top3.sumOf { it.weightPct }
+        val top3WinW = top3.filter { it.plPct > 0.0 }.sumOf { it.weightPct }
+        if (top3W > 1e-9) pts += 2.0 * (top3WinW / top3W).coerceIn(0.0, 1.0)
+        facts += String.format(
+            Locale.US,
+            "%.0f%% of the measured book is in profit and %.0f%% of the three largest slots are winners",
+            profitShare, if (top3W > 1e-9) top3WinW / top3W * 100.0 else 0.0
+        )
+
+        // (c) are the winners actually still being ridden?
+        val ridable = winners.filter { it.above50 != null }
+        val ridableW = ridable.sumOf { it.weightPct }
+        if (ridableW > 1e-9) {
+            max += 4.0
+            val intact = ridable.filter { it.above50 == true }.sumOf { it.weightPct }
+            pts += 4.0 * (intact / ridableW).coerceIn(0.0, 1.0)
+            facts += String.format(
+                Locale.US, "%.0f%% of the winning weight still holds its 50-day line",
+                intact / ridableW * 100.0
+            )
+        } else {
+            dropped += "whether the winners still hold their 50-day lines"
+        }
+
+        val evidence = facts.joinToString("; ").replaceFirstChar { it.uppercase() } +
+            (if (dropped.isEmpty()) "." else ". Not measured: ${dropped.joinToString("; ")}.")
+        return RideScore(pts.roundToInt(), max.roundToInt(), evidence, dropped)
+    }
+
+    /**
+     * Position sizing before stock picking: every stop has a dollar cost, and
+     * the sum of those costs is the portfolio's heat. A book can be right about
+     * every stock and still be wrong about how much it has bet.
+     */
+    private fun riskBudget(
+        verdicts: List<HoldingVerdict>,
+        equity: EquityContext,
+        policy: InvestorProfile
+    ): GradeComponent {
+        val budget = PortfolioVerdictEngine.riskBudgetPct(policy)
+        val principle = String.format(
+            Locale.US,
+            "Risk before reward: your %.1f%% per trade allows about %.0f%% of equity at risk across " +
+                "the whole book at once.",
+            policy.riskPerTradePct, budget
+        )
+        fun unmeasured(why: String) = GradeComponent(
+            key = "risk", label = "Risk budget", principle = principle,
+            points = 0, maxPoints = MAX_RISK, measured = false, evidence = why
+        )
+        if (equity.equity <= 0.0) {
+            return unmeasured(
+                "Equity is not tracked this run, so no share of the account can be claimed. " +
+                    "Set your wallet total and this discipline starts scoring."
+            )
+        }
+        val risked = verdicts.mapNotNull { v -> v.riskAtStop?.let { v to it } }
+        if (risked.size < verdicts.size || risked.isEmpty()) {
+            return unmeasured(
+                "${risked.size} of ${verdicts.size} holdings have a measurable stop — portfolio " +
+                    "heat is only honest when every position's risk is known."
+            )
+        }
+        fun pointsFor(heat: Double): Int = when {
+            heat <= budget -> MAX_RISK
+            heat <= budget * 1.5 -> 5
+            heat <= budget * 2.0 -> 2
+            else -> 0
+        }
+
+        val perTradeValue = equity.equity * policy.riskPerTradePct / 100.0
+        var heatValue = risked.sumOf { it.second }
+        var curPts = pointsFor(heatValue / equity.equity * 100.0)
+        val points = curPts
+        val target = greenTarget(MAX_RISK)
+        val actions = ArrayList<GradeAction>()
+        // Chained simulation: bring the heaviest risk contributors down to one
+        // full per-trade unit each. That is arithmetic on today's stops, not a
+        // forecast of prices.
+        val heavy = risked.filter { it.second > perTradeValue * 1.05 }
+            .sortedByDescending { it.second }
+        for ((v, atRisk) in heavy) {
+            if (curPts >= target || actions.size >= MAX_STEPS) break
+            val release = atRisk - perTradeValue
+            val newHeat = (heatValue - release).coerceAtLeast(0.0)
+            val after = pointsFor(newHeat / equity.equity * 100.0)
+            val trimPct = if (atRisk > 0.0) (release / atRisk * 100.0).coerceIn(0.0, 100.0) else 0.0
+            actions.add(
+                GradeAction(
+                    kind = GradeActionKind.TRIM,
+                    title = String.format(
+                        Locale.US, "Trim %s by %.0f%% — its stop risks %s",
+                        v.symbol, trimPct, AllocationMath.money(atRisk)
+                    ),
+                    detail = String.format(
+                        Locale.US,
+                        "%s risks %s to its %s stop, %.1f× your %s per-trade unit (%s). Cutting " +
+                            "the position by %.0f%% brings the book's heat from %.1f%% to %.1f%% of equity.",
+                        v.symbol, AllocationMath.money(atRisk), Fmt.money(v.stop),
+                        atRisk / perTradeValue.coerceAtLeast(1e-9),
+                        String.format(Locale.US, "%.1f%%", policy.riskPerTradePct),
+                        AllocationMath.money(perTradeValue), trimPct,
+                        heatValue / equity.equity * 100.0, newHeat / equity.equity * 100.0
+                    ),
+                    symbol = v.symbol,
+                    movePct = round1(v.weightPct * trimPct / 100.0),
+                    pointsNow = curPts,
+                    pointsAfter = after,
+                    maxPoints = MAX_RISK
+                )
+            )
+            curPts = after
+            heatValue = newHeat
+        }
+        if (curPts < target) {
+            actions.add(
+                topsOut(
+                    curPts, MAX_RISK,
+                    "The remaining heat is spread across positions already at or under one " +
+                        "per-trade unit — lowering it further means holding fewer names, or " +
+                        "waiting for the stops to trail up beneath the winners."
+                )
+            )
+        }
+        val heat0 = risked.sumOf { it.second } / equity.equity * 100.0
+        return GradeComponent(
+            key = "risk", label = "Risk budget", principle = principle,
+            points = points, maxPoints = MAX_RISK, measured = true,
+            evidence = String.format(
+                Locale.US,
+                "Every stop together risks %s — %.1f%% of %s equity against a %.0f%% budget.",
+                AllocationMath.money(risked.sumOf { it.second }), heat0,
+                AllocationMath.money(equity.equity), budget
+            ),
             actions = actions, projectedPoints = curPts
         )
     }
@@ -660,14 +923,15 @@ object PortfolioGradeEngine {
         if (mw <= 0.0) {
             return GradeComponent(
                 key = "trend", label = "Trend alignment", principle = principle,
-                points = 0, maxPoints = 15, measured = false,
+                points = 0, maxPoints = MAX_TREND, measured = false,
                 evidence = "No holding has enough history for a 50-day read yet."
             )
         }
-        fun pointsFor(aboveShare: Double): Int = (15.0 * aboveShare.coerceIn(0.0, 1.0)).roundToInt()
+        fun pointsFor(aboveShare: Double): Int =
+            (MAX_TREND * aboveShare.coerceIn(0.0, 1.0)).roundToInt()
         val aboveW = measurable.filter { it.above50 == true }.sumOf { it.weightPct }
         val points = pointsFor(aboveW / mw)
-        val target = greenTarget(15)
+        val target = greenTarget(MAX_TREND)
         val actions = ArrayList<GradeAction>()
         // Chained simulation: exit below-trend names largest-first. A rotated
         // buy joins the trend read only once its own 50-day is measurable, so
@@ -705,7 +969,7 @@ object PortfolioGradeEngine {
                         movePct = round1(holding.weightPct),
                         pointsNow = curPts,
                         pointsAfter = after,
-                        maxPoints = 15
+                        maxPoints = MAX_TREND
                     )
                 )
                 curPts = after; curMw = newMw
@@ -714,7 +978,7 @@ object PortfolioGradeEngine {
             if (curPts < target) {
                 actions.add(
                     topsOut(
-                        curPts, 15,
+                        curPts, MAX_TREND,
                         "The remaining below-trend weight cannot be exited in these steps — " +
                             "re-check as holdings reclaim their 50-day lines."
                     )
@@ -723,7 +987,7 @@ object PortfolioGradeEngine {
         }
         return GradeComponent(
             key = "trend", label = "Trend alignment", principle = principle,
-            points = points, maxPoints = 15, measured = true,
+            points = points, maxPoints = MAX_TREND, measured = true,
             evidence = String.format(
                 Locale.US, "%.0f%% of the measurable book trades above its 50-day average.",
                 aboveW / mw * 100.0
@@ -743,17 +1007,17 @@ object PortfolioGradeEngine {
         if (mw <= 0.0) {
             return GradeComponent(
                 key = "rs", label = "Relative strength", principle = principle,
-                points = 0, maxPoints = 15, measured = false,
+                points = 0, maxPoints = MAX_RS, measured = false,
                 evidence = "No measured S&P 500 baseline this run."
             )
         }
         fun pointsFor(weighted: Double): Int =
-            (15.0 * ((weighted + 5.0) / 10.0).coerceIn(0.0, 1.0)).roundToInt()
+            (MAX_RS * ((weighted + 5.0) / 10.0).coerceIn(0.0, 1.0)).roundToInt()
 
         var weightedSum = measurable.sumOf { it.rel20Pct!! * it.weightPct }
         val weighted = weightedSum / mw
         val points = pointsFor(weighted)
-        val target = greenTarget(15)
+        val target = greenTarget(MAX_RS)
         val actions = ArrayList<GradeAction>()
         // Chained simulation: swap the worst-contributing laggers into the
         // strongest measured candidates, one candidate per step.
@@ -791,7 +1055,7 @@ object PortfolioGradeEngine {
                         movePct = round1(lagger.weightPct),
                         pointsNow = curPts,
                         pointsAfter = after,
-                        maxPoints = 15
+                        maxPoints = MAX_RS
                     )
                 )
                 curPts = after; weightedSum = newSum; buyIndex++
@@ -799,7 +1063,7 @@ object PortfolioGradeEngine {
             if (curPts < target) {
                 actions.add(
                     topsOut(
-                        curPts, 15,
+                        curPts, MAX_RS,
                         "Today's board-approved candidates cannot lift the weighted relative " +
                             "strength further — re-check when the sector scan surfaces stronger names."
                     )
@@ -808,7 +1072,7 @@ object PortfolioGradeEngine {
         }
         return GradeComponent(
             key = "rs", label = "Relative strength", principle = principle,
-            points = points, maxPoints = 15, measured = true,
+            points = points, maxPoints = MAX_RS, measured = true,
             evidence = String.format(
                 Locale.US, "The book %s the S&P 500 by %.1fpp over 20 days, weight-averaged.",
                 if (weighted >= 0) "beats" else "lags", abs(weighted)
@@ -829,19 +1093,19 @@ object PortfolioGradeEngine {
         if (mw <= 0.0) {
             return GradeComponent(
                 key = "flow", label = "Money-flow alignment", principle = principle,
-                points = 0, maxPoints = 10, measured = false,
+                points = 0, maxPoints = MAX_FLOW, measured = false,
                 evidence = "No holding maps to a measured sector flow this run."
             )
         }
         fun pointsFor(inflowW: Double, outflowW: Double): Int =
-            (10.0 * (((inflowW - outflowW) / mw).coerceIn(-1.0, 1.0) + 1.0) / 2.0).roundToInt()
+            (MAX_FLOW * (((inflowW - outflowW) / mw).coerceIn(-1.0, 1.0) + 1.0) / 2.0).roundToInt()
 
         val inflowW0 = mapped.filter { it.flowVerdictName == FlowVerdict.INFLOW.name }
             .sumOf { it.weightPct }
         val outflowW0 = mapped.filter { it.flowVerdictName == FlowVerdict.OUTFLOW.name }
             .sumOf { it.weightPct }
         val points = pointsFor(inflowW0, outflowW0)
-        val target = greenTarget(10)
+        val target = greenTarget(MAX_FLOW)
         val actions = ArrayList<GradeAction>()
         // Chained simulation: move outflow-sector weight into inflowing
         // themes, largest outflow holding first.
@@ -885,7 +1149,7 @@ object PortfolioGradeEngine {
                         movePct = round1(leaving.weightPct),
                         pointsNow = curPts,
                         pointsAfter = after,
-                        maxPoints = 10
+                        maxPoints = MAX_FLOW
                     )
                 )
                 curPts = after; inflowW = newInflow; outflowW = newOutflow
@@ -894,7 +1158,7 @@ object PortfolioGradeEngine {
             if (curPts < target) {
                 actions.add(
                     topsOut(
-                        curPts, 10,
+                        curPts, MAX_FLOW,
                         if (inflowBuys.isEmpty()) {
                             "No measurably inflowing theme has a board-approved pick today — " +
                                 "hold the proceeds in cash until one appears."
@@ -908,7 +1172,7 @@ object PortfolioGradeEngine {
         }
         return GradeComponent(
             key = "flow", label = "Money-flow alignment", principle = principle,
-            points = points, maxPoints = 10, measured = true,
+            points = points, maxPoints = MAX_FLOW, measured = true,
             evidence = String.format(
                 Locale.US,
                 "Of the flow-mapped book, %.0f%% sits in inflow sectors and %.0f%% in outflow sectors.",
@@ -928,7 +1192,7 @@ object PortfolioGradeEngine {
         if (pulse == null) {
             return GradeComponent(
                 key = "regime", label = "Regime fit", principle = principle,
-                points = 0, maxPoints = 10, measured = false,
+                points = 0, maxPoints = MAX_REGIME, measured = false,
                 evidence = "The market pulse is unavailable this run."
             )
         }
@@ -939,7 +1203,7 @@ object PortfolioGradeEngine {
             // No honest regime read -> this component is unmeasured, not scored.
             MarketCall.INCOMPLETE -> return GradeComponent(
                 key = "regime", label = "Regime fit", principle = principle,
-                points = 0, maxPoints = 10, measured = false,
+                points = 0, maxPoints = MAX_REGIME, measured = false,
                 evidence = "The market pulse had too little measured data for a call."
             )
         }
@@ -947,18 +1211,18 @@ object PortfolioGradeEngine {
         // already returned, so this read is a contract check, not a fallback.
         val pulseScore = pulse.score ?: return GradeComponent(
             key = "regime", label = "Regime fit", principle = principle,
-            points = 0, maxPoints = 10, measured = false,
+            points = 0, maxPoints = MAX_REGIME, measured = false,
             evidence = "The market pulse carried no measured score."
         )
         fun pointsFor(bearShare: Double): Int =
-            (10.0 * (1.0 - (bearShare * multiplier).coerceIn(0.0, 1.0))).roundToInt()
+            (MAX_REGIME * (1.0 - (bearShare * multiplier).coerceIn(0.0, 1.0))).roundToInt()
 
         val bearish = verdicts.filter { it.techDirection == TechniqueVerdict.BEARISH }
             .sortedByDescending { it.weightPct }
         // Of the MEASURED book — unverifiable weight is not assumed friendly.
         val bearShare0 = (bearish.sumOf { it.weightPct } / measuredBase).coerceIn(0.0, 1.0)
         val points = pointsFor(bearShare0)
-        val target = greenTarget(10)
+        val target = greenTarget(MAX_REGIME)
         val actions = ArrayList<GradeAction>()
         // Chained simulation: exit bearish-board names largest-first.
         var curPts = points
@@ -988,7 +1252,7 @@ object PortfolioGradeEngine {
                         movePct = round1(holding.weightPct),
                         pointsNow = curPts,
                         pointsAfter = after,
-                        maxPoints = 10
+                        maxPoints = MAX_REGIME
                     )
                 )
                 curPts = after; bearAbs -= holding.weightPct; sold = newSold
@@ -996,7 +1260,7 @@ object PortfolioGradeEngine {
             if (curPts < target) {
                 actions.add(
                     topsOut(
-                        curPts, 10,
+                        curPts, MAX_REGIME,
                         "The remaining bearish weight cannot be exited in these steps — " +
                             "their holding cards say exactly when to act."
                     )
@@ -1005,7 +1269,7 @@ object PortfolioGradeEngine {
         }
         return GradeComponent(
             key = "regime", label = "Regime fit", principle = principle,
-            points = points, maxPoints = 10, measured = true,
+            points = points, maxPoints = MAX_REGIME, measured = true,
             evidence = String.format(
                 Locale.US,
                 "Market pulse %d/100 (%s); %.0f%% of the book fights a bearish board.",
