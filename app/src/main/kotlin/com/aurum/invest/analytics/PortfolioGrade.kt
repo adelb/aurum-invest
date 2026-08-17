@@ -1,5 +1,6 @@
 package com.aurum.invest.analytics
 
+import com.aurum.invest.data.repo.InvestorProfile
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -215,17 +216,23 @@ object PortfolioGradeEngine {
         book: BookContext,
         flow: MoneyFlowReport?,
         pulse: MarketRating?,
-        strategy: WeeklyStrategy?
+        strategy: WeeklyStrategy?,
+        /** The SAME profile the advisor's verdicts were sized to — the grade must score the caps the advisor acts on. */
+        policy: InvestorProfile = InvestorProfile.DEFAULT
     ): PortfolioGrade {
         val candidates = candidates(verdicts, flow, strategy)
+        // Share of the whole book the verdicts actually measured. Loss,
+        // winner, and regime shares are computed within it — dividing by a
+        // fictitious 100 would count every unverifiable holding as healthy.
+        val measuredBase = verdicts.sumOf { it.weightPct }.coerceAtLeast(1e-9)
         val components = listOf(
-            concentration(verdicts, book, candidates),
-            lossDiscipline(verdicts),
-            winners(verdicts, candidates),
+            concentration(verdicts, book, candidates, policy),
+            lossDiscipline(verdicts, policy, measuredBase),
+            winners(verdicts, candidates, measuredBase),
             trend(verdicts, candidates),
             relativeStrength(verdicts, candidates),
             flowAlignment(verdicts, candidates),
-            regimeFit(verdicts, pulse)
+            regimeFit(verdicts, pulse, measuredBase)
         )
         val measured = components.filter { it.measured }
         val score = measured.sumOf { it.points }
@@ -327,20 +334,29 @@ object PortfolioGradeEngine {
     private fun concentration(
         verdicts: List<HoldingVerdict>,
         book: BookContext,
-        candidates: List<Candidate>
+        candidates: List<Candidate>,
+        policy: InvestorProfile
     ): GradeComponent {
+        // The user's own caps, derived exactly as the advisor derives them —
+        // the grade card and the holding cards must never disagree on what
+        // "oversized" means.
+        val positionCap = PortfolioAdvisor.positionCapPct(policy)
+        val positionTrim = PortfolioAdvisor.positionTrimPct(policy)
+        val sectorOverweight = PortfolioAdvisor.sectorOverweightPct(policy)
+        val sectorTarget = PortfolioAdvisor.sectorTargetPct(policy)
+
         val top = verdicts.maxBy { it.weightPct }
         val topSector = book.slices.firstOrNull { it.sector != PortfolioLens.UNCLASSIFIED }
         fun pointsFor(topPos: Double, sectorW: Double?): Int {
             val posDed = when {
-                topPos > 45.0 -> 14
-                topPos > PortfolioAdvisor.POSITION_TRIM_PCT -> 8
+                topPos > positionTrim + 15.0 -> 14
+                topPos > positionTrim -> 8
                 else -> 0
             }
             val secDed = when {
                 sectorW == null -> 0
-                sectorW >= 50.0 -> 8
-                sectorW >= PortfolioAdvisor.SECTOR_OVERWEIGHT_PCT -> 4
+                sectorW >= sectorOverweight + 15.0 -> 8
+                sectorW >= sectorOverweight -> 4
                 else -> 0
             }
             return (20 - posDed - secDed).coerceAtLeast(0)
@@ -356,10 +372,10 @@ object PortfolioGradeEngine {
         var base = 100.0
         if (points < target) {
             // Step 1 — trim the oversized position toward the cap.
-            if (curTop > PortfolioAdvisor.POSITION_TRIM_PCT && curTop < base) {
-                val sellPct = curTop - PortfolioAdvisor.POSITION_CAP_PCT
+            if (curTop > positionTrim && curTop < base) {
+                val sellPct = curTop - positionCap
                 val newBase = base - sellPct
-                val newTop = PortfolioAdvisor.POSITION_CAP_PCT / newBase * 100.0
+                val newTop = positionCap / newBase * 100.0
                 val newSector = curSector?.let {
                     if (top.sector == topSector?.sector) {
                         ((it - sellPct) / newBase * 100.0).coerceAtLeast(0.0)
@@ -371,7 +387,7 @@ object PortfolioGradeEngine {
                 actions.add(
                     GradeAction(
                         kind = GradeActionKind.TRIM,
-                        title = "Trim ${top.symbol} toward the ${fmt0(PortfolioAdvisor.POSITION_CAP_PCT)}% cap",
+                        title = "Trim ${top.symbol} toward your ${fmt0(positionCap)}% cap",
                         detail = String.format(
                             Locale.US,
                             "%s is %.0f%% of the book. Selling %.0f%% of the book's value leaves it " +
@@ -390,20 +406,35 @@ object PortfolioGradeEngine {
             // Step 2 — if the sector is still overweight, rotate its weakest
             // name into the best pick from a different theme.
             if (curPts < target && topSector != null && curSector != null &&
-                curSector!! >= PortfolioAdvisor.SECTOR_OVERWEIGHT_PCT
+                curSector!! >= sectorOverweight
             ) {
                 val weakest = verdicts.filter { it.sector == topSector.sector }
                     .minByOrNull { it.techConfidence }
                 val buy = candidates.firstOrNull { it.pick.symbol !in topSector.symbols }
                 if (weakest != null && curSector!! < 100.0) {
-                    val movePct = minOf(
-                        weakest.weightPct,
-                        curSector!! - PortfolioAdvisor.SECTOR_TARGET_PCT
-                    )
-                    val newSector = curSector!! - movePct
-                    val newTop =
-                        if (weakest.symbol == top.symbol) (curTop - movePct).coerceAtLeast(0.0)
-                        else curTop
+                    // Step 1 rescaled the book, so the weakest name's original
+                    // whole-book weight must be re-based before mixing it with
+                    // the current percentages.
+                    val weakestW = weakest.weightPct / base * 100.0
+                    val movePct = minOf(weakestW, curSector!! - sectorTarget)
+                    val newSector: Double
+                    val newTop: Double
+                    if (buy != null) {
+                        // Rotation: the book's size is unchanged.
+                        newSector = (curSector!! - movePct).coerceAtLeast(0.0)
+                        newTop =
+                            if (weakest.symbol == top.symbol) (curTop - movePct).coerceAtLeast(0.0)
+                            else curTop
+                    } else {
+                        // Sale to cash: the book shrinks, so every remaining
+                        // weight — the top position included — scales UP.
+                        val shrink = (1.0 - movePct / 100.0).coerceAtLeast(1e-9)
+                        newSector = ((curSector!! - movePct) / shrink).coerceAtLeast(0.0)
+                        newTop = (
+                            if (weakest.symbol == top.symbol) (curTop - movePct).coerceAtLeast(0.0)
+                            else curTop
+                            ) / shrink
+                    }
                     val after = pointsFor(newTop, newSector)
                     actions.add(
                         GradeAction(
@@ -428,7 +459,7 @@ object PortfolioGradeEngine {
                             maxPoints = 20
                         )
                     )
-                    curPts = after; curSector = newSector
+                    curPts = after; curSector = newSector; curTop = newTop
                 }
             }
             if (curPts < target) {
@@ -452,41 +483,51 @@ object PortfolioGradeEngine {
         return GradeComponent(
             key = "concentration",
             label = "Concentration control",
-            principle = "Buffett concentrates with conviction — but no single bet may sink the book (position cap 30%, sector cap 35%).",
+            principle = "Buffett concentrates with conviction — but no single bet may sink the book " +
+                "(your position cap ${fmt0(positionCap)}%, sector cap ${fmt0(sectorOverweight)}%).",
             points = points, maxPoints = 20, measured = true, evidence = evidence,
             actions = actions, projectedPoints = curPts
         )
     }
 
-    /** O'Neil: cut every loss at 7-8%, no exceptions. */
-    private fun lossDiscipline(verdicts: List<HoldingVerdict>): GradeComponent {
+    /** O'Neil: cut every loss fast, no exceptions — at the user's own threshold. */
+    private fun lossDiscipline(
+        verdicts: List<HoldingVerdict>,
+        policy: InvestorProfile,
+        measuredBase: Double
+    ): GradeComponent {
+        // The SAME loss rule the holding cards fire at — a conservative
+        // profile's -6% and an aggressive one's -10% must grade differently.
+        val cutLoss = PortfolioAdvisor.cutLossPct(policy)
         fun pointsFor(lossShare: Double): Int =
             (15.0 * (1.0 - (lossShare / 30.0).coerceIn(0.0, 1.0))).roundToInt()
 
-        val losers = verdicts.filter { it.unrealizedPlPct <= -8.0 }.sortedBy { it.unrealizedPlPct }
-        val lossShare = losers.sumOf { it.weightPct }
+        val losers = verdicts.filter { it.unrealizedPlPct <= cutLoss }.sortedBy { it.unrealizedPlPct }
+        // Shares are of the MEASURED book — an unverifiable holding is not
+        // silently counted as healthy weight in the denominator.
+        val lossShare = losers.sumOf { it.weightPct } / measuredBase * 100.0
         val points = pointsFor(lossShare)
         val target = greenTarget(15)
         val actions = ArrayList<GradeAction>()
         // Chained simulation: sell deep losers worst-first until green.
         var curPts = points
-        var lossAbs = lossShare
+        var lossAbs = losers.sumOf { it.weightPct }
         var sold = 0.0
         for (loser in losers) {
             if (curPts >= target || actions.size >= MAX_STEPS) break
-            if (loser.weightPct >= 100.0 - sold) break
+            if (loser.weightPct >= measuredBase - sold) break
             val newSold = sold + loser.weightPct
             val newLossAbs = lossAbs - loser.weightPct
-            val newShare = newLossAbs / (100.0 - newSold) * 100.0
+            val newShare = newLossAbs / (measuredBase - newSold) * 100.0
             val after = pointsFor(newShare)
             actions.add(
                 GradeAction(
                     kind = GradeActionKind.SELL,
-                    title = "Sell ${loser.symbol} — the 8% rule fired",
+                    title = "Sell ${loser.symbol} — your ${fmt0(-cutLoss)}% loss rule fired",
                     detail = String.format(
                         Locale.US,
                         "%s is down %.1f%% and holds %.0f%% of the book. After this step the " +
-                            "underwater share is %.0f%% of the remaining book.",
+                            "underwater share is %.0f%% of the remaining measured book.",
                         loser.symbol, -loser.unrealizedPlPct, loser.weightPct, newShare
                     ),
                     symbol = loser.symbol,
@@ -503,19 +544,21 @@ object PortfolioGradeEngine {
                 topsOut(
                     curPts, 15,
                     "The remaining underwater weight sits in positions too large to exit in one " +
-                        "step — keep applying the 8% rule as their cards direct."
+                        "step — keep applying your ${fmt0(-cutLoss)}% rule as their cards direct."
                 )
             )
         }
         val evidence =
-            if (lossShare <= 0.0) "No position is more than 8% underwater."
+            if (lossShare <= 0.0) "No position is more than ${fmt0(-cutLoss)}% underwater."
             else String.format(
-                Locale.US, "%.0f%% of the book is more than 8%% underwater.", lossShare
+                Locale.US, "%.0f%% of the measured book is more than %s%% underwater.",
+                lossShare, fmt0(-cutLoss)
             )
         return GradeComponent(
             key = "loss",
             label = "Loss discipline",
-            principle = "O'Neil's rule: cut every loss at 7-8% — small losses never become big ones.",
+            principle = "O'Neil's rule: cut every loss fast — your profile cuts at ${fmt0(-cutLoss)}%, " +
+                "so small losses never become big ones.",
             points = points, maxPoints = 15, measured = true, evidence = evidence,
             actions = actions, projectedPoints = curPts
         )
@@ -524,12 +567,16 @@ object PortfolioGradeEngine {
     /** Livermore: the big money is made sitting tight on winning positions. */
     private fun winners(
         verdicts: List<HoldingVerdict>,
-        candidates: List<Candidate>
+        candidates: List<Candidate>,
+        measuredBase: Double
     ): GradeComponent {
         fun pointsFor(profitShare: Double): Int =
             (15.0 * (profitShare / 60.0).coerceIn(0.0, 1.0)).roundToInt()
 
-        val profitShare = verdicts.filter { it.unrealizedPlPct > 0.0 }.sumOf { it.weightPct }
+        // Of the MEASURED book — an unverifiable holding must not dilute the
+        // winning share as if it were measured dead weight.
+        val profitAbs = verdicts.filter { it.unrealizedPlPct > 0.0 }.sumOf { it.weightPct }
+        val profitShare = profitAbs / measuredBase * 100.0
         val points = pointsFor(profitShare)
         val target = greenTarget(15)
         val actions = ArrayList<GradeAction>()
@@ -544,9 +591,9 @@ object PortfolioGradeEngine {
             var buyIndex = 0
             for (holding in nonWinners) {
                 if (curPts >= target || actions.size >= MAX_STEPS) break
-                if (holding.weightPct >= 100.0 - sold) break
+                if (holding.weightPct >= measuredBase - sold) break
                 val newSold = sold + holding.weightPct
-                val newShare = (profitShare / (100.0 - newSold) * 100.0).coerceAtMost(100.0)
+                val newShare = (profitAbs / (measuredBase - newSold) * 100.0).coerceAtMost(100.0)
                 val after = pointsFor(newShare)
                 val buy = candidates.getOrNull(buyIndex)
                 actions.add(
@@ -597,7 +644,7 @@ object PortfolioGradeEngine {
             label = "Winners riding",
             principle = "Livermore: the big money is in sitting tight on winners — elite books stay weighted toward what is working.",
             points = points, maxPoints = 15, measured = true,
-            evidence = String.format(Locale.US, "%.0f%% of the book is in profit.", profitShare),
+            evidence = String.format(Locale.US, "%.0f%% of the measured book is in profit.", profitShare),
             actions = actions, projectedPoints = curPts
         )
     }
@@ -808,9 +855,11 @@ object PortfolioGradeEngine {
             var buyIndex = 0
             for (leaving in leavingList) {
                 if (curPts >= target || actions.size >= MAX_STEPS) break
+                // Only a measurably inflowing candidate justifies a ROTATE —
+                // falling back to any candidate would pair "rotate into X"
+                // with a neutral-flow name the principle doesn't endorse.
                 val buy = inflowBuys.getOrNull(buyIndex) ?: inflowBuys.lastOrNull()
-                ?: candidates.firstOrNull()
-                val buyIsInflow = buy?.flowVerdict == FlowVerdict.INFLOW
+                val buyIsInflow = buy != null
                 val newInflow = if (buyIsInflow) inflowW + leaving.weightPct else inflowW
                 val newOutflow = (outflowW - leaving.weightPct).coerceAtLeast(0.0)
                 val after = pointsFor(newInflow, newOutflow)
@@ -870,7 +919,11 @@ object PortfolioGradeEngine {
     }
 
     /** Livermore: trade with the tape — fight the market and it collects. */
-    private fun regimeFit(verdicts: List<HoldingVerdict>, pulse: MarketRating?): GradeComponent {
+    private fun regimeFit(
+        verdicts: List<HoldingVerdict>,
+        pulse: MarketRating?,
+        measuredBase: Double
+    ): GradeComponent {
         val principle = "Livermore: trade with the tape, never against it."
         if (pulse == null) {
             return GradeComponent(
@@ -890,25 +943,34 @@ object PortfolioGradeEngine {
                 evidence = "The market pulse had too little measured data for a call."
             )
         }
+        // Non-INCOMPLETE calls always carry a score; the null case above
+        // already returned, so this read is a contract check, not a fallback.
+        val pulseScore = pulse.score ?: return GradeComponent(
+            key = "regime", label = "Regime fit", principle = principle,
+            points = 0, maxPoints = 10, measured = false,
+            evidence = "The market pulse carried no measured score."
+        )
         fun pointsFor(bearShare: Double): Int =
             (10.0 * (1.0 - (bearShare * multiplier).coerceIn(0.0, 1.0))).roundToInt()
 
         val bearish = verdicts.filter { it.techDirection == TechniqueVerdict.BEARISH }
             .sortedByDescending { it.weightPct }
-        val bearShare0 = (bearish.sumOf { it.weightPct } / 100.0).coerceIn(0.0, 1.0)
+        // Of the MEASURED book — unverifiable weight is not assumed friendly.
+        val bearShare0 = (bearish.sumOf { it.weightPct } / measuredBase).coerceIn(0.0, 1.0)
         val points = pointsFor(bearShare0)
         val target = greenTarget(10)
         val actions = ArrayList<GradeAction>()
         // Chained simulation: exit bearish-board names largest-first.
         var curPts = points
-        var bearAbs = bearShare0 * 100.0
+        var bearAbs = bearish.sumOf { it.weightPct }
         var sold = 0.0
         if (points < target) {
             for (holding in bearish) {
                 if (curPts >= target || actions.size >= MAX_STEPS) break
-                if (holding.weightPct >= 100.0 - sold) break
+                if (holding.weightPct >= measuredBase - sold) break
                 val newSold = sold + holding.weightPct
-                val newBear = ((bearAbs - holding.weightPct) / (100.0 - newSold)).coerceIn(0.0, 1.0)
+                val newBear =
+                    ((bearAbs - holding.weightPct) / (measuredBase - newSold)).coerceIn(0.0, 1.0)
                 val after = pointsFor(newBear)
                 actions.add(
                     GradeAction(
@@ -920,7 +982,7 @@ object PortfolioGradeEngine {
                                 "pulse is %d/100 (%s). After this step %.0f%% of the book fights " +
                                 "a bearish board.",
                             holding.symbol, holding.techBullish, holding.techTotal,
-                            pulse.score, pulse.call.name.lowercase(Locale.US), newBear * 100.0
+                            pulseScore, pulse.call.name.lowercase(Locale.US), newBear * 100.0
                         ),
                         symbol = holding.symbol,
                         movePct = round1(holding.weightPct),
@@ -947,7 +1009,7 @@ object PortfolioGradeEngine {
             evidence = String.format(
                 Locale.US,
                 "Market pulse %d/100 (%s); %.0f%% of the book fights a bearish board.",
-                pulse.score, pulse.call.name.lowercase(Locale.US), bearShare0 * 100.0
+                pulseScore, pulse.call.name.lowercase(Locale.US), bearShare0 * 100.0
             ),
             actions = actions, projectedPoints = curPts
         )

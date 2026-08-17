@@ -96,8 +96,28 @@ class EditPositionViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { runCatching { portfolio.addSplit(symbol, ratio, ts) } }
     }
 
+    /**
+     * Deletes one ledger row — unless a later sell depended on it, in which
+     * case the deletion is rejected with the reason instead of silently
+     * rewriting that sell's realized outcome.
+     */
     fun deleteTrade(tx: TransactionEntity) {
-        viewModelScope.launch { runCatching { portfolio.deleteTransaction(tx) } }
+        viewModelScope.launch {
+            runCatching {
+                val problem = portfolio.validateDelete(tx)
+                if (problem != null) {
+                    _state.update {
+                        it.copy(
+                            editError = "Delete rejected: $problem Delete the dependent " +
+                                "sell first if you want both gone."
+                        )
+                    }
+                    return@runCatching
+                }
+                portfolio.deleteTransaction(tx)
+                _state.update { it.copy(editError = null) }
+            }
+        }
     }
 
     companion object {

@@ -59,13 +59,16 @@ data class TomorrowPick(
 data class MarketRating(
     val date: String,
     val computedAt: Long,
-    val score: Int,                     // 0..100 market health
+    /** 0..100 market health; null when the call is INCOMPLETE — a refusal carries no number. */
+    val score: Int?,
     val call: MarketCall,
     val headline: String,
     val advice: String,
     val reasons: List<String>,          // concrete numbers behind the score
-    val breadthAbove50Pct: Double,      // % of scanned names above their 50-day avg
-    val advancersPct: Double,           // % of scanned names green in the last session
+    /** % of scanned names above their 50-day avg; null when the pool was unmeasurable. */
+    val breadthAbove50Pct: Double?,
+    /** % of scanned names green in the last session; null when the pool was unmeasurable. */
+    val advancersPct: Double?,
     val scannedCount: Int,              // how many liquid names the breadth used
     val vix: Double?,                   // null when the volatility read failed
     val indexes: List<IndexRead>,
@@ -118,13 +121,13 @@ class MarketPulse(private val market: MarketRepository) {
         fun toJson(r: MarketRating): String = JSONObject().apply {
             put("date", r.date)
             put("computedAt", r.computedAt)
-            put("score", r.score)
+            putOpt("score", r.score)
             put("call", r.call.name)
             put("headline", r.headline)
             put("advice", r.advice)
             put("reasons", JSONArray(r.reasons))
-            put("breadth", r.breadthAbove50Pct)
-            put("advancers", r.advancersPct)
+            putOpt("breadth", r.breadthAbove50Pct)
+            putOpt("advancers", r.advancersPct)
             put("scanned", r.scannedCount)
             put("coverage", r.coveragePct)
             if (r.vix != null) put("vix", r.vix)
@@ -231,20 +234,23 @@ class MarketPulse(private val market: MarketRepository) {
             MarketRating(
                 date = o.getString("date"),
                 computedAt = o.optLong("computedAt", 0L),
-                score = o.getInt("score"),
+                score = if (o.has("score")) o.getInt("score") else null,
+                // Cache defaults fail CLOSED: a missing/unreadable call is a
+                // refusal, never silently upgraded to SELECTIVE; a missing
+                // coverage field means the coverage was not recorded, not 100%.
                 call = runCatching { MarketCall.valueOf(o.getString("call")) }
-                    .getOrDefault(MarketCall.SELECTIVE),
+                    .getOrDefault(MarketCall.INCOMPLETE),
                 headline = o.optString("headline", ""),
                 advice = o.optString("advice", ""),
                 reasons = reasons,
-                breadthAbove50Pct = o.optDouble("breadth", 50.0),
-                advancersPct = o.optDouble("advancers", 50.0),
+                breadthAbove50Pct = if (o.has("breadth")) o.getDouble("breadth") else null,
+                advancersPct = if (o.has("advancers")) o.getDouble("advancers") else null,
                 scannedCount = o.optInt("scanned", 0),
                 vix = if (o.has("vix")) o.getDouble("vix") else null,
                 indexes = indexes,
                 bestYesterday = best,
                 nextDay = next,
-                coveragePct = o.optDouble("coverage", 100.0)
+                coveragePct = o.optDouble("coverage", 0.0)
             )
         } catch (_: Exception) {
             null
@@ -253,7 +259,7 @@ class MarketPulse(private val market: MarketRepository) {
 
     suspend fun compute(dateIso: String): MarketRating? {
         return try {
-            val (indexes, vix, pool) = coroutineScope {
+            val (indexes, vix, poolResult) = coroutineScope {
                 val indexD = INDEXES.map { (sym, name) -> async { indexRead(sym, name) } }
                 val vixD = async {
                     try {
@@ -265,32 +271,41 @@ class MarketPulse(private val market: MarketRepository) {
                 val poolD = async { screenerPool() }
                 Triple(indexD.awaitAll().filterNotNull(), vixD.await(), poolD.await())
             }
+            val (pool, screensServed) = poolResult
             if (indexes.isEmpty() && pool.isEmpty()) return null
 
-            // Breadth + participation across the scanned liquid names.
+            // Breadth + participation across the scanned liquid names — the
+            // SAME pool for both, so the two reasons share one denominator.
+            // An unmeasurable pool yields null, never a fabricated 50%.
             val measurable = pool.filter { it.fiftyDayAvg > 0.0 }
-            val breadth =
+            val breadth: Double? =
                 if (measurable.isNotEmpty()) {
                     measurable.count { it.price > it.fiftyDayAvg } * 100.0 / measurable.size
-                } else 50.0
-            val advancers =
-                if (pool.isNotEmpty()) {
-                    pool.count { it.dayChangePct > 0.0 } * 100.0 / pool.size
-                } else 50.0
+                } else null
+            val advancers: Double? =
+                if (measurable.isNotEmpty()) {
+                    measurable.count { it.dayChangePct > 0.0 } * 100.0 / measurable.size
+                } else null
 
-            val idxPts = indexPoints(indexes)          // 0..40
-            val breadthPts = breadth / 100.0 * 30.0    // 0..30
-            val advPts = advancers / 100.0 * 15.0      // 0..15
-            val volPts = vixPoints(vix)                // 0..15
+            val idxPts = indexPoints(indexes)                    // 0..40
+            val breadthPts = breadth?.let { it / 100.0 * 30.0 } ?: 15.0
+            val advPts = advancers?.let { it / 100.0 * 15.0 } ?: 7.5
+            val volPts = vixPoints(vix)                          // 0..15
             val score = (idxPts + breadthPts + advPts + volPts).roundToInt().coerceIn(0, 100)
 
             // How much of the score's weight was actually measured, not
-            // substituted with neutral points. Fail closed below the floor:
-            // a call built on placeholders is a guess wearing a number.
+            // substituted with neutral points. The pool bands are additionally
+            // scaled by how many of the requested screens actually served —
+            // 130 names from 4 of 12 screens is not a measured market.
+            // Fail closed below the floor: a call built on placeholders is a
+            // guess wearing a number.
+            val screensRequested = EntryPicker.MARKET_SCREENS.size
+            val reach =
+                if (screensRequested > 0) screensServed.toDouble() / screensRequested else 0.0
             val coverage = (
                 indexes.size / 3.0 * 40.0 +
-                    min(1.0, measurable.size.toDouble() / FULL_POOL) * 30.0 +
-                    min(1.0, pool.size.toDouble() / FULL_POOL) * 15.0 +
+                    min(1.0, measurable.size.toDouble() / FULL_POOL) * reach * 30.0 +
+                    min(1.0, measurable.size.toDouble() / FULL_POOL) * reach * 15.0 +
                     (if (vix != null) 15.0 else 0.0)
                 )
             val call = when {
@@ -321,7 +336,9 @@ class MarketPulse(private val market: MarketRepository) {
             MarketRating(
                 date = dateIso,
                 computedAt = System.currentTimeMillis(),
-                score = score,
+                // A refusal carries no number — an INCOMPLETE call showing
+                // "47/100" would read as a measurement.
+                score = if (call == MarketCall.INCOMPLETE) null else score,
                 call = call,
                 headline = when (call) {
                     MarketCall.INVEST -> "A favorable week to put money to work."
@@ -345,8 +362,8 @@ class MarketPulse(private val market: MarketRepository) {
                             "made-up one."
                 },
                 reasons = reasons,
-                breadthAbove50Pct = round1(breadth),
-                advancersPct = round1(advancers),
+                breadthAbove50Pct = breadth?.let { round1(it) },
+                advancersPct = advancers?.let { round1(it) },
                 scannedCount = measurable.size,
                 vix = vix?.let { round1(it) },
                 indexes = indexes,
@@ -369,6 +386,9 @@ class MarketPulse(private val market: MarketRepository) {
             val last = closes.last()
             val sma50 = Indicators.sma(closes, 50) ?: return null
             if (last <= 0.0 || sma50 <= 0.0) return null
+            // A zero close in the window would make the return Infinity and
+            // blow up the JSON cache write for the whole rating.
+            if (closes[n - 6] <= 0.0 || closes[n - 21] <= 0.0) return null
             IndexRead(
                 symbol = symbol,
                 name = name,
@@ -411,8 +431,8 @@ class MarketPulse(private val market: MarketRepository) {
 
     private fun buildReasons(
         indexes: List<IndexRead>,
-        breadth: Double,
-        advancers: Double,
+        breadth: Double?,
+        advancers: Double?,
         scanned: Int,
         vix: Double?
     ): List<String> {
@@ -434,17 +454,22 @@ class MarketPulse(private val market: MarketRepository) {
                 String.format(Locale.US, "%s %+.1f%% in 5 days", it.name, it.r5Pct)
             }
         }
-        if (scanned > 0) {
+        if (scanned > 0 && breadth != null) {
             out += String.format(
                 Locale.US,
                 "%.0f%% of %d scanned liquid names trade above their 50-day average",
                 breadth, scanned
             )
+        }
+        if (scanned > 0 && advancers != null) {
             out += String.format(
                 Locale.US,
-                "%.0f%% of the scan advanced in the last session",
-                advancers
+                "%.0f%% of the same %d names advanced in the last session",
+                advancers, scanned
             )
+        }
+        if (breadth == null) {
+            out += "Breadth pool unmeasurable this run — scored neutral, not measured"
         }
         out += when {
             vix == null -> "Volatility read unavailable — scored neutral"
@@ -457,9 +482,14 @@ class MarketPulse(private val market: MarketRepository) {
 
     // ------------------------------------------------------------ movers + next day
 
-    /** The market-wide pool, merged and deduped from Yahoo's saved screens. */
-    private suspend fun screenerPool(): List<ScreenerQuote> {
+    /**
+     * The market-wide pool, merged and deduped from Yahoo's saved screens,
+     * plus how many of the requested screens actually served — the coverage
+     * math needs the reach, not just the row count.
+     */
+    private suspend fun screenerPool(): Pair<List<ScreenerQuote>, Int> {
         val pool = HashMap<String, ScreenerQuote>()
+        var served = 0
         for (chunk in EntryPicker.MARKET_SCREENS.chunked(4)) {
             try {
                 coroutineScope {
@@ -472,12 +502,15 @@ class MarketPulse(private val market: MarketRepository) {
                             }
                         }
                     }.awaitAll()
-                }.forEach { list -> list.forEach { q -> pool.putIfAbsent(q.symbol, q) } }
+                }.forEach { list ->
+                    if (list.isNotEmpty()) served++
+                    list.forEach { q -> pool.putIfAbsent(q.symbol, q) }
+                }
             } catch (_: Exception) {
                 // A failed batch just narrows the pool.
             }
         }
-        return pool.values.toList()
+        return pool.values.toList() to served
     }
 
     /** Last session's best performers — liquid, real names only. */

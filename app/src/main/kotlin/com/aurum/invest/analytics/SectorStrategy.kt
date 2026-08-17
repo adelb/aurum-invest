@@ -103,6 +103,14 @@ class SectorStrategy(
         private const val MIN_COVERAGE_PCT = 2.0
         private const val CANDLE_CHUNK = 8
 
+        /**
+         * Share of the book this strategy's theme targets add up to. Targets
+         * are "of the whole book" percentages compared against held weights —
+         * normalizing them to 100 would steer every diversified portfolio
+         * into a four-theme concentration.
+         */
+        private const val TOP_THEME_BUDGET_PCT = 40.0
+
         /** How many stocks each theme proposes — the 3 strongest that pass. */
         private const val PICKS_PER_THEME = 3
 
@@ -303,12 +311,15 @@ class SectorStrategy(
             // Coverage per theme, measured two ways depending on what is honest.
             val coverage = top.associate { it.key to coverageOf(it.key, book) }
 
-            // Targets: theme strength shared across the top themes, capped so no
-            // single theme is ever proposed as more than a third of the book.
+            // Targets: theme strength shared across the top themes, scaled to
+            // the slice of the book this strategy actually steers. Normalizing
+            // to 100 would tell a diversified book to become a four-theme
+            // portfolio; the targets are shares of a bounded budget instead,
+            // and no single theme is ever proposed as more than a third.
             val scoreSum = top.sumOf { it.strength.coerceAtLeast(0.1) }
             val targets = top.associate { t ->
                 val share = t.strength.coerceAtLeast(0.1) / scoreSum
-                t.key to (share * 100.0).coerceAtMost(33.0)
+                t.key to (share * TOP_THEME_BUDGET_PCT).coerceAtMost(33.0)
             }
 
             // Candidate stocks for every theme, in parallel across themes.
@@ -371,7 +382,9 @@ class SectorStrategy(
                         lead = lead,
                         alternates = gap.picks.drop(1)
                     )
-                }.sortedByDescending { it.amount }
+                    // sharePct, not amount: the only production caller passes
+                    // investable = 0, which would make this sort a no-op.
+                }.sortedByDescending { it.sharePct }
 
             WeeklyStrategy(
                 computedAt = System.currentTimeMillis(),
@@ -479,22 +492,27 @@ class SectorStrategy(
                     volumes[volIdx].toDouble() / volBase.average()
                 } else 0.0
 
-            val analysis = Techniques.analyze(symbol, candles)
-            val direction = analysis?.outlook?.direction ?: TechniqueVerdict.NEUTRAL
+            // An unmeasurable board is not a neutral board — no analysis, no pick.
+            val analysis = Techniques.analyze(symbol, candles) ?: return null
+            val direction = analysis.outlook.direction
             // A theme can trend while a given member is broken — drop those.
             if (direction == TechniqueVerdict.BEARISH) return null
-            val bullish = analysis?.outlook?.bullishCount ?: 0
-            val total = analysis?.results?.size ?: 0
-            val confidence = analysis?.outlook?.confidence ?: 0
+            val bullish = analysis.outlook.bullishCount
+            val total = analysis.results.size
+            val confidence = analysis.outlook.confidence
 
             // Reports, analyst actions, and insider flow from the last 5 days
-            // of headlines. Sentiment is summed and clamped; the freshest
-            // report-like headline is carried for the card.
+            // of headlines — with provenance: a FAILED fetch contributes no
+            // news terms rather than masquerading as verified-no-news.
             var newsScore = 0
             var newsNote = ""
-            val items = news?.let { repo ->
-                runCatching { repo.getNews(symbol, candles) }.getOrDefault(emptyList())
-            }.orEmpty()
+            val feed = news?.let { repo ->
+                runCatching { repo.getNewsFeed(symbol, candles) }.getOrNull()
+            }
+            val items =
+                if (feed != null && feed.status != com.aurum.invest.data.model.FeedStatus.FAILED) {
+                    feed.items
+                } else emptyList()
             if (items.isNotEmpty()) {
                 newsScore = items.sumOf { it.sentiment }.coerceIn(-3, 3)
                 newsNote = items.firstOrNull { item ->
@@ -505,9 +523,13 @@ class SectorStrategy(
 
             // Overbought names get a pullback entry rather than a chase.
             val entry = if (rsi >= 68.0) price - atr * 0.5 else price
+            // A 0.0 volumeRatio means "unmeasured", not "no one traded" — it
+            // contributes nothing rather than the -3 floor.
+            val volumeTerm =
+                if (volumeRatio > 0.0) ((volumeRatio - 1.0) * 5.0).coerceIn(-3.0, 8.0) else 0.0
             val score = (r20 * 0.4).coerceIn(-12.0, 14.0) +
                 (r3 * 1.2).coerceIn(-8.0, 10.0) +
-                ((volumeRatio - 1.0) * 5.0).coerceIn(-3.0, 8.0) +
+                volumeTerm +
                 (12.0 - abs(rsi - 58.0) / 2.0).coerceIn(0.0, 12.0) +
                 (if (direction == TechniqueVerdict.BULLISH) confidence * 0.14 else 2.0) +
                 newsScore * 2.0 +

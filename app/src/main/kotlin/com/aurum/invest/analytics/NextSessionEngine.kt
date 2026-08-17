@@ -2,8 +2,12 @@ package com.aurum.invest.analytics
 
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.model.Candle
+import com.aurum.invest.data.model.EntryPick
+import com.aurum.invest.data.model.FeedStatus
+import com.aurum.invest.data.model.PowerPick
 import com.aurum.invest.data.model.ScreenerQuote
 import com.aurum.invest.data.repo.MarketRepository
+import com.aurum.invest.data.repo.NewsRepository
 import java.time.ZoneId
 import java.util.Locale
 import kotlin.math.abs
@@ -14,6 +18,30 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import org.json.JSONArray
 import org.json.JSONObject
+
+/**
+ * What the app's own intraday scans said about a symbol TODAY — the entry
+ * scan and the power-hour scan. Empty maps mean the scans have not run (or
+ * were unreachable), which is different from "the scans ran and skipped this
+ * name"; [available] carries that distinction so the engine never treats an
+ * outage as a bearish absence.
+ */
+data class DayScanContext(
+    val entryBySymbol: Map<String, EntryPick>,
+    val powerBySymbol: Map<String, PowerPick>
+) {
+    val available: Boolean get() = entryBySymbol.isNotEmpty() || powerBySymbol.isNotEmpty()
+
+    companion object {
+        val EMPTY = DayScanContext(emptyMap(), emptyMap())
+
+        fun of(entries: List<EntryPick>, power: List<PowerPick>): DayScanContext =
+            DayScanContext(
+                entryBySymbol = entries.associateBy { it.symbol.trim().uppercase() },
+                powerBySymbol = power.associateBy { it.symbol.trim().uppercase() }
+            )
+    }
+}
 
 /** One stock positioned for the next session, fully measured. */
 data class NextSessionPick(
@@ -47,7 +75,27 @@ data class NextSessionPick(
     val heldNote: String,          // "" unless the user already holds it
     /** True when every gate of the extreme-probability alert fired. */
     val alert: Boolean,
-    val reason: String
+    val reason: String,
+    // ---- v2 measured context ----
+    val sector: String = "",           // Yahoo sector; "" when unknown
+    /** INFLOW / NEUTRAL / OUTFLOW when the sector's money flow was measured; "" otherwise. */
+    val flowVerdict: String = "",
+    val flowNote: String = "",
+    /** Summed 5-day headline tone; only meaningful when [newsMeasured]. */
+    val newsScore: Int = 0,
+    val newsMeasured: Boolean = false,
+    val newsNote: String = "",
+    /** 20-session return minus SPY's, percentage points; null = not measured. */
+    val rel20Pct: Double? = null,
+    /** Close vs the last session's volume-weighted average price; null = no intraday bars. */
+    val aboveVwap: Boolean? = null,
+    val vwapDistPct: Double? = null,
+    /** True when the last close cleared the prior 20-session high (Donchian breakout). */
+    val breakout20: Boolean = false,
+    /** (target − entry) / (entry − stop); null when the stop is not below the entry. */
+    val riskReward: Double? = null,
+    /** "" unless one of today's own scans also surfaced this name. */
+    val scanNote: String = ""
 )
 
 /** The next-session answer: 10 picks, ranked, with the alert flags. */
@@ -80,6 +128,18 @@ data class NextSessionReport(
                         put("closePos", p.closePosPct); put("ext", p.extNote)
                         put("held", p.heldNote); put("alert", p.alert)
                         put("reason", p.reason)
+                        put("sector", p.sector)
+                        put("flowVerdict", p.flowVerdict)
+                        put("flowNote", p.flowNote)
+                        put("newsScore", p.newsScore)
+                        put("newsMeasured", p.newsMeasured)
+                        put("newsNote", p.newsNote)
+                        putOpt("rel20", p.rel20Pct)
+                        putOpt("aboveVwap", p.aboveVwap)
+                        putOpt("vwapDist", p.vwapDistPct)
+                        put("breakout20", p.breakout20)
+                        putOpt("rr", p.riskReward)
+                        put("scanNote", p.scanNote)
                     })
                 }
             })
@@ -115,7 +175,19 @@ data class NextSessionReport(
                             extNote = p.optString("ext", ""),
                             heldNote = p.optString("held", ""),
                             alert = p.optBoolean("alert", false),
-                            reason = p.optString("reason", "")
+                            reason = p.optString("reason", ""),
+                            sector = p.optString("sector", ""),
+                            flowVerdict = p.optString("flowVerdict", ""),
+                            flowNote = p.optString("flowNote", ""),
+                            newsScore = p.optInt("newsScore", 0),
+                            newsMeasured = p.optBoolean("newsMeasured", false),
+                            newsNote = p.optString("newsNote", ""),
+                            rel20Pct = if (p.has("rel20")) p.optDouble("rel20") else null,
+                            aboveVwap = if (p.has("aboveVwap")) p.optBoolean("aboveVwap") else null,
+                            vwapDistPct = if (p.has("vwapDist")) p.optDouble("vwapDist") else null,
+                            breakout20 = p.optBoolean("breakout20", false),
+                            riskReward = if (p.has("rr")) p.optDouble("rr") else null,
+                            scanNote = p.optString("scanNote", "")
                         )
                     )
                 }
@@ -139,29 +211,50 @@ data class NextSessionReport(
 /**
  * The next-session engine: scans the whole US market (Yahoo's saved screens),
  * shortlists the names whose last session set up a continuation, then puts
- * each finalist through everything the app can measure —
+ * each finalist through EVERYTHING the app can measure —
  *
  *  1. the 35-technique board (a bearish board disqualifies),
  *  2. a MEASURED analog-day study: it finds the past sessions of the last ~6
  *     months that looked like today (same-direction move of similar size,
  *     similar close position in the range) and counts how often the NEXT day
  *     actually closed higher, and by how much on average,
- *  3. trend quality against the 50- and 200-day averages,
- *  4. volume pace against the 3-month average,
- *  5. the latest pre/post-market print,
+ *  3. trend quality against the 50- and 200-day averages PLUS 20-session
+ *     relative strength against SPY,
+ *  4. volume: pace against the 3-month average and session-over-session
+ *     expansion,
+ *  5. the sector's measured money flow (CMF, MFI, OBV slope, up-dollar
+ *     share — via the shared money-flow engine), so a name swimming against
+ *     its sector's outflow is scored for it,
+ *  6. the last 5 days of headlines with their measured tone — a failed feed
+ *     is reported as "not measured", never as "no news",
+ *  7. intraday structure: the close against the session's volume-weighted
+ *     average price (VWAP), and whether today's own entry/power scans also
+ *     surfaced the name,
+ *  8. classic chart mechanics: the 20-session Donchian breakout check,
+ *     structural support for the stop, the nearest resistance capping the
+ *     target, and the resulting risk/reward,
+ *  9. the latest pre/post-market print, so entries are never priced off a
+ *     stale close.
  *
- * — and returns the 10 strongest with a fixed-scale score, an entry, a
- * target, a stop, and an honest ATR-based range. A pick raises the
+ * It returns the 10 strongest with a fixed-scale score, an entry, a target,
+ * a stop, and an honest ATR-based range. A pick raises the
  * EXTREME-PROBABILITY alert only when every gate fires at once: score >=
  * [ALERT_SCORE], a measured [ALERT_PROB]%+ analog follow-through over >=
  * [ALERT_MIN_ANALOGS] analog days, and a bullish board at >=
  * [ALERT_CONFIDENCE]% confidence. The alert is a measured statement about
  * history, never a promise.
  *
+ * Integrity rules: every component is measured or reported as not measured —
+ * an unmeasured input scores its fixed midpoint and says so; nothing is
+ * renormalized to the day's best candidate, so scores compare across days.
+ *
  * Portfolio-aware: names already held are tagged. Never throws — null on
  * total failure.
  */
-class NextSessionEngine(private val market: MarketRepository) {
+class NextSessionEngine(
+    private val market: MarketRepository,
+    private val news: NewsRepository? = null
+) {
 
     companion object {
         const val PICKS = 10
@@ -212,10 +305,34 @@ class NextSessionEngine(private val market: MarketRepository) {
                     com.aurum.invest.core.Fmt.money(it)
                 )
             }.orEmpty()
+
+        /**
+         * Volume-weighted average price over one session's bars. Null when
+         * the bars carry no volume — an unmeasurable VWAP is never invented.
+         */
+        fun sessionVwap(bars: List<Candle>): Double? {
+            var pv = 0.0
+            var v = 0.0
+            for (b in bars) {
+                if (b.volume <= 0L) continue
+                val typical = (b.high + b.low + b.close) / 3.0
+                pv += typical * b.volume
+                v += b.volume
+            }
+            return if (v > 0.0) pv / v else null
+        }
     }
 
-    /** [held] maps open-position symbols to cost dollars for the held tags. */
-    suspend fun compute(held: Map<String, Double> = emptyMap()): NextSessionReport? {
+    /**
+     * [held] maps open-position symbols to cost dollars for the held tags.
+     * [flow] is the shared sector money-flow report (null = not measured).
+     * [dayScans] carries what today's own intraday scans surfaced.
+     */
+    suspend fun compute(
+        held: Map<String, Double> = emptyMap(),
+        flow: MoneyFlowReport? = null,
+        dayScans: DayScanContext = DayScanContext.EMPTY
+    ): NextSessionReport? {
         return try {
             // 1 — the whole market, merged and deduped from the saved screens.
             val pool = HashMap<String, ScreenerQuote>()
@@ -254,11 +371,40 @@ class NextSessionEngine(private val market: MarketRepository) {
                 .toList()
             if (shortlist.isEmpty()) return null
 
+            // Shared context, fetched once: SPY's 20-session return for the
+            // relative-strength read, and the finalists' sectors in one batch.
+            val spyR20 = try {
+                val spy = market.getDailyCandles("SPY", 60)
+                val closes = spy.map { it.close }
+                if (closes.size >= 21 && closes[closes.size - 21] > 0.0) {
+                    (closes.last() / closes[closes.size - 21] - 1.0) * 100.0
+                } else flow?.spyR20Pct
+            } catch (_: Exception) {
+                flow?.spyR20Pct
+            }
+            val sectors = try {
+                market.getSectors(shortlist.map { it.first.symbol })
+            } catch (_: Exception) {
+                emptyMap()
+            }
+
             // 3 — the deep read, chunked.
             val deep = ArrayList<NextSessionPick>()
             for (chunk in shortlist.chunked(DEEP_CHUNK)) {
                 val results = coroutineScope {
-                    chunk.map { (q, pre) -> async { deepRead(q, pre, held) } }.awaitAll()
+                    chunk.map { (q, pre) ->
+                        async {
+                            deepRead(
+                                q = q,
+                                pre = pre,
+                                held = held,
+                                flow = flow,
+                                dayScans = dayScans,
+                                spyR20 = spyR20,
+                                sector = sectors[q.symbol].orEmpty()
+                            )
+                        }
+                    }.awaitAll()
                 }
                 results.filterNotNull().forEach { deep.add(it) }
             }
@@ -278,17 +424,42 @@ class NextSessionEngine(private val market: MarketRepository) {
                 sessionNote = sessionNote(),
                 picks = picks,
                 headline = headline,
-                notes = listOf(
-                    "Scores are on a fixed 0–100 scale from measured inputs: setup strength, " +
-                        "trend quality, the 35-technique board, the analog-day follow-through " +
-                        "study, volume pace, and the latest extended-hours print.",
-                    "Follow-through probability is counted from this stock's own past " +
-                        "sessions that looked like today — fewer than $MIN_ANALOGS analogs " +
-                        "and it is shown as not measured, never invented.",
-                    "An alert fires only when score, measured probability, analog count, and " +
-                        "board confidence ALL clear their bars. It is a statement about " +
-                        "history, not a promise about tomorrow."
-                )
+                notes = buildList {
+                    add(
+                        "Scores are on a fixed 0–100 scale from measured inputs: setup strength " +
+                            "(15), trend quality with relative strength vs SPY (12), the " +
+                            "35-technique board (15), the analog-day follow-through study (20), " +
+                            "volume pace and expansion (10), sector money flow (8), 5-day " +
+                            "headline tone (8), intraday structure — VWAP and today's own " +
+                            "scans (7), and the latest extended-hours print (5)."
+                    )
+                    add(
+                        "Any input that could not be measured scores its fixed midpoint and is " +
+                            "labeled not measured — a failed news feed is never read as \"no " +
+                            "news\", and a missing flow report is never read as a neutral sector."
+                    )
+                    add(
+                        "Follow-through probability is counted from this stock's own past " +
+                            "sessions that looked like today — fewer than $MIN_ANALOGS analogs " +
+                            "and it is shown as not measured, never invented."
+                    )
+                    add(
+                        "Targets are capped at the nearest measured resistance; stops sit under " +
+                            "structural support with an ATR pad; each pick reports its " +
+                            "risk/reward so a thin trade cannot hide behind a high score."
+                    )
+                    add(
+                        "An alert fires only when score, measured probability, analog count, and " +
+                            "board confidence ALL clear their bars. It is a statement about " +
+                            "history, not a promise about tomorrow."
+                    )
+                    if (flow == null) {
+                        add("Sector money flow was unavailable this run — flow points sat at their midpoint.")
+                    }
+                    if (!dayScans.available) {
+                        add("Today's intraday scans were unavailable this run — scan-continuity points sat at their midpoint.")
+                    }
+                }
             )
         } catch (_: Exception) {
             null
@@ -328,7 +499,11 @@ class NextSessionEngine(private val market: MarketRepository) {
     private suspend fun deepRead(
         q: ScreenerQuote,
         pre: Double,
-        held: Map<String, Double>
+        held: Map<String, Double>,
+        flow: MoneyFlowReport?,
+        dayScans: DayScanContext,
+        spyR20: Double?,
+        sector: String
     ): NextSessionPick? {
         return try {
             val candles = try {
@@ -356,13 +531,20 @@ class NextSessionEngine(private val market: MarketRepository) {
             } else 50.0
             val analogs = analogStudy(candles, q.dayChangePct, closePos)
 
-            // Extended-hours print, so entries are not priced off a stale close.
+            // Extended-hours print, so entries are not priced off a stale
+            // close — session-aware, because livePrice would keep serving the
+            // MORNING pre-market print all through the regular session.
             val ext = try {
                 market.getExtendedHours(q.symbol)
             } catch (_: Exception) {
                 null
             }
-            val price = ext?.livePrice ?: q.price
+            val price = when (Dates.marketSessionNow()) {
+                Dates.MarketSession.REGULAR -> ext?.regularPrice?.takeIf { it > 0.0 }
+                Dates.MarketSession.PRE -> ext?.preMarketPrice?.takeIf { it > 0.0 }
+                else -> ext?.postMarketPrice?.takeIf { it > 0.0 }
+                    ?: ext?.regularPrice?.takeIf { it > 0.0 }
+            } ?: q.price
             if (price <= 0.0) return null
             val extPct = ext?.preMarketPct ?: ext?.postMarketPct
             val extNote = when {
@@ -376,20 +558,118 @@ class NextSessionEngine(private val market: MarketRepository) {
             val volPace = if (q.avgVolume3M > 0L) q.dayVolume.toDouble() / q.avgVolume3M else 0.0
             val atrPct = atr / price * 100.0
 
-            // ---- the fixed-scale composite ----
-            val setupPts = (pre / 40.0).coerceIn(0.0, 1.0) * 25.0
+            // ---- relative strength vs SPY over 20 sessions ----
+            val rel20 =
+                if (spyR20 != null && closes.size >= 21 && closes[closes.size - 21] > 0.0) {
+                    (closes.last() / closes[closes.size - 21] - 1.0) * 100.0 - spyR20
+                } else null
+
+            // ---- session-over-session volume expansion ----
+            val lastVol = candles.last().volume
+            val prevVol = candles.getOrNull(candles.size - 2)?.volume ?: 0L
+            val volExpanding = prevVol > 0L && lastVol.toDouble() >= prevVol * 1.15
+
+            // ---- 20-session Donchian breakout on completed data ----
+            val breakout20 = closes.size >= 21 &&
+                closes.last() > (closes.subList(closes.size - 21, closes.size - 1).maxOrNull() ?: Double.MAX_VALUE)
+
+            // ---- sector money flow (shared mapping with the advisor) ----
+            val (sectorFlow, flowNote) = MoneyFlowEngine.flowFor(q.symbol, sector, flow)
+
+            // ---- 5-day headlines with measured tone ----
+            var newsMeasured = false
+            var newsScore = 0
+            var newsNote = ""
+            if (news != null) {
+                val feed = try {
+                    news.getNewsFeed(q.symbol, candles)
+                } catch (_: Exception) {
+                    null
+                }
+                if (feed != null && feed.status != FeedStatus.FAILED) {
+                    newsMeasured = true
+                    newsScore = feed.items.sumOf { it.sentiment }.coerceIn(-2, 2)
+                    newsNote = feed.items.firstOrNull { it.sentiment != 0 }
+                        ?.let { "${it.title} — ${it.source}" }
+                        ?: if (feed.items.isEmpty()) "No headlines in the last 5 days (feed verified)."
+                        else "Headlines present, tone neutral."
+                    if (feed.status == FeedStatus.STALE) {
+                        newsNote = "$newsNote (from an older fetch)"
+                    }
+                }
+            }
+
+            // ---- intraday structure: the session VWAP ----
+            var aboveVwap: Boolean? = null
+            var vwapDistPct: Double? = null
+            try {
+                val bars = market.getIntraday(q.symbol)
+                if (bars.isNotEmpty()) {
+                    // The most recent session only — the last bar's ET day.
+                    val lastTs = bars.last().ts
+                    val session = bars.filter { Dates.sameEtDay(it.ts, lastTs) }
+                    sessionVwap(session)?.let { vwap ->
+                        aboveVwap = price >= vwap
+                        vwapDistPct = (price / vwap - 1.0) * 100.0
+                    }
+                }
+            } catch (_: Exception) {
+                // VWAP stays not measured.
+            }
+
+            // ---- today's own scans ----
+            val entryPick = dayScans.entryBySymbol[q.symbol]
+            val powerPick = dayScans.powerBySymbol[q.symbol]
+            val scanNote = when {
+                entryPick != null && powerPick != null ->
+                    String.format(
+                        Locale.US,
+                        "Surfaced by BOTH of today's scans (entry %.0f, power-hour %.0f).",
+                        entryPick.score, powerPick.score
+                    )
+                entryPick != null ->
+                    String.format(Locale.US, "Surfaced by today's entry scan (score %.0f).", entryPick.score)
+                powerPick != null ->
+                    String.format(Locale.US, "Surfaced by today's power-hour scan (score %.0f).", powerPick.score)
+                else -> ""
+            }
+
+            // ---- the fixed-scale composite (weights documented in the notes) ----
+            val setupPts = (pre / 40.0).coerceIn(0.0, 1.0) * 15.0
             val vs50 = (q.price / q.fiftyDayAvg - 1.0) * 100.0
             val above200 = q.twoHundredDayAvg > 0.0 && q.price > q.twoHundredDayAvg
-            val trendPts = ((vs50 / 10.0).coerceIn(0.0, 1.0) * 9.0) + (if (above200) 6.0 else 0.0)
+            val trendPts = ((vs50 / 10.0).coerceIn(0.0, 1.0) * 5.0) +
+                (if (above200) 4.0 else 0.0) +
+                (rel20?.let { ((it + 2.0) / 8.0).coerceIn(0.0, 1.0) * 3.0 } ?: 1.5)
             val boardPts =
-                if (direction == TechniqueVerdict.BULLISH) (confidence / 100.0) * 20.0 else 6.0
+                if (direction == TechniqueVerdict.BULLISH) (confidence / 100.0) * 15.0 else 5.0
             val probPts = when {
-                analogs.count >= MIN_ANALOGS -> (analogs.probUp / 100.0) * 25.0
-                else -> 10.0   // unmeasured: a deliberate mid value, not a reward
+                analogs.count >= MIN_ANALOGS -> (analogs.probUp / 100.0) * 20.0
+                else -> 8.0    // unmeasured: a deliberate mid value, not a reward
             }
-            val extPts = extPct?.let { ((it + 2.0) / 4.0).coerceIn(0.0, 1.0) * 10.0 } ?: 5.0
-            val rsiPts = (1.0 - ((rsi - 45.0).coerceAtLeast(0.0) / 35.0)).coerceIn(0.0, 1.0) * 5.0
-            val score = (setupPts + trendPts + boardPts + probPts + extPts + rsiPts)
+            val volPts = ((volPace - 0.8) / 1.7).coerceIn(0.0, 1.0) * 8.0 +
+                (if (volExpanding) 2.0 else 0.0)
+            val flowPts = when (sectorFlow?.verdict) {
+                FlowVerdict.INFLOW -> 8.0
+                FlowVerdict.NEUTRAL -> 4.0
+                FlowVerdict.OUTFLOW -> 0.0
+                null -> 4.0    // unmeasured midpoint, named in the notes
+            }
+            val newsPts =
+                if (newsMeasured) ((newsScore + 2.0) / 4.0).coerceIn(0.0, 1.0) * 8.0 else 4.0
+            val vwapPts = when (aboveVwap) {
+                true -> 4.0
+                false -> 0.0
+                null -> 2.0    // no intraday bars — unmeasured midpoint
+            }
+            val scanPts = when {
+                entryPick != null || powerPick != null -> 3.0
+                dayScans.available -> 1.0
+                else -> 1.5    // scans unavailable — unmeasured midpoint
+            }
+            val extPts = extPct?.let { ((it + 2.0) / 4.0).coerceIn(0.0, 1.0) * 5.0 } ?: 2.5
+            val score = (setupPts + trendPts + boardPts + probPts + volPts +
+                flowPts + newsPts + vwapPts + scanPts + extPts)
                 .toInt().coerceIn(0, 100)
 
             // Honest next-session range from volatility capacity.
@@ -408,13 +688,23 @@ class NextSessionEngine(private val market: MarketRepository) {
                 )
             )
             // Target: the measured analog average when it exists, floored at a
-            // half-ATR so the trade has a reason, capped by the ATR range.
+            // half-ATR so the trade has a reason, capped by the ATR range —
+            // and never past the nearest measured resistance overhead.
             val targetPct = when {
                 analogs.count >= MIN_ANALOGS && analogs.avgNext > 0.0 ->
                     min(analogs.avgNext + atrPct * 0.5, hiPct)
                 else -> min(atrPct * 1.0, hiPct)
             }.coerceAtLeast(0.8)
-            val target = round2(entry * (1.0 + targetPct / 100.0))
+            val rawTarget = entry * (1.0 + targetPct / 100.0)
+            val resistanceCap = analysis?.srData?.resistances
+                ?.filter { it > entry * 1.003 }
+                ?.minOrNull()
+            val target = round2(
+                if (resistanceCap != null && resistanceCap < rawTarget) resistanceCap else rawTarget
+            )
+            val riskReward =
+                if (entry > stop && target > entry) round2((target - entry) / (entry - stop))
+                else null
 
             val alert = qualifiesForAlert(
                 score = score,
@@ -428,6 +718,8 @@ class NextSessionEngine(private val market: MarketRepository) {
             reasonParts += String.format(Locale.US, "%+.1f%% last session", q.dayChangePct)
             reasonParts += String.format(Locale.US, "closed at %.0f%% of the range", closePos)
             if (volPace >= 1.2) reasonParts += String.format(Locale.US, "%.1fx volume", volPace)
+            if (volExpanding) reasonParts += "volume expanding session over session"
+            if (breakout20) reasonParts += "cleared its 20-session high"
             if (analogs.count >= MIN_ANALOGS) {
                 reasonParts += String.format(
                     Locale.US,
@@ -438,7 +730,26 @@ class NextSessionEngine(private val market: MarketRepository) {
                 reasonParts += "too few similar past days to measure follow-through"
             }
             if (techTotal > 0) reasonParts += "$bullish of $techTotal techniques bullish ($confidence%)"
+            rel20?.let {
+                reasonParts += String.format(Locale.US, "%+.1fpp vs SPY over 20 sessions", it)
+            }
+            sectorFlow?.let {
+                reasonParts += "sector flow ${it.verdict.name.lowercase(Locale.US)} (${it.flowScore}/100)"
+            }
+            if (newsMeasured && newsScore != 0) {
+                reasonParts += String.format(Locale.US, "5-day news tone %+d", newsScore)
+            }
+            aboveVwap?.let {
+                reasonParts += if (it) "holding above the session VWAP" else "below the session VWAP"
+            }
+            if (scanNote.isNotEmpty()) reasonParts += scanNote.removeSuffix(".")
             reasonParts += String.format(Locale.US, "RSI %.0f", rsi)
+            riskReward?.let {
+                reasonParts += String.format(Locale.US, "R/R %.1f to the capped target", it)
+                if (it < 1.0) {
+                    reasonParts += "reward is thinner than the risk — size accordingly"
+                }
+            }
             if (entry < price) {
                 reasonParts += String.format(Locale.US, "extended — wait for a dip to $%.2f", entry)
             }
@@ -466,7 +777,19 @@ class NextSessionEngine(private val market: MarketRepository) {
                 extNote = extNote,
                 heldNote = heldNote(q.symbol, held[q.symbol]),
                 alert = alert,
-                reason = reasonParts.joinToString(", ")
+                reason = reasonParts.joinToString(", "),
+                sector = sector,
+                flowVerdict = sectorFlow?.verdict?.name ?: "",
+                flowNote = flowNote,
+                newsScore = newsScore,
+                newsMeasured = newsMeasured,
+                newsNote = newsNote,
+                rel20Pct = rel20?.let { round1(it) },
+                aboveVwap = aboveVwap,
+                vwapDistPct = vwapDistPct?.let { round1(it) },
+                breakout20 = breakout20,
+                riskReward = riskReward,
+                scanNote = scanNote
             )
         } catch (_: Exception) {
             null

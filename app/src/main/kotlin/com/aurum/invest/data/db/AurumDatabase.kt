@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PriceAlertEntity::class,
         AdviceLogEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = true
 )
 abstract class AurumDatabase : RoomDatabase() {
@@ -86,11 +86,22 @@ abstract class AurumDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v4: transactions gain the broker transaction reference — the unique
+         * identity of an imported operation, so a genuine rebuy of the same
+         * stock at the same size and price is never mistaken for a duplicate.
+         */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE transactions ADD COLUMN ref TEXT")
+            }
+        }
+
         // No destructive fallback: the user's ledger must survive every app
         // update. Any future schema change MUST ship an explicit Migration.
         fun build(context: Context): AurumDatabase =
             Room.databaseBuilder(context, AurumDatabase::class.java, "aurum.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
     }
 }

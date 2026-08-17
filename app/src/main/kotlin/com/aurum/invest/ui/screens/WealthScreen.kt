@@ -343,7 +343,7 @@ private fun WealthContent(
             WealthSectionHeader(
                 title = "Market pulse",
                 expanded = open("pulse"),
-                trailing = state.pulse?.let { "${it.score}/100" }
+                trailing = state.pulse?.score?.let { "$it/100" }
             ) { toggle("pulse") }
         }
         if (open("pulse")) {
@@ -1325,6 +1325,35 @@ private fun NextSessionCard(
                 )
             }
         }
+        Spacer(Modifier.height(6.dp))
+        // The v2 measured context: risk/reward on the capped target, the
+        // sector's money flow, and the session VWAP read. Each is measured or
+        // absent — an unmeasured input never renders a confident-looking pill.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            pick.riskReward?.let { rr ->
+                PillTag(
+                    text = String.format(Locale.US, "R/R %.1f", rr),
+                    color = if (rr >= 1.5) AurumColors.gain
+                    else if (rr < 1.0) AurumColors.loss else AurumColors.textDim
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            when (pick.flowVerdict) {
+                "INFLOW" -> {
+                    PillTag(text = "Sector inflow", color = AurumColors.gain)
+                    Spacer(Modifier.width(8.dp))
+                }
+                "OUTFLOW" -> {
+                    PillTag(text = "Sector outflow", color = AurumColors.loss)
+                    Spacer(Modifier.width(8.dp))
+                }
+            }
+            when (pick.aboveVwap) {
+                true -> PillTag(text = "Above VWAP", color = AurumColors.gain)
+                false -> PillTag(text = "Below VWAP", color = AurumColors.loss)
+                null -> {}
+            }
+        }
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -1360,6 +1389,32 @@ private fun NextSessionCard(
             style = MaterialTheme.typography.bodySmall,
             color = AurumColors.textDim
         )
+        if (pick.scanNote.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = pick.scanNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.info
+            )
+        }
+        if (pick.newsMeasured && pick.newsNote.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "News: ${pick.newsNote}",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (pick.flowNote.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = pick.flowNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
         if (pick.extNote.isNotEmpty()) {
             Spacer(Modifier.height(4.dp))
             Text(
@@ -1790,8 +1845,10 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
                 )
             } else if (pulse != null) {
                 Row(verticalAlignment = Alignment.Bottom) {
+                    // An INCOMPLETE pulse carries no score — a number next to
+                    // "No call" would read as a measurement.
                     Text(
-                        text = "${pulse.score}",
+                        text = pulse.score?.toString() ?: "—",
                         style = MaterialTheme.typography.headlineMedium,
                         fontWeight = FontWeight.Bold,
                         color = when (pulse.call) {
@@ -1801,11 +1858,13 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
                             MarketCall.INCOMPLETE -> AurumColors.textDim
                         }
                     )
-                    Text(
-                        text = " /100",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.textDim
-                    )
+                    if (pulse.score != null) {
+                        Text(
+                            text = " /100",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = AurumColors.textDim
+                        )
+                    }
                 }
             }
         }
@@ -1821,8 +1880,10 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
             return@AurumCard
         }
 
-        Spacer(Modifier.height(10.dp))
-        ScoreBar(score = pulse.score.toDouble(), modifier = Modifier.fillMaxWidth())
+        pulse.score?.let { s ->
+            Spacer(Modifier.height(10.dp))
+            ScoreBar(score = s.toDouble(), modifier = Modifier.fillMaxWidth())
+        }
 
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {

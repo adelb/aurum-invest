@@ -29,7 +29,16 @@ data class TransactionEntity(
      * auditable instead of silently assumed.
      */
     val currency: String = "USD",
-    val fxRate: Double = 1.0
+    val fxRate: Double = 1.0,
+    /**
+     * The broker's own transaction reference for this execution (BANK rows),
+     * parsed from the notification. It is the identity of the OPERATION: two
+     * trades with different refs are two different operations even when the
+     * symbol, side, size, and price all match — a same-size rebuy at the same
+     * level must never be swallowed as a "duplicate". Null for manual rows
+     * and for bank alerts that carried no reference.
+     */
+    val ref: String? = null
 )
 
 /** SPLIT ledger rows store the ratio in [TransactionEntity.shares] (e.g. 4.0 for a 4-for-1). */

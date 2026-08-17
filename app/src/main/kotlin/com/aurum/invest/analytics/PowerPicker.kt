@@ -125,7 +125,15 @@ class PowerPicker(
             val pool = HashMap<String, ScreenerQuote>()
             for (chunk in EntryPicker.MARKET_SCREENS.chunked(4)) {
                 coroutineScope {
-                    chunk.map { id -> async { market.getScreener(id) } }.awaitAll()
+                    chunk.map { id ->
+                        async {
+                            try {
+                                market.getScreener(id)
+                            } catch (_: Exception) {
+                                emptyList()
+                            }
+                        }
+                    }.awaitAll()
                 }.forEach { list ->
                     list.forEach { q -> pool.putIfAbsent(q.symbol, q) }
                 }
@@ -286,7 +294,13 @@ class PowerPicker(
             } catch (_: Exception) {
                 null
             }
-            val price = ext?.livePrice ?: q.price
+            // The morning's pre-market print stays stale all session — the price must follow the live session.
+            val price = when (Dates.marketSessionNow()) {
+                Dates.MarketSession.REGULAR -> ext?.regularPrice?.takeIf { it > 0.0 }
+                Dates.MarketSession.PRE -> ext?.preMarketPrice?.takeIf { it > 0.0 }
+                else -> ext?.postMarketPrice?.takeIf { it > 0.0 }
+                    ?: ext?.regularPrice?.takeIf { it > 0.0 }
+            } ?: q.price
             if (price <= 0.0) return null
 
             // An overnight hold is the trade most exposed to an after-hours
@@ -342,8 +356,11 @@ class PowerPicker(
 
             // -1 = the screener sent no range today; the reason then says
             // nothing about the close position instead of inventing "50%".
+            // The range is the regular session's, so it must be read with the
+            // screener's own price — an extended print can sit outside it.
             val closePos = if (q.dayHigh > q.dayLow && q.dayLow > 0.0) {
-                (price - q.dayLow) / (q.dayHigh - q.dayLow) * 100.0
+                val pos = (q.price - q.dayLow) / (q.dayHigh - q.dayLow) * 100.0
+                if (pos in 0.0..100.0) pos else -1.0
             } else -1.0
 
             val r4Score = (r4 * 1.5).coerceIn(0.0, 15.0)
@@ -352,8 +369,10 @@ class PowerPicker(
             val rsiScore = (10.0 - kotlin.math.abs(rsi - 66.0) / 2.5).coerceIn(0.0, 10.0)
             val volScore = ((volumeRatio - 1.0) * 8.0).coerceIn(0.0, 10.0)
             val breakoutScore = if (atBreakout) 7.0 else 0.0
-            val boardScore = when (direction) {
-                TechniqueVerdict.BULLISH -> confidence * 0.12
+            // A missing board is unknown, not a 2-point NEUTRAL.
+            val boardScore = when {
+                analysis == null -> 0.0
+                direction == TechniqueVerdict.BULLISH -> confidence * 0.12
                 else -> 2.0
             }
             // News: the overnight trade lives or dies on headlines the chart

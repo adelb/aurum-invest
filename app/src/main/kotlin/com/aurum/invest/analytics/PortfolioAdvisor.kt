@@ -312,38 +312,36 @@ class PortfolioAdvisor(
 ) {
 
     companion object {
-        /** Default: a sector above this share of the book is overweight. */
-        const val SECTOR_OVERWEIGHT_PCT = 35.0
-
-        /** Default: rebalancing sells an overweight sector back toward this share. */
-        const val SECTOR_TARGET_PCT = 30.0
-
-        /** Default: a single position above this share of the book is concentrated. */
-        const val POSITION_TRIM_PCT = 30.0
-
-        /** Default: suggested ceiling for any single position after rebalancing. */
-        const val POSITION_CAP_PCT = 22.0
-
         /** The 35-technique board's own minimum history. */
         const val MIN_SESSIONS = 30
 
         private const val DEEP_CHUNK = 4
-    }
 
-    // ---- policy-derived thresholds (cited in the output via policyNote) ----
-
-    private val positionCapPct: Double get() = policy.maxPositionPct
-    private val positionTrimPct: Double get() = policy.maxPositionPct + 8.0
-    private val sectorOverweightPct: Double get() = policy.maxSectorPct
-    private val sectorTargetPct: Double get() = (policy.maxSectorPct - 5.0).coerceAtLeast(10.0)
-
-    /** Loss (%) beyond which a broken chart is cut — tighter for conservative money. */
-    private val cutLossPct: Double
-        get() = when (policy.riskTolerance) {
+        // The one place the profile becomes thresholds — the advisor's
+        // verdicts and the grade card's scoring must read identical caps.
+        fun positionCapPct(policy: InvestorProfile): Double = policy.maxPositionPct
+        fun positionTrimPct(policy: InvestorProfile): Double = policy.maxPositionPct + 8.0
+        fun sectorOverweightPct(policy: InvestorProfile): Double = policy.maxSectorPct
+        fun sectorTargetPct(policy: InvestorProfile): Double =
+            (policy.maxSectorPct - 5.0).coerceAtLeast(10.0)
+        fun cutLossPct(policy: InvestorProfile): Double = when (policy.riskTolerance) {
             InvestorProfile.TOL_CONSERVATIVE -> -6.0
             InvestorProfile.TOL_AGGRESSIVE -> -10.0
             else -> -8.0
         }
+    }
+
+    // ---- policy-derived thresholds (cited in the output via policyNote).
+    // The formulas live in the companion so the grade engine scores the SAME
+    // caps the advisor acts on — two derivations would drift apart. ----
+
+    private val positionCapPct: Double get() = positionCapPct(policy)
+    private val positionTrimPct: Double get() = positionTrimPct(policy)
+    private val sectorOverweightPct: Double get() = sectorOverweightPct(policy)
+    private val sectorTargetPct: Double get() = sectorTargetPct(policy)
+
+    /** Loss (%) beyond which a broken chart is cut — tighter for conservative money. */
+    private val cutLossPct: Double get() = cutLossPct(policy)
 
     /** Gain (%) at which banking half becomes the default — later for long horizons. */
     private val takeProfitPct: Double
@@ -505,13 +503,18 @@ class PortfolioAdvisor(
                 MarketCall.DEFENSIVE -> "a defensive tape — protect first, add later"
                 MarketCall.INCOMPLETE -> "an unmeasured tape — the pulse could not verify enough inputs"
             }
-            String.format(
-                Locale.US,
-                "Market pulse %d/100 (%s): %.0f%% of scanned names above their 50-day average%s — %s.",
-                p.score, p.call.name.lowercase(Locale.US), p.breadthAbove50Pct,
-                p.vix?.let { String.format(Locale.US, ", VIX %.1f", it) } ?: "",
-                regime
-            )
+            // Score and breadth print only when they were measured — an
+            // INCOMPLETE pulse (or an unmeasurable breadth pool) must not be
+            // quoted as numbers.
+            val scorePart = p.score?.let {
+                String.format(Locale.US, "Market pulse %d/100 (%s)", it, p.call.name.lowercase(Locale.US))
+            } ?: "Market pulse: no call (${p.call.name.lowercase(Locale.US)})"
+            val breadthPart = p.breadthAbove50Pct?.let {
+                String.format(Locale.US, ": %.0f%% of scanned names above their 50-day average", it)
+            } ?: ""
+            scorePart + breadthPart +
+                (p.vix?.let { String.format(Locale.US, ", VIX %.1f", it) } ?: "") +
+                " — $regime."
         } ?: ""
 
         return PortfolioReview(
@@ -528,7 +531,7 @@ class PortfolioAdvisor(
                 "Decision support, not financial advice.",
             unverified = unverified,
             marketNote = marketNote,
-            grade = PortfolioGradeEngine.evaluate(verdicts, book, flow, pulse, strategy),
+            grade = PortfolioGradeEngine.evaluate(verdicts, book, flow, pulse, strategy, policy),
             policyNote = policy.label()
         )
     }
@@ -768,29 +771,7 @@ class PortfolioAdvisor(
         symbol: String,
         sector: String,
         flow: MoneyFlowReport?
-    ): Pair<SectorFlow?, String> {
-        if (flow == null || flow.sectors.isEmpty()) return null to ""
-        val exactKey = SectorTrends.WATCH.entries
-            .firstOrNull { (_, members) -> members.any { it.first == symbol } }?.key
-            ?: StockCatalog.SYMBOL_THEME[symbol]?.first
-        val keys = exactKey?.let { listOf(it) }
-            ?: PortfolioLens.themesForSector(sector)
-        val flows = keys.mapNotNull { k -> flow.sectors.firstOrNull { it.key == k } }
-        return when {
-            flows.isEmpty() -> null to ""
-            flows.size == 1 || flows.all { it.verdict == flows.first().verdict } -> {
-                val f = flows.maxBy { it.flowScore }
-                f to "Money flow: ${f.label} ${f.verdict.name.lowercase(Locale.US)} " +
-                    "${f.flowScore}/100 (${f.confidence}% signal agreement)."
-            }
-            else -> {
-                val parts = flows.joinToString(", ") {
-                    "${it.label} ${it.verdict.name.lowercase(Locale.US)} ${it.flowScore}/100"
-                }
-                null to "Money flow within $sector is mixed: $parts."
-            }
-        }
-    }
+    ): Pair<SectorFlow?, String> = MoneyFlowEngine.flowFor(symbol, sector, flow)
 
     // ------------------------------------------------------------ rebalance
 
@@ -806,9 +787,12 @@ class PortfolioAdvisor(
         }
         if (overweight.isEmpty()) return moves
 
-        // Buy side: the strongest inflowing theme the book is light in, with a
-        // board-approved pick from the sector-gap engine. No pick — no buy claim.
-        val buyCandidate: Triple<SectorPick, String, SectorFlow>? = flow?.inflows
+        // Buy side: the strongest inflowing themes the book is light in, each
+        // with a board-approved pick from the sector-gap engine. No pick — no
+        // buy claim. Kept as a QUEUE: each overweight sector consumes its own
+        // candidate, so two sectors never both propose buying the same name
+        // (which could stack past the position cap if executed as written).
+        val buyQueue: MutableList<Triple<SectorPick, String, SectorFlow>> = flow?.inflows
             ?.asSequence()
             ?.mapNotNull { inflow ->
                 val covered = PortfolioLens.themeCoveragePct(inflow.key, book)
@@ -822,21 +806,25 @@ class PortfolioAdvisor(
                     ?: return@mapNotNull null
                 Triple(pick, inflow.label, inflow)
             }
-            ?.firstOrNull()
+            ?.toMutableList() ?: mutableListOf()
+        val proposedBuys = HashSet<String>()
 
         for (slice in overweight) {
             val excess = (slice.weightPct - sectorTargetPct) / 100.0 * book.totalValue
             if (excess < book.totalValue * 0.02) continue
             // Sell the weakest holding in the sector: worst action first, then
             // the lowest board confidence.
+            // Bucket spacing 1000 vs a 0..100 tie-break: the action class must
+            // always outrank confidence, or a 0%-confidence HOLD would tie a
+            // 100%-confidence TRIM.
             val weakest = verdicts
                 .filter { it.sector == slice.sector }
                 .maxByOrNull { v ->
                     when (v.action) {
-                        HoldingAction.CUT_LOSS -> 400
-                        HoldingAction.SELL -> 300
-                        HoldingAction.TAKE_PROFIT -> 200
-                        HoldingAction.TRIM -> 100
+                        HoldingAction.CUT_LOSS -> 4000
+                        HoldingAction.SELL -> 3000
+                        HoldingAction.TAKE_PROFIT -> 2000
+                        HoldingAction.TRIM -> 1000
                         HoldingAction.HOLD -> 0
                     } + (100 - v.techConfidence)
                 } ?: continue
@@ -848,8 +836,13 @@ class PortfolioAdvisor(
                 slice.sector, slice.weightPct, sectorOverweightPct,
                 weakest.symbol, weakest.techBullish, weakest.techTotal, weakest.unrealizedPlPct
             )
+            val buyCandidate = buyQueue.firstOrNull { (pick, _, _) ->
+                pick.symbol !in proposedBuys
+            }
             if (buyCandidate != null) {
                 val (pick, themeLabel, inflow) = buyCandidate
+                proposedBuys.add(pick.symbol)
+                buyQueue.remove(buyCandidate)
                 moves.add(
                     RebalanceMove(
                         sellSymbol = weakest.symbol,

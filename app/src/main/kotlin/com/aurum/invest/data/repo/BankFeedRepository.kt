@@ -53,9 +53,18 @@ class BankFeedRepository(
      * Imports the event as a BANK-source transaction and marks it IMPORTED.
      * [price] must already be in USD; when the alert was denominated in
      * another currency, [currency]/[fxRate] record the conversion that
-     * produced it. An identical BANK trade already in the ledger makes this
-     * a no-op insert (the event is still marked IMPORTED) — the same broker
-     * execution can never enter the ledger twice.
+     * produced it.
+     *
+     * Every operation is unique. Duplicate detection is layered by identity
+     * strength, never by the stock alone:
+     *  1. an event already IMPORTED never writes again (double-tap safe);
+     *  2. when the alert carries a broker reference, THAT is the operation's
+     *     identity — only a ledger row with the same (symbol, ref) is a
+     *     duplicate. A same-size rebuy at the same price is a different ref,
+     *     so it imports like any other operation;
+     *  3. only a ref-less alert falls back to the shape heuristic (same
+     *     symbol/side/shares/price within ±36h), the last net against a
+     *     broker re-sending the same alert text.
      *
      * Returns true when a ledger row was written, false otherwise.
      */
@@ -70,7 +79,16 @@ class BankFeedRepository(
     ): Boolean {
         return try {
             val event = bankDao.get(eventId) ?: return false
-            if (portfolio.bankDuplicateExists(symbol, side, shares, price, event.postedAt)) {
+            if (event.status == BankEvent.STATUS_IMPORTED) return false
+            val ref = event.parsedJson?.let { TradeParser.fromJson(it) }?.ref?.trim()
+                ?.takeIf { it.isNotEmpty() }
+            val duplicate =
+                if (ref != null) {
+                    portfolio.bankRefExists(symbol, ref)
+                } else {
+                    portfolio.bankDuplicateExists(symbol, side, shares, price, event.postedAt)
+                }
+            if (duplicate) {
                 bankDao.setStatus(eventId, BankEvent.STATUS_IMPORTED)
                 return false
             }
@@ -82,7 +100,8 @@ class BankFeedRepository(
                 ts = event.postedAt,
                 source = "BANK",
                 currency = currency,
-                fxRate = fxRate
+                fxRate = fxRate,
+                ref = ref
             )
             bankDao.setStatus(eventId, BankEvent.STATUS_IMPORTED)
             true

@@ -217,7 +217,7 @@ class NextWeekPlanner(
                 sectors = ordered.map { s ->
                     NextWeekSector(
                         key = s.key, label = s.label, etf = s.etf,
-                        r5Pct = s.r5Pct, newsTone = s.newsTone,
+                        r5Pct = s.r5Pct, newsTone = s.newsTone ?: 0,
                         note = "Flow ${s.flowScore}/100 — money is measurably flowing in. ${s.reason}."
                     )
                 }
@@ -337,7 +337,8 @@ class NextWeekPlanner(
                 else -> "Next week's preview — sector read unavailable."
             }
             val marketNote = pulse?.let {
-                "Market pulse ${it.score}/100 — ${it.call}. ${it.headline}"
+                val scorePart = it.score?.let { s -> "$s/100" } ?: "no score (incomplete data)"
+                "Market pulse $scorePart — ${it.call}. ${it.headline}"
             } ?: ""
             val overlap = stocks.filter { it.heldNote.isNotEmpty() }.map { it.symbol }
             val portfolioNote = when {
@@ -479,7 +480,16 @@ class NextWeekPlanner(
             } catch (_: Exception) {
                 null
             }
-            val price = ext?.livePrice ?: quote?.price ?: candles.last().close
+            // Session-aware, not livePrice: the raw accessor would keep
+            // serving the morning pre-market print all through the session.
+            val price = when (com.aurum.invest.core.Dates.marketSessionNow()) {
+                com.aurum.invest.core.Dates.MarketSession.REGULAR ->
+                    ext?.regularPrice?.takeIf { it > 0.0 }
+                com.aurum.invest.core.Dates.MarketSession.PRE ->
+                    ext?.preMarketPrice?.takeIf { it > 0.0 }
+                else -> ext?.postMarketPrice?.takeIf { it > 0.0 }
+                    ?: ext?.regularPrice?.takeIf { it > 0.0 }
+            } ?: quote?.price ?: candles.last().close
             if (price <= 0.0) return null
             if (analysis.outlook.expectedHigh <= price * 1.005) return null
 
@@ -514,7 +524,9 @@ class NextWeekPlanner(
                 s = s,
                 finalScore = s.raw + techBonus + newsScore * 2.5 + extPct.coerceIn(-4.0, 4.0) * 1.5,
                 price = price,
-                atr = Indicators.atr(candles, 14) ?: (price * 0.02),
+                // No measured ATR -> no candidate. A fabricated 2% stand-in
+                // would flow into a displayed stop distance.
+                atr = Indicators.atr(candles, 14) ?: return null,
                 supports = analysis.srData.supports,
                 expectedHigh = analysis.outlook.expectedHigh,
                 bullishCount = analysis.outlook.bullishCount,
@@ -538,7 +550,8 @@ class NextWeekPlanner(
         flowMeasured: Boolean
     ): NextWeekPlan {
         val marketNote = pulse?.let {
-            "Market pulse ${it.score}/100 — ${it.call}. ${it.headline}"
+            val scorePart = it.score?.let { s -> "$s/100" } ?: "no score (incomplete data)"
+            "Market pulse $scorePart — ${it.call}. ${it.headline}"
         }.orEmpty()
         return NextWeekPlan(
             weekStart = weekStart,

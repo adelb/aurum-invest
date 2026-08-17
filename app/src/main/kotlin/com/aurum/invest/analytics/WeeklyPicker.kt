@@ -266,15 +266,10 @@ class WeeklyPicker(
                 }
                 results.filterNotNull().forEach { enriched.add(it) }
             }
-            val ranked = (
-                if (enriched.isNotEmpty()) {
-                    enriched.sortedByDescending { it.first.raw + it.second }
-                } else {
-                    // Deep read fully unreachable — fall back to the raw rank.
-                    scored.sortedByDescending { it.raw }.take(TOP_N)
-                        .map { Triple(it, 0.0, "") }
-                }
-                ).take(TOP_N)
+            // enrich() rejects only bearish boards — an empty result means every
+            // leader failed the vote, and the honest list is then empty.
+            if (enriched.isEmpty()) return emptyList()
+            val ranked = enriched.sortedByDescending { it.first.raw + it.second }.take(TOP_N)
 
             ranked.mapIndexed { index, (s, bonus, suffix) ->
                 // Fixed scale — 80 means strong in any week, not "rank 2 of 10".
@@ -381,8 +376,9 @@ class WeeklyPicker(
      * The depth pass a week-long hold deserves: a year of candles so the
      * 35-technique board can vote (a BEARISH board returns null and leaves
      * the list entirely), an ATR/structure stop, a first target from the
-     * board's 5-day expected high, and the news tone. Returns the scored
-     * name, its score bonus, and a reason suffix carrying the exit pair.
+     * board's 5-day expected high (claimed only when the projection clears
+     * the live price), and the news tone. Returns the scored name, its
+     * score bonus, and a reason suffix carrying the exits.
      */
     private suspend fun enrich(s: Scored, price: Double): Triple<Scored, Double, String>? {
         return try {
@@ -395,11 +391,13 @@ class WeeklyPicker(
             val analysis = Techniques.analyze(s.symbol, candles) ?: return Triple(s, 0.0, "")
             if (analysis.outlook.direction == TechniqueVerdict.BEARISH) return null
 
-            val atr = Indicators.atr(candles, 14) ?: (price * 0.02)
+            val atr = Indicators.atr(candles, 14) ?: return Triple(s, 0.0, "")
             val support = analysis.srData.supports.filter { it < price }.maxOrNull()
             val stop = (support?.let { it - 0.5 * atr } ?: (price - 1.8 * atr))
                 .coerceAtLeast(price * 0.92)
-            val target = analysis.outlook.expectedHigh.coerceAtLeast(price * 1.01)
+            // A projection below the live price is not a target — the suffix
+            // then carries no target claim rather than a fabricated +1% floor.
+            val target = analysis.outlook.expectedHigh.takeIf { it > price }
 
             val newsScore = if (news != null && s.symbol.length >= 2) {
                 try {
@@ -415,10 +413,10 @@ class WeeklyPicker(
                 ) + newsScore * 1.5
             val suffix = String.format(
                 Locale.US,
-                "; %d of %d techniques bullish; stop %s (-%.1f%%), first target %s%s",
+                "; %d of %d techniques bullish; stop %s (-%.1f%%)%s%s",
                 analysis.outlook.bullishCount, analysis.results.size,
                 com.aurum.invest.core.Fmt.money(stop), (1.0 - stop / price) * 100.0,
-                com.aurum.invest.core.Fmt.money(target),
+                target?.let { ", first target " + com.aurum.invest.core.Fmt.money(it) } ?: "",
                 if (newsScore != 0) String.format(Locale.US, "; news tone %+d", newsScore) else ""
             )
             Triple(s, bonus, suffix)
@@ -451,7 +449,9 @@ class WeeklyPicker(
             if (lastIsIncomplete && volumes.size >= 2) volumes.size - 1 else volumes.size
         val vol5 = volumes.subList((volEnd - 5).coerceAtLeast(0), volEnd).average()
         val volBase = volumes.subList((volEnd - 25).coerceAtLeast(0), (volEnd - 5).coerceAtLeast(1))
-        val volRatio = if (volBase.isNotEmpty() && volBase.average() > 0.0) vol5 / volBase.average() else 1.0
+        // Null = no measurable base; the reason then says nothing about
+        // volume instead of printing a fabricated 1.0x.
+        val volRatio = if (volBase.isNotEmpty() && volBase.average() > 0.0) vol5 / volBase.average() else null
 
         val high20 = Indicators.recentHigh(closes, 20) ?: last
         val distFromHigh = if (high20 > 0.0) (high20 - last) / high20 * 100.0 else 0.0
@@ -459,16 +459,20 @@ class WeeklyPicker(
         // Component scores.
         val momentumScore = (r5 * 1.5).coerceIn(-15.0, 20.0) + (r20 * 0.75).coerceIn(-10.0, 15.0)
         val rsiScore = (12.0 - abs(rsi - 52.5) / 2.5).coerceIn(0.0, 12.0) // peaks in the 40..65 band
-        val volScore = ((volRatio - 1.0) * 12.0).coerceIn(0.0, 12.0)
+        val volScore = volRatio?.let { ((it - 1.0) * 12.0).coerceIn(0.0, 12.0) } ?: 0.0
         val distScore = (10.0 - distFromHigh * 1.25).coerceIn(0.0, 10.0) // closer to the 20d high is better
         val raw = momentumScore + rsiScore + volScore + distScore
 
         val parts = mutableListOf<String>()
-        parts += String.format(
-            Locale.US,
-            "%+.1f%% in 5 days and %+.1f%% in 20 on %.1fx volume",
-            r5, r20, volRatio
-        )
+        parts += if (volRatio != null) {
+            String.format(
+                Locale.US,
+                "%+.1f%% in 5 days and %+.1f%% in 20 on %.1fx volume",
+                r5, r20, volRatio
+            )
+        } else {
+            String.format(Locale.US, "%+.1f%% in 5 days and %+.1f%% in 20", r5, r20)
+        }
         parts += String.format(Locale.US, "RSI %.0f", rsi)
         parts += if (distFromHigh <= 0.1) {
             "at its 20-day high"

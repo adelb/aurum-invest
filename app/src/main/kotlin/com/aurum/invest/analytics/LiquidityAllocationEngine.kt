@@ -287,17 +287,15 @@ object LiquidityAllocationEngine {
         rationale += "Technique board reads ${c.techDirection.name.lowercase(Locale.US)} at $techConf% indicator agreement."
 
         // --- sector money flow (only when the candidate's sector maps to a tracked theme) ---
+        // A trend-fallback verdict carries no measured flow score; the flow term
+        // is then 0 — the note still tells the story, but no points are guessed.
         val (sectorFlow, flowVerdict, flowNote) = sectorFlowFor(c, flowByKey, trendByKey)
-        val flowPts = when (flowVerdict) {
-            FlowVerdict.INFLOW -> {
-                val strength = sectorFlow?.flowScore?.coerceIn(0, 100) ?: 60
-                (strength - 50).coerceAtLeast(0) * 0.30 // up to +15
-            }
-            FlowVerdict.OUTFLOW -> {
-                val strength = sectorFlow?.flowScore?.coerceIn(0, 100) ?: 40
-                -(50 - strength).coerceAtLeast(0) * 0.30 // down to -15
-            }
-            FlowVerdict.NEUTRAL -> 0.0
+        val strength = sectorFlow?.flowScore?.coerceIn(0, 100)
+        val flowPts = when {
+            strength == null -> 0.0
+            flowVerdict == FlowVerdict.INFLOW -> (strength - 50).coerceAtLeast(0) * 0.30 // up to +15
+            flowVerdict == FlowVerdict.OUTFLOW -> -(50 - strength).coerceAtLeast(0) * 0.30 // down to -15
+            else -> 0.0
         }
         score += flowPts
         if (flowNote.isNotEmpty()) rationale += flowNote
@@ -666,7 +664,8 @@ object LiquidityAllocationEngine {
                 remaining
             )
             if (room < MIN_TICKET) return@forEachIndexed
-            val amount = roundToTicket(room)
+            // Nearest-ticket rounding must never spend past the room (cash, caps).
+            val amount = roundToTicket(room).coerceAtMost(room)
             if (amount < MIN_TICKET) return@forEachIndexed
             val shares = if (sc.c.price > 0.0) amount / sc.c.price else 0.0
             if (shares <= 0.0) return@forEachIndexed
@@ -701,7 +700,7 @@ object LiquidityAllocationEngine {
                     remaining
                 )
                 if (extraRoom < MIN_TICKET) continue
-                val extra = roundToTicket(extraRoom)
+                val extra = roundToTicket(extraRoom).coerceAtMost(extraRoom)
                 if (extra < MIN_TICKET) continue
                 val newAmount = line.amount + extra
                 val newShares = if (sc.c.price > 0.0) newAmount / sc.c.price else line.approxShares

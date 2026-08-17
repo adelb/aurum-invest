@@ -495,7 +495,9 @@ fun PositionDetailScreen(
                                 }
                                 Spacer(Modifier.weight(1f))
                                 Text(
-                                    text = "r = ${"%.2f".format(gold.correlation)} · ${gold.sampleDays}d",
+                                    text = gold.correlation
+                                        ?.let { "r = ${"%.2f".format(it)} · ${gold.sampleDays}d" }
+                                        ?: "r — · ${gold.sampleDays}d",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = AurumColors.textDim
                                 )

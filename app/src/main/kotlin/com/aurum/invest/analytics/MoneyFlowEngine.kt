@@ -35,7 +35,7 @@ data class SectorFlow(
     val volumeRatio: Double,       // last completed session vs its 20-day average
     val breadthPct: Double,        // % of tracked members above their 20-day avg; -1 = not measured
     val memberMedian5dPct: Double, // median 5-day move of tracked members; 0 when unmeasured
-    val newsTone: Int,             // -5..5 summed headline sentiment; 0 when unmeasured
+    val newsTone: Int?,            // -5..5 summed headline sentiment; null when not measured
     val flowScore: Int,            // 0..100 on a fixed scale
     val verdict: FlowVerdict,
     val confidence: Int,           // 0..100 — how many of the 4 money signals agree
@@ -87,6 +87,42 @@ class MoneyFlowEngine(
         private const val BREADTH_TOP = 8
         private const val MEMBER_CHUNK = 8
 
+        /**
+         * A symbol's own sector money flow, mapped honestly: exact watchlist
+         * or catalog membership first; else the Yahoo sector's theme(s). When
+         * several themes map to the sector and their verdicts disagree, no
+         * single flow is claimed — the disagreement itself is reported.
+         * Shared by the portfolio advisor and the next-session engine so the
+         * two can never tell different flow stories about the same stock.
+         */
+        fun flowFor(
+            symbol: String,
+            sector: String,
+            flow: MoneyFlowReport?
+        ): Pair<SectorFlow?, String> {
+            if (flow == null || flow.sectors.isEmpty()) return null to ""
+            val exactKey = SectorTrends.WATCH.entries
+                .firstOrNull { (_, members) -> members.any { it.first == symbol } }?.key
+                ?: StockCatalog.SYMBOL_THEME[symbol]?.first
+            val keys = exactKey?.let { listOf(it) }
+                ?: PortfolioLens.themesForSector(sector)
+            val flows = keys.mapNotNull { k -> flow.sectors.firstOrNull { it.key == k } }
+            return when {
+                flows.isEmpty() -> null to ""
+                flows.size == 1 || flows.all { it.verdict == flows.first().verdict } -> {
+                    val f = flows.maxBy { it.flowScore }
+                    f to "Money flow: ${f.label} ${f.verdict.name.lowercase(java.util.Locale.US)} " +
+                        "${f.flowScore}/100 (${f.confidence}% signal agreement)."
+                }
+                else -> {
+                    val parts = flows.joinToString(", ") {
+                        "${it.label} ${it.verdict.name.lowercase(java.util.Locale.US)} ${it.flowScore}/100"
+                    }
+                    null to "Money flow within $sector is mixed: $parts."
+                }
+            }
+        }
+
         // ---------------- JSON ----------------
 
         fun toJson(r: MoneyFlowReport): String = JSONObject().apply {
@@ -102,7 +138,7 @@ class MoneyFlowEngine(
                         put("rel", s.relStrength20); put("cmf", s.cmf); put("mfi", s.mfi)
                         put("obv", s.obvSlopeNorm); put("upShare", s.upDollarSharePct)
                         put("volRatio", s.volumeRatio); put("breadth", s.breadthPct)
-                        put("median5", s.memberMedian5dPct); put("tone", s.newsTone)
+                        put("median5", s.memberMedian5dPct); putOpt("tone", s.newsTone)
                         put("score", s.flowScore); put("verdict", s.verdict.name)
                         put("conf", s.confidence); put("reason", s.reason)
                     })
@@ -131,7 +167,7 @@ class MoneyFlowEngine(
                         volumeRatio = s.optDouble("volRatio", 1.0),
                         breadthPct = s.optDouble("breadth", -1.0),
                         memberMedian5dPct = s.optDouble("median5", 0.0),
-                        newsTone = s.optInt("tone", 0),
+                        newsTone = if (s.has("tone")) s.getInt("tone") else null,
                         flowScore = s.optInt("score", 0),
                         verdict = runCatching { FlowVerdict.valueOf(s.optString("verdict")) }
                             .getOrDefault(FlowVerdict.NEUTRAL),
@@ -142,7 +178,11 @@ class MoneyFlowEngine(
             }
             MoneyFlowReport(
                 computedAt = o.optLong("computedAt", 0L),
-                spyR20Pct = o.optDouble("spyR20", 0.0),
+                // getDouble, not optDouble: a payload with no measured S&P
+                // baseline must fail the parse (-> null report), never read
+                // back as a fabricated 0.0 that would misprice every
+                // relative-strength number.
+                spyR20Pct = o.getDouble("spyR20"),
                 sectors = sectors,
                 headline = o.optString("headline", ""),
                 notes = buildList {
@@ -174,25 +214,33 @@ class MoneyFlowEngine(
             }.filterNotNull()
             if (raw.isEmpty()) return null
 
-            // 2 — news tone for the leaders only (bounded).
+            // 2 — news tone for the leaders only (bounded). A FAILED feed is
+            // a null tone, never a neutral 0 — "we couldn't check" and
+            // "verified no news" are different answers. Results come back
+            // through awaitAll (no shared map mutated across IO threads).
             val preRanked = raw.sortedByDescending { it.preScore }
-            val tones = HashMap<String, Int>()
-            coroutineScope {
+            val tones: Map<String, Int?> = coroutineScope {
                 preRanked.take(NEWS_TOP).map { p ->
                     async {
-                        val items = try {
-                            news.getTopicNews(
+                        val feed = try {
+                            news.getTopicNewsFeed(
                                 query = "${p.label} stocks",
                                 cacheKey = "sector-${p.key}",
                                 tag = p.etf
                             )
                         } catch (_: Exception) {
-                            emptyList()
+                            null
                         }
-                        tones[p.key] = items.sumOf { it.sentiment }.coerceIn(-5, 5)
+                        val tone =
+                            if (feed == null || feed.status == com.aurum.invest.data.model.FeedStatus.FAILED) {
+                                null
+                            } else {
+                                feed.items.sumOf { it.sentiment }.coerceIn(-5, 5)
+                            }
+                        p.key to tone
                     }
                 }.awaitAll()
-            }
+            }.toMap()
 
             // 3 — member breadth for the leading sectors (bounded).
             val breadth = HashMap<String, Pair<Double, Double>>() // key -> (breadthPct, median5)
@@ -226,14 +274,19 @@ class MoneyFlowEngine(
                 if (reads.isNotEmpty()) {
                     val pct = reads.count { it.second } * 100.0 / reads.size
                     val sorted = reads.map { it.third }.sorted()
-                    val median = sorted[sorted.size / 2]
+                    // True median: even-sized member lists average the two
+                    // middles instead of quietly taking the upper one.
+                    val median =
+                        if (sorted.size % 2 == 1) sorted[sorted.size / 2]
+                        else (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) / 2.0
                     breadth[key] = pct to median
                 }
             }
 
-            // 4 — compose.
+            // 4 — compose. tones[key] is absent for non-leaders and null for
+            // failed feeds — both mean "not measured", never a neutral 0.
             val sectors = raw.map { p ->
-                val tone = tones[p.key] ?: 0
+                val tone: Int? = tones[p.key]
                 val (b, m) = breadth[p.key] ?: (-1.0 to 0.0)
                 compose(p, tone, b, m)
             }.sortedByDescending { it.flowScore }
@@ -260,6 +313,12 @@ class MoneyFlowEngine(
                 )
                 if (sectors.any { it.breadthPct < 0.0 }) {
                     add("Member breadth is measured for the leading sectors only; elsewhere it is shown as not measured, never assumed.")
+                }
+                if (sectors.any { it.newsTone == null }) {
+                    add(
+                        "News tone is measured for the leading sectors only; where it wasn't, " +
+                            "its 10 points are removed from the scale rather than scored as neutral."
+                    )
                 }
             }
 
@@ -308,8 +367,11 @@ class MoneyFlowEngine(
             val complete =
                 if (lastIsIncomplete && candles.size >= 2) candles.dropLast(1) else candles
 
-            val cmf = cmf20(complete) ?: 0.0
-            val mfi = mfi14(complete) ?: 50.0
+            // Unmeasurable money signals mean the sector is skipped, never
+            // invented — a neutral-looking substitute would vote in the
+            // 3-of-4 verdict as if it had been measured.
+            val cmf = cmf20(complete) ?: return null
+            val mfi = mfi14(complete) ?: return null
             val obvNorm = obvSlopeNorm(complete)
             val upShare = upDollarShare(complete, 10)
             val volumes = complete.map { it.volume.toDouble() }
@@ -324,8 +386,11 @@ class MoneyFlowEngine(
         }
     }
 
-    private fun compose(p: EtfRead, tone: Int, breadthPct: Double, median5: Double): SectorFlow {
-        // Fixed-scale components, each capped — total 100.
+    private fun compose(p: EtfRead, tone: Int?, breadthPct: Double, median5: Double): SectorFlow {
+        // Fixed-scale components, each capped — total 100. An unmeasured
+        // news tone drops its 10-point band from BOTH sides of the scale
+        // (the measured 90 rescales to 100) instead of minting 5 free points
+        // that would let an unmeasured sector outrank a measured-bearish one.
         val relPts = ((p.rel + 6.0) / 12.0).coerceIn(0.0, 1.0) * 20.0
         val r5Pts = ((p.r5 + 5.0) / 10.0).coerceIn(0.0, 1.0) * 10.0
         val cmfPts = ((p.cmf + 0.25) / 0.5).coerceIn(0.0, 1.0) * 15.0
@@ -333,9 +398,14 @@ class MoneyFlowEngine(
         val sharePts = (p.upDollarShare / 100.0).coerceIn(0.0, 1.0) * 15.0
         val obvPts = ((p.obvSlopeNorm + 1.0) / 2.0).coerceIn(0.0, 1.0) * 10.0
         val volPts = ((p.volumeRatio - 0.7) / 0.9).coerceIn(0.0, 1.0) * 10.0
-        val tonePts = ((tone + 5.0) / 10.0).coerceIn(0.0, 1.0) * 10.0
-        val score = (relPts + r5Pts + cmfPts + mfiPts + sharePts + obvPts + volPts + tonePts)
-            .toInt().coerceIn(0, 100)
+        val measured = relPts + r5Pts + cmfPts + mfiPts + sharePts + obvPts + volPts
+        val score =
+            if (tone != null) {
+                val tonePts = ((tone + 5.0) / 10.0).coerceIn(0.0, 1.0) * 10.0
+                (measured + tonePts).toInt().coerceIn(0, 100)
+            } else {
+                (measured / 90.0 * 100.0).toInt().coerceIn(0, 100)
+            }
 
         // The four money signals; the verdict needs 3 to agree.
         val inSignals = listOf(
@@ -373,7 +443,9 @@ class MoneyFlowEngine(
                 Locale.US, "%.0f%% of tracked members above their 20-day average", breadthPct
             )
         }
-        if (tone != 0) reasonParts += String.format(Locale.US, "news tone %+d", tone)
+        if (tone != null && tone != 0) {
+            reasonParts += String.format(Locale.US, "news tone %+d", tone)
+        }
 
         return SectorFlow(
             key = p.key,

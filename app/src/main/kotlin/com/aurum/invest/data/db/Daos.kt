@@ -54,6 +54,17 @@ interface TransactionDao {
         tsFrom: Long,
         tsTo: Long
     ): Int
+
+    /**
+     * How many BANK rows already carry this broker reference for this symbol.
+     * The reference is the operation's identity — this is the precise
+     * duplicate check, with no time window and no shape matching.
+     */
+    @Query(
+        "SELECT COUNT(*) FROM transactions WHERE source = 'BANK' " +
+            "AND symbol = :symbol AND ref = :ref"
+    )
+    suspend fun countBankRef(symbol: String, ref: String): Int
 }
 
 @Dao

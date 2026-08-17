@@ -79,6 +79,22 @@ fun ReportsScreen(onBack: () -> Unit, onOpenAdviceHistory: () -> Unit = {}) {
         )
     }
 
+    state.ledgerError?.let { message ->
+        AlertDialog(
+            onDismissRequest = { vm.clearLedgerError() },
+            containerColor = AurumColors.surface,
+            titleContentColor = AurumColors.text,
+            textContentColor = AurumColors.textDim,
+            title = { Text("Ledger protected") },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = { vm.clearLedgerError() }) {
+                    Text("OK", color = AurumColors.gold)
+                }
+            }
+        )
+    }
+
     confirmDelete?.let { tx ->
         AlertDialog(
             onDismissRequest = { confirmDelete = null },

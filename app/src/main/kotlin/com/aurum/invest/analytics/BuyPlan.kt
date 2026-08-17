@@ -93,6 +93,9 @@ object BuyPlanEngine {
      * capped by [maxPositionPct]% of equity and by [cashAvailable]. When it
      * is not known, [fallbackBudget] is used and the plan says so — a fixed
      * order budget must never be dressed up as Elder's 2% account rule.
+     *
+     * Returns null when the chart cannot support an honest plan: no measurable
+     * ATR, or a structure so wide that no defensible stop exists above zero.
      */
     fun build(
         symbol: String,
@@ -105,7 +108,7 @@ object BuyPlanEngine {
         maxPositionPct: Double = 22.0,
         cashAvailable: Double? = null,
         policyNote: String = ""
-    ): BuyPlan {
+    ): BuyPlan? {
         // First pass with a unit budget measures the plan's risk-per-dollar —
         // stop and tranche PRICES depend only on the chart, so risk scales
         // linearly with the budget and one probe sizes the real one.
@@ -113,7 +116,7 @@ object BuyPlanEngine {
         val budget: Double
         val budgetBasis: String
         if (equity != null) {
-            val probe = buildInternal(symbol, candles, analysis, price, 1000.0)
+            val probe = buildInternal(symbol, candles, analysis, price, 1000.0) ?: return null
             val riskPerDollar = (probe.riskDollars / 1000.0).coerceAtLeast(1e-6)
             val allowedRisk = equity * riskPerTradePct / 100.0
             val riskCapBudget = allowedRisk / riskPerDollar
@@ -163,9 +166,11 @@ object BuyPlanEngine {
         accountEquity: Double? = null,
         riskPerTradePct: Double = 0.0,
         budgetBasis: String = ""
-    ): BuyPlan {
+    ): BuyPlan? {
         val closes = candles.map { it.close }
-        val atr = Indicators.atr(candles, 14) ?: (price * 0.02)
+        // The ATR is quoted downstream as a measurement (stop padding, tranche
+        // spacing); when it can't be measured there is no plan, never a guess.
+        val atr = Indicators.atr(candles, 14) ?: return null
         val sma200 = Indicators.sma(closes, 200)
         val sma20 = analysis.maData.sma20.lastOrNull { it != null }
 
@@ -212,7 +217,9 @@ object BuyPlanEngine {
         // Stop: ATR-padded structure, never tighter than 1 ATR, never wider
         // than ~12% below the average entry — and never ABOVE the lowest
         // planned entry, or the deep limit would fill straight into a stop-out.
-        val lowestEntry = tranches.filter { it.shares > 0.0 }.minOf { it.price }
+        // Every tranche can round to zero shares (tiny budget, expensive
+        // share); the current price stands in as the entry reference then.
+        val lowestEntry = tranches.filter { it.shares > 0.0 }.minOfOrNull { it.price } ?: price
         val structure = supports.filter { it < lowestEntry }.maxOrNull() ?: (lowestEntry - atr)
         val structural = min(structure - 0.75 * atr, price - 1.0 * atr)
         val floor12 = avgEntry * 0.88
@@ -230,7 +237,9 @@ object BuyPlanEngine {
             stopBasis = "0.75 ATR (${money(atr)}) under the ${money(structure)} structure — " +
                 "wide enough that normal daily noise cannot shake the position out."
         }
-        stop = max(stop, 0.01)
+        // A stop at or through zero means the volatility padding swallows the
+        // entire entry price — no defensible stop exists, so there is no plan.
+        if (stop <= 0.0) return null
 
         val riskPerShare = max(avgEntry - stop, 0.0)
         val riskDollars = round2(totalShares * riskPerShare)
@@ -454,6 +463,10 @@ object BuyPlanEngine {
         val t3Amt = round2(budget - t1Amt - t2Amt)
         val probePrice = round2(deepLevel)
         val triggerPrice = round2(sma20 ?: (price + 1.0 * atr))
+        // The label must say what the level actually is — without a 20-day
+        // average the trigger is an ATR distance, not "the 20-day average".
+        val triggerLabel = if (sma20 != null) "the 20-day average"
+        else "one ATR above the current price"
         return listOf(
             PlanTranche(
                 label = "Probe at deep support",
@@ -471,7 +484,7 @@ object BuyPlanEngine {
                 price = triggerPrice,
                 shares = shares(t2Amt, triggerPrice),
                 condition = "Add only after a daily close back above ${money(triggerPrice)} " +
-                    "(the 20-day average) — the first objective sign the downtrend is breaking.",
+                    "($triggerLabel) — the first objective sign the downtrend is breaking.",
                 day = "After the trigger"
             ),
             PlanTranche(

@@ -502,13 +502,15 @@ class PreMarketPicker(
             }
 
             val caution = buildString {
-                if (medianRange < target) {
+                // Measured against needed, not target: during the regular
+                // session the day must stretch past the entry's premium too.
+                if (medianRange < needed) {
                     append(
                         String.format(
                             Locale.US,
                             "A typical day only reaches %.2f%% above the open — %.2f%% asks for " +
                                 "a better-than-usual session. ",
-                            medianRange, target
+                            medianRange, needed
                         )
                     )
                 }
@@ -565,7 +567,7 @@ class PreMarketPicker(
             // Hit rate dominates; news tone and a trending theme tilt it; the
             // pre-market move only breaks ties.
             val score = hitRate * 1.0 +
-                (medianRange / target * 20.0).coerceAtMost(25.0) +
+                (medianRange / needed * 20.0).coerceAtMost(25.0) +
                 (gapHold * 0.15) +
                 (preMarketPct.coerceAtMost(10.0) * 0.8) +
                 newsScore * 2.5 +
@@ -632,7 +634,7 @@ class PreMarketPicker(
                 if (session == Dates.MarketSession.REGULAR && Dates.sameEtDay(c.ts, now)) continue
                 val et = Instant.ofEpochMilli(c.ts).atZone(ET)
                 val minutes = et.hour * 60 + et.minute
-                if (minutes < 9 * 60 + 30 || minutes > 16 * 60) continue
+                if (minutes < 9 * 60 + 30 || minutes >= 16 * 60) continue
                 byDay.getOrPut(et.toLocalDate().toString()) { ArrayList() }.add(c)
             }
             val days = byDay.values.filter { it.size >= 20 }

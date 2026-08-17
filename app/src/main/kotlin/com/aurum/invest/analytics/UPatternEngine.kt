@@ -31,11 +31,13 @@ import org.json.JSONObject
  *     day's closes curves upward (a > 0 — the mathematical definition of a
  *     U). The fingerprint also captures WHERE the low usually lands (median
  *     and IQR of its clock time) and how big the dip and rebound really are.
- *  3. RULE BACKTEST — the exact rule the app will signal live ("after a
- *     ≥0.8% dip, buy when a bar closes back above VWAP without making a new
- *     low; exit 15:45 ET") is replayed over every fingerprint session, U-days
- *     and failures alike. The record — fired / won / average return — is
- *     printed on the card and gates the pick: no measured edge, no listing.
+ *  3. RULE BACKTEST — the signalled rule ("after a ≥0.8% dip, buy when a
+ *     bar closes back above VWAP without making a new low; stop 0.3% under
+ *     that low; exit 15:45 ET") is replayed over every fingerprint session,
+ *     U-days and failures alike. The live target is not replayed — it needs
+ *     the median rebound, which only exists after this sweep. The record —
+ *     fired / won / average return — is printed on the card and gates the
+ *     pick: no measured edge, no listing.
  *  4. TECHNIQUE BOARD — finalists run the 35-technique daily board; a
  *     BEARISH board disqualifies (a U inside a downtrend is a trap).
  *  5. LIVE STATE — during the session each pick is tracked bar by bar:
@@ -312,7 +314,15 @@ class UPatternEngine(
             val pool = LinkedHashMap<String, ScreenerQuote>()
             for (chunk in EntryPicker.MARKET_SCREENS.chunked(4)) {
                 coroutineScope {
-                    chunk.map { id -> async { market.getScreener(id) } }.awaitAll()
+                    chunk.map { id ->
+                        async {
+                            try {
+                                market.getScreener(id)
+                            } catch (_: Exception) {
+                                emptyList()
+                            }
+                        }
+                    }.awaitAll()
                 }.forEach { list -> list.forEach { q -> pool.putIfAbsent(q.symbol, q) } }
             }
             val gated = pool.values.filter { q ->
@@ -524,8 +534,11 @@ class UPatternEngine(
     }
 
     /**
-     * Replay the live rule over one finished session. Returns the trade's
-     * percent result, or null when the rule never fired that day.
+     * Replay the signalled rule over one finished session: entry on the VWAP
+     * reclaim, the STOP_PAD stop under the low that armed it, and the 15:45 ET
+     * time exit. The live target is NOT replayed — it needs the median
+     * rebound, which only exists after the sweep this replay runs inside.
+     * Returns the trade's percent result, or null when the rule never fired.
      */
     private fun backtestDay(day: List<Candle>): Double? {
         val open = day.first().open
@@ -534,6 +547,7 @@ class UPatternEngine(
         var cumV = 0.0
         var sessionLow = Double.MAX_VALUE
         var entry: Double? = null
+        var stop = 0.0
         var exit: Double? = null
         for (bar in day) {
             val minute = minuteOfDayEt(bar.ts)
@@ -544,7 +558,11 @@ class UPatternEngine(
             cumV += bar.volume.toDouble()
             val vwap = if (cumV > 0.0) cumPV / cumV else bar.close
 
-            if (entry == null &&
+            val e = entry
+            if (e != null && minute <= RULE_EXIT_MIN && bar.low <= stop) {
+                return (stop / e - 1.0) * 100.0
+            }
+            if (e == null &&
                 minute in RULE_START_MIN..RULE_LAST_ENTRY_MIN &&
                 lowBefore < Double.MAX_VALUE &&
                 (open - lowBefore) / open * 100.0 >= MIN_DIP_PCT &&
@@ -552,6 +570,7 @@ class UPatternEngine(
                 bar.low > lowBefore
             ) {
                 entry = bar.close
+                stop = sessionLow * (1.0 - STOP_PAD)
             }
             if (minute <= RULE_EXIT_MIN) exit = bar.close
         }
@@ -582,8 +601,18 @@ class UPatternEngine(
         medianReboundPct: Double,
         buyWindow: String
     ): LiveRead {
+        // A cached zero median would put a 0 under the rebound division.
+        if (medianReboundPct <= 0.0) {
+            return LiveRead(
+                UState.NO_TURN,
+                "Rebound size not measured — no signal.",
+                null, null, null, null, null, null
+            )
+        }
         val today = try {
-            regularSessionDays(bars, excludeToday = false)
+            // A fresh session has only a few bars — the fingerprint's 50-bar
+            // floor would leave the live read blind until ~13:40 ET.
+            regularSessionDays(bars, excludeToday = false, minBars = 3)
                 .lastOrNull { day -> Dates.sameEtDay(day.last().ts, System.currentTimeMillis()) }
         } catch (_: Exception) {
             null
@@ -758,7 +787,8 @@ class UPatternEngine(
             val reason = String.format(
                 Locale.US,
                 "U on %d of %d sessions (%.0f%%) · median dip −%.1f%%, rebound +%.1f%% · " +
-                    "low usually %s · the VWAP-reclaim rule paid %d of %d (%.0f%%), avg %+.2f%%",
+                    "low usually %s · the VWAP-reclaim rule (entry, stop, 15:45 ET exit) " +
+                    "paid %d of %d (%.0f%%), avg %+.2f%%",
                 fp.uDays, fp.sessions, fp.uRate * 100.0,
                 fp.medianDipPct, fp.medianReboundPct, buyWindow,
                 fp.btWins, fp.btFired, fp.btWinRate * 100.0, fp.btMeanRetPct
@@ -806,7 +836,8 @@ class UPatternEngine(
     /** Bars grouped by ET day, regular session (09:30–16:00) only. */
     private fun regularSessionDays(
         bars: List<Candle>,
-        excludeToday: Boolean
+        excludeToday: Boolean,
+        minBars: Int = 50
     ): List<List<Candle>> {
         val now = System.currentTimeMillis()
         val byDay = LinkedHashMap<String, MutableList<Candle>>()
@@ -817,7 +848,7 @@ class UPatternEngine(
             if (minutes < 9 * 60 + 30 || minutes >= 16 * 60) continue
             byDay.getOrPut(et.toLocalDate().toString()) { ArrayList() }.add(c)
         }
-        return byDay.values.filter { it.size >= 50 }
+        return byDay.values.filter { it.size >= minBars }
     }
 
     private class QuadFit(val a: Double, val r2: Double)

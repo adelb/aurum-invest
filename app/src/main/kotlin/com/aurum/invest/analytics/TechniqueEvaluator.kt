@@ -84,12 +84,14 @@ data class TechniqueEvaluation(
     val trustedKeys: Set<String> get() = scores.filter { it.trusted }.map { it.key }.toSet()
 
     /**
-     * Hit rate per technique key for outlook weighting — only techniques with
-     * enough calls to mean anything ([TechniqueEvaluator.MIN_WEIGHT_SIGNALS]).
+     * Hit rate per technique key for outlook weighting — judged on the SAME
+     * independent (stride-5) evidence bar as the trust badge. Overlapping
+     * daily replays overstate the sample, so a rule with 12 overlapping calls
+     * that are really 2-3 independent windows must not get a heavier vote.
      */
     fun weights(): Map<String, Int> = scores
-        .filter { it.signals >= TechniqueEvaluator.MIN_WEIGHT_SIGNALS }
-        .associate { it.key to it.hitRate }
+        .filter { it.independentSignals >= TechniqueEvaluator.MIN_INDEPENDENT_SIGNALS }
+        .associate { it.key to it.independentHitRate }
 
     /**
      * The whole board ordered by measured merit on THIS stock: trusted

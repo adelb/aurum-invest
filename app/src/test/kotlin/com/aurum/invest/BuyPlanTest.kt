@@ -44,7 +44,7 @@ class BuyPlanTest {
     fun `unknown account falls back to a labeled default budget`() {
         val cs = candles()
         val analysis = Techniques.analyze("TEST", cs)!!
-        val plan = BuyPlanEngine.build("TEST", cs, analysis, cs.last().close)
+        val plan = BuyPlanEngine.build("TEST", cs, analysis, cs.last().close)!!
         assertEquals(BuyPlanEngine.DEFAULT_BUDGET, plan.budget, 1e-9)
         assertTrue(plan.budgetBasis.contains("NOT sized by the 2% account rule"))
         assertEquals(null, plan.accountEquity)
@@ -61,7 +61,7 @@ class BuyPlanTest {
             accountEquity = equity,
             riskPerTradePct = riskPct,
             maxPositionPct = 100.0
-        )
+        )!!
         assertNotNull(plan.accountEquity)
         // A full stop-out must lose at most ~2% of the account (small rounding slack).
         assertTrue(
@@ -82,7 +82,7 @@ class BuyPlanTest {
             accountEquity = equity,
             riskPerTradePct = 5.0,
             maxPositionPct = 10.0
-        )
+        )!!
         assertTrue(plan.budget <= equity * 0.10 * 1.001)
     }
 
@@ -96,7 +96,7 @@ class BuyPlanTest {
             riskPerTradePct = 3.0,
             maxPositionPct = 50.0,
             cashAvailable = 1_500.0
-        )
+        )!!
         assertTrue(plan.budget <= 1_500.0 * 1.001)
     }
 
@@ -108,7 +108,7 @@ class BuyPlanTest {
             "TEST", cs, analysis, cs.last().close,
             accountEquity = 20_000.0,
             cashAvailable = 0.0
-        )
+        )!!
         assertTrue(plan.budgetBasis.contains("no uninvested cash"))
         assertTrue(plan.budgetBasis.contains("selling something first"))
     }
@@ -121,7 +121,7 @@ class BuyPlanTest {
             "TEST", cs, analysis, cs.last().close,
             accountEquity = 20_000.0,
             cashAvailable = null
-        )
+        )!!
         assertTrue(!plan.budgetBasis.contains("no uninvested cash"))
     }
 
@@ -129,7 +129,7 @@ class BuyPlanTest {
     fun `stop sits below every planned entry`() {
         val cs = candles()
         val analysis = Techniques.analyze("TEST", cs)!!
-        val plan = BuyPlanEngine.build("TEST", cs, analysis, cs.last().close)
+        val plan = BuyPlanEngine.build("TEST", cs, analysis, cs.last().close)!!
         val lowestEntry = plan.tranches.filter { it.shares > 0.0 }.minOf { it.price }
         assertTrue(plan.stop < lowestEntry)
         assertTrue(plan.stop > 0.0)
@@ -140,8 +140,8 @@ class BuyPlanTest {
         val cs = candles()
         val analysis = Techniques.analyze("TEST", cs)!!
         val price = cs.last().close
-        val a = BuyPlanEngine.build("TEST", cs, analysis, price, fallbackBudget = 1000.0)
-        val b = BuyPlanEngine.build("TEST", cs, analysis, price, fallbackBudget = 2000.0)
+        val a = BuyPlanEngine.build("TEST", cs, analysis, price, fallbackBudget = 1000.0)!!
+        val b = BuyPlanEngine.build("TEST", cs, analysis, price, fallbackBudget = 2000.0)!!
         assertTrue(abs(b.riskDollars - 2 * a.riskDollars) < a.riskDollars * 0.05 + 1.0)
     }
 }

@@ -33,7 +33,9 @@ object AdviceEngine {
         val rsi = Indicators.rsi(closes)
         val sma20 = Indicators.sma(closes, 20)
         val atr = Indicators.atr(candles)
-        val high20 = Indicators.recentHigh(closes, 20)
+        // The trail is labeled "20-day high" downstream — with fewer candles
+        // recentHigh would silently measure a shorter window than claimed.
+        val high20 = if (closes.size >= 20) Indicators.recentHigh(closes, 20) else null
 
         val target = if (atr != null && avgCost > 0.0) round2(avgCost + 2.0 * atr) else null
         val costStop = if (atr != null && avgCost > 0.0) round2(avgCost - 1.5 * atr) else null

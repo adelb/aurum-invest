@@ -91,7 +91,8 @@ enum class GoldLink { WITH_GOLD, INVERSE_GOLD, NEUTRAL }
 
 /** How a stock's daily returns correlate with gold (GLD proxy). */
 data class GoldRelation(
-    val correlation: Double,
+    /** Pearson r; null when the relationship could not be measured — a 0.00 would read as a measured "no link". */
+    val correlation: Double?,
     val link: GoldLink,
     val description: String,
     val sampleDays: Int

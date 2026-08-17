@@ -222,10 +222,10 @@ class SectorTrends(
             }.filterNotNull()
             if (raw.isEmpty()) return emptyList()
 
-            // News tone for the leading movers only.
+            // News tone for the leading movers only. Results come back
+            // through awaitAll — no shared map mutated across IO threads.
             val byMomentum = raw.sortedByDescending { it.r5 * 2.0 + it.r20 }
-            val toneBySector = HashMap<String, Int>()
-            coroutineScope {
+            val toneBySector: Map<String, Int> = coroutineScope {
                 byMomentum.take(NEWS_TOP).map { p ->
                     async {
                         val items = try {
@@ -237,15 +237,19 @@ class SectorTrends(
                         } catch (_: Exception) {
                             emptyList()
                         }
-                        toneBySector[p.key] = items.sumOf { it.sentiment }.coerceIn(-5, 5)
+                        p.key to items.sumOf { it.sentiment }.coerceIn(-5, 5)
                     }
                 }.awaitAll()
-            }
+            }.toMap()
 
             raw.map { p ->
                 val tone = toneBySector[p.key] ?: 0
+                // Tone stays OUT of the ranking score: only the top movers
+                // get a tone fetched, so a ±10 term would rank the measured
+                // few against the unmeasured many on feed luck. It is still
+                // displayed and folded into the reason text.
                 val score = p.r5 * 2.0 + p.r20 * 0.8 +
-                    ((p.volRatio - 1.0) * 8.0).coerceIn(-4.0, 8.0) + tone * 2.0
+                    ((p.volRatio - 1.0) * 8.0).coerceIn(-4.0, 8.0)
                 SectorTrend(
                     key = p.key,
                     label = p.label,

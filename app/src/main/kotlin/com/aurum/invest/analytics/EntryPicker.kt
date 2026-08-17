@@ -1,5 +1,6 @@
 package com.aurum.invest.analytics
 
+import com.aurum.invest.core.Dates
 import com.aurum.invest.data.model.EntryPick
 import com.aurum.invest.data.model.ScreenerQuote
 import com.aurum.invest.data.repo.MarketRepository
@@ -114,7 +115,8 @@ class EntryPicker(
                         vs50DayPct = o.optDouble("vs50DayPct", 0.0),
                         techDirection = o.optString("techDirection", "NEUTRAL"),
                         techBullish = o.optInt("techBullish", 0),
-                        techTotal = o.optInt("techTotal", 15),
+                        // 0, not 15: a failed board must not resurrect as 0/15.
+                        techTotal = o.optInt("techTotal", 0),
                         techConfidence = o.optInt("techConfidence", 0),
                         analystRating = if (o.has("analystRating")) o.getDouble("analystRating") else null,
                         reason = o.optString("reason", "")
@@ -133,7 +135,15 @@ class EntryPicker(
             val pool = HashMap<String, ScreenerQuote>()
             for (chunk in MARKET_SCREENS.chunked(4)) {
                 coroutineScope {
-                    chunk.map { id -> async { market.getScreener(id) } }.awaitAll()
+                    chunk.map { id ->
+                        async {
+                            try {
+                                market.getScreener(id)
+                            } catch (_: Exception) {
+                                emptyList()
+                            }
+                        }
+                    }.awaitAll()
                 }.forEach { list ->
                     list.forEach { q -> pool.putIfAbsent(q.symbol, q) }
                 }
@@ -283,7 +293,13 @@ class EntryPicker(
             } catch (_: Exception) {
                 null
             }
-            val price = ext?.livePrice ?: q.price
+            // The morning's pre-market print stays stale all session — the price must follow the live session.
+            val price = when (Dates.marketSessionNow()) {
+                Dates.MarketSession.REGULAR -> ext?.regularPrice?.takeIf { it > 0.0 }
+                Dates.MarketSession.PRE -> ext?.preMarketPrice?.takeIf { it > 0.0 }
+                else -> ext?.postMarketPrice?.takeIf { it > 0.0 }
+                    ?: ext?.regularPrice?.takeIf { it > 0.0 }
+            } ?: q.price
             if (price <= 0.0) return null
 
             // News gate: a chart-perfect dip caused by a lawsuit, probe, or
@@ -353,8 +369,10 @@ class EntryPicker(
             val supportScore = if (nearSupport) 8.0 else 0.0
             val trendScore = if (rising50) 5.0 else 0.0
             val rrScore = (rewardRisk * 3.0).coerceIn(0.0, 9.0)
-            val boardScore = when (direction) {
-                TechniqueVerdict.BULLISH -> confidence * 0.10
+            // A missing board is unknown, not a 2-point NEUTRAL.
+            val boardScore = when {
+                analysis == null -> 0.0
+                direction == TechniqueVerdict.BULLISH -> confidence * 0.10
                 else -> 2.0
             }
             val last = candles.last()

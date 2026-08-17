@@ -16,11 +16,13 @@ object NewsSentiment {
      * Words that flip the meaning of the term that follows them. Sentiment
      * terms themselves (e.g. "misses") must NOT appear here — "misses
      * estimates, cuts guidance" would flip its own co-occurring bearish terms.
+     * Bearish ACTION verbs ("halts", "scraps", "cancels") are not negators
+     * either: "scraps drug program, shares plunge" is a doubly-bearish
+     * headline, not a negated one — those verbs live in the negative lexicon.
      */
     private val NEGATORS = listOf(
         "not", "no", "never", "denies", "denied", "fails to", "failed to",
-        "without", "won't", "wont", "cannot", "can't", "cant",
-        "unlikely to", "halts", "ends", "cancels", "cancelled", "scraps"
+        "without", "won't", "wont", "cannot", "can't", "cant", "unlikely to"
     )
 
     /** Sources whose headlines carry more editorial checking; tone counts fully. */
@@ -153,6 +155,10 @@ object NewsSentiment {
         "antitrust",
         "breach",
         "outage",
+        "halts",
+        "scraps",
+        "cancels",
+        "cancelled",
         // insider / institutional flow
         "insider selling",
         "insider sells",
@@ -234,6 +240,9 @@ object NewsSentiment {
     private fun overlap(a: Set<String>, b: Set<String>): Double {
         if (a.isEmpty() || b.isEmpty()) return 0.0
         val shared = a.count { it in b }
-        return shared.toDouble() / minOf(a.size, b.size)
+        // Jaccard, not shared/min: with the min denominator a short headline
+        // fully contained in a longer, distinct one scores 1.0 and swallows
+        // it — and the metric is asymmetric, so dedup depended on feed order.
+        return shared.toDouble() / (a.size + b.size - shared)
     }
 }

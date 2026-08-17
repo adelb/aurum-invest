@@ -266,6 +266,7 @@ class RelationPicker(private val market: MarketRepository) {
                     val candles = candlesBySymbol[rel.symbol] ?: return@mapNotNull null
                     val quote = quotes[rel.symbol]
                     val price = quote?.price ?: candles.last().close
+                    if (price <= 0.0) return@mapNotNull null
                     RelatedMove(
                         symbol = rel.symbol,
                         name = rel.name,

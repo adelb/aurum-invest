@@ -50,7 +50,8 @@ class PortfolioRepository(private val txDao: TransactionDao) {
         source: String = "MANUAL",
         note: String = "",
         currency: String = "USD",
-        fxRate: Double = 1.0
+        fxRate: Double = 1.0,
+        ref: String? = null
     ): Long = txDao.insert(
         TransactionEntity(
             symbol = symbol.trim().uppercase(),
@@ -62,7 +63,8 @@ class PortfolioRepository(private val txDao: TransactionDao) {
             source = source,
             note = note,
             currency = currency,
-            fxRate = fxRate
+            fxRate = fxRate,
+            ref = ref?.trim()?.takeIf { it.isNotEmpty() }
         )
     )
 
@@ -99,7 +101,27 @@ class PortfolioRepository(private val txDao: TransactionDao) {
         tsTo = ts + DUPLICATE_WINDOW_MS
     ) > 0
 
+    /**
+     * True when a BANK row already carries this broker reference for this
+     * symbol. The reference is the operation's unique identity: a different
+     * ref is a different operation even when symbol, side, shares, and price
+     * all match — so a genuine rebuy is never swallowed as a duplicate.
+     */
+    suspend fun bankRefExists(symbol: String, ref: String): Boolean =
+        txDao.countBankRef(symbol.trim().uppercase(), ref.trim()) > 0
+
     suspend fun deleteTransaction(tx: TransactionEntity) = txDao.delete(tx)
+
+    /**
+     * Replays the ledger WITHOUT [tx] and returns an error message when some
+     * later sell would then exceed the shares held — deleting a buy that a
+     * recorded sell depended on would silently corrupt every realized number.
+     * Null when the deletion is sound.
+     */
+    suspend fun validateDelete(tx: TransactionEntity): String? {
+        val remaining = txDao.getAllOrdered().filter { it.id != tx.id }
+        return firstOversell(remaining)
+    }
 
     /** Every ledger row for one symbol, newest first — the edit screen's source. */
     fun observeTransactionsFor(symbol: String): Flow<List<TransactionEntity>> =

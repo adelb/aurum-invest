@@ -107,7 +107,9 @@ class NewsRepository(private val cacheDao: CacheDao) {
      * News for an arbitrary search [query] (sector themes, insider-buying
      * sweeps, institutional flow). Cached under `"topic:[cacheKey]"`. Items
      * carry sentiment but no price impact; [tag] fills NewsItem.symbol so the
-     * UI can label the row. Never throws; empty list on total failure.
+     * UI can label the row. Never throws; empty list on total failure — so a
+     * scoring engine that must distinguish "verified no news" from "the feed
+     * failed" has to use [getTopicNewsFeed] instead.
      */
     suspend fun getTopicNews(
         query: String,
@@ -115,7 +117,21 @@ class NewsRepository(private val cacheDao: CacheDao) {
         tag: String = "",
         maxAgeMs: Long = 3_600_000L,
         maxItems: Int = 12
-    ): List<NewsItem> = withContext(Dispatchers.IO) {
+    ): List<NewsItem> = getTopicNewsFeed(query, cacheKey, tag, maxAgeMs, maxItems).items
+
+    /**
+     * [getTopicNews] with PROVENANCE: FRESH = served live or from fresh
+     * cache, STALE = old cache after a failed fetch, FAILED = nothing at all
+     * — an empty FRESH list means the feed was reached and verified empty,
+     * never "we couldn't check".
+     */
+    suspend fun getTopicNewsFeed(
+        query: String,
+        cacheKey: String,
+        tag: String = "",
+        maxAgeMs: Long = 3_600_000L,
+        maxItems: Int = 12
+    ): NewsFeed = withContext(Dispatchers.IO) {
         val key = "topic:$cacheKey"
         try {
             val now = System.currentTimeMillis()
@@ -125,11 +141,13 @@ class NewsRepository(private val cacheDao: CacheDao) {
                 null
             }
             if (cached != null && now - cached.updatedAt <= maxAgeMs) {
-                return@withContext fromJson(cached.json)
+                return@withContext NewsFeed(fromJson(cached.json), FeedStatus.FRESH, cached.updatedAt)
             }
             val raw = client.fetchQuery(query)
             if (raw == null) {
-                return@withContext cached?.let { fromJson(it.json) } ?: emptyList()
+                return@withContext cached
+                    ?.let { NewsFeed(fromJson(it.json), FeedStatus.STALE, it.updatedAt) }
+                    ?: NewsFeed.FAILED
             }
             val items = raw
                 .sortedByDescending { it.publishedAt }
@@ -151,12 +169,13 @@ class NewsRepository(private val cacheDao: CacheDao) {
             } catch (_: Exception) {
                 // Cache write failure is non-fatal.
             }
-            items
+            NewsFeed(items, FeedStatus.FRESH, now)
         } catch (_: Exception) {
             try {
-                cacheDao.get(key)?.let { fromJson(it.json) } ?: emptyList()
+                cacheDao.get(key)?.let { NewsFeed(fromJson(it.json), FeedStatus.STALE, it.updatedAt) }
+                    ?: NewsFeed.FAILED
             } catch (_: Exception) {
-                emptyList()
+                NewsFeed.FAILED
             }
         }
     }
@@ -167,7 +186,9 @@ class NewsRepository(private val cacheDao: CacheDao) {
      * (via [Dates.sameDay]); null when no candle matches (weekend/holiday).
      */
     private fun priceImpact(publishedAt: Long, candles: List<Candle>): Double? {
-        val candle = candles.firstOrNull { Dates.sameDay(it.ts, publishedAt) } ?: return null
+        // Session identity is an ET question — the device zone must not
+        // decide which trading day a headline landed on.
+        val candle = candles.firstOrNull { Dates.sameEtDay(it.ts, publishedAt) } ?: return null
         if (candle.open == 0.0) return null
         return (candle.close - candle.open) / candle.open * 100.0
     }

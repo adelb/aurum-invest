@@ -73,7 +73,7 @@ class WealthRepository(
         private const val TRENDS_KEY = "sectortrends:v2"
         private const val FLOW_KEY = "moneyflow:v2"
         private const val REVIEW_KEY = "portfolioreview:v6"
-        private const val NEXT_SESSION_KEY = "nextsession:v2"
+        private const val NEXT_SESSION_KEY = "nextsession:v3"
         private const val NS_NOTIFIED_PREFIX = "nextsession:notified:"
         private const val PREVIEW_KEY_PREFIX = "wealthplan:next:v2:"
         private const val LIQUIDITY_KEY = "liquidityplan:v1"
@@ -800,7 +800,21 @@ class WealthRepository(
 
     private suspend fun recomputeNextSessionBase(): NextSessionReport? {
         return try {
-            val report = NextSessionEngine(market).compute()
+            // Everything the engine can decide with, gathered best-effort: the
+            // sector money-flow report and today's own intraday scan results.
+            // Each may be null/empty — the engine reports those inputs as not
+            // measured instead of inventing neutrality.
+            val flow = runCatching { getMoneyFlow() }.getOrNull()
+            val dayScans = com.aurum.invest.analytics.DayScanContext.of(
+                entries = runCatching { picks?.ensureEntries() ?: emptyList() }
+                    .getOrDefault(emptyList()),
+                power = runCatching { picks?.ensurePower() ?: emptyList() }
+                    .getOrDefault(emptyList())
+            )
+            val report = NextSessionEngine(market, news).compute(
+                flow = flow,
+                dayScans = dayScans
+            )
             if (report != null) {
                 putCache(NEXT_SESSION_KEY, NextSessionReport.toJson(report))
             }

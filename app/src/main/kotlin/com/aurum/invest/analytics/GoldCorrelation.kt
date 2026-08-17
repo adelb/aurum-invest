@@ -19,18 +19,19 @@ object GoldCorrelation {
     fun relation(stockCandles: List<Candle>, goldCandles: List<Candle>): GoldRelation {
         if (stockCandles.isEmpty() || goldCandles.isEmpty()) {
             return GoldRelation(
-                correlation = 0.0,
+                correlation = null,
                 link = GoldLink.NEUTRAL,
                 description = "No overlapping trading days with gold yet — relationship unknown.",
                 sampleDays = 0
             )
         }
 
-        // Align stock and gold closes on shared calendar days.
+        // Align stock and gold closes on shared market days (ET, not the
+        // device zone — a bar's session identity never depends on the phone).
         val stockAligned = ArrayList<Double>()
         val goldAligned = ArrayList<Double>()
         for (s in stockCandles) {
-            val g = goldCandles.firstOrNull { Dates.sameDay(it.ts, s.ts) } ?: continue
+            val g = goldCandles.firstOrNull { Dates.sameEtDay(it.ts, s.ts) } ?: continue
             stockAligned.add(s.close)
             goldAligned.add(g.close)
         }
@@ -38,7 +39,7 @@ object GoldCorrelation {
         val days = stockAligned.size
         if (days < MIN_OVERLAP_DAYS) {
             return GoldRelation(
-                correlation = 0.0,
+                correlation = null,
                 link = GoldLink.NEUTRAL,
                 description = "Only $days overlapping trading day${if (days == 1) "" else "s"} with gold — " +
                     "at least $MIN_OVERLAP_DAYS are needed to measure a relationship.",
@@ -50,7 +51,7 @@ object GoldCorrelation {
             Indicators.dailyReturns(stockAligned),
             Indicators.dailyReturns(goldAligned)
         ) ?: return GoldRelation(
-            correlation = 0.0,
+            correlation = null,
             link = GoldLink.NEUTRAL,
             description = "Returns show no measurable variance against gold across $days shared trading days.",
             sampleDays = days

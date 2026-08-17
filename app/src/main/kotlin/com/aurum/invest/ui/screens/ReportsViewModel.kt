@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -38,7 +39,9 @@ data class ReportsState(
      * Open holdings with no live quote, carried at cost inside net worth.
      * Net worth is only exact when this is 0, and the card says so.
      */
-    val unpricedCount: Int = 0
+    val unpricedCount: Int = 0,
+    /** Set when an edit or delete was rejected to protect ledger integrity. */
+    val ledgerError: String? = null
 )
 
 class ReportsViewModel(app: Application) : AndroidViewModel(app) {
@@ -97,7 +100,8 @@ class ReportsViewModel(app: Application) : AndroidViewModel(app) {
                     yearly = yearly,
                     loading = false,
                     wallet = walletState,
-                    unpricedCount = summary.unpricedCount
+                    unpricedCount = summary.unpricedCount,
+                    ledgerError = _state.value.ledgerError
                 )
             }
         }
@@ -127,13 +131,48 @@ class ReportsViewModel(app: Application) : AndroidViewModel(app) {
         if (shares <= 0.0 || price <= 0.0) return
         viewModelScope.launch {
             runCatching {
+                // Full-ledger replay first — the same integrity gate as the
+                // Edit-position screen. An edit that would make any sell
+                // exceed the shares held at that moment is rejected, never
+                // silently absorbed by the clamp.
+                val problem = portfolio.validateEdit(
+                    tx.copy(side = side.name, shares = shares, price = price, fees = fees, ts = ts)
+                )
+                if (problem != null) {
+                    _state.update { it.copy(ledgerError = "Edit rejected: $problem") }
+                    return@runCatching
+                }
                 portfolio.updateTransaction(tx, side, shares, price, fees, ts, plOverride)
+                _state.update { it.copy(ledgerError = null) }
             }
         }
     }
 
-    /** Removes a trade from the ledger; the reports recompute without it. */
+    /**
+     * Removes a trade from the ledger; the reports recompute without it.
+     * Deleting a buy that a later sell depended on is rejected — it would
+     * silently rewrite that sell's realized outcome.
+     */
     fun deleteTrade(tx: TransactionEntity) {
-        viewModelScope.launch { runCatching { portfolio.deleteTransaction(tx) } }
+        viewModelScope.launch {
+            runCatching {
+                val problem = portfolio.validateDelete(tx)
+                if (problem != null) {
+                    _state.update {
+                        it.copy(
+                            ledgerError = "Delete rejected: $problem Delete the dependent " +
+                                "sell first if you want both gone."
+                        )
+                    }
+                    return@runCatching
+                }
+                portfolio.deleteTransaction(tx)
+                _state.update { it.copy(ledgerError = null) }
+            }
+        }
+    }
+
+    fun clearLedgerError() {
+        _state.update { it.copy(ledgerError = null) }
     }
 }
