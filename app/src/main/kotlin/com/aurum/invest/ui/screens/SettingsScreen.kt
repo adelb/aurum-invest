@@ -42,6 +42,8 @@ import androidx.compose.material3.TextFieldColors
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -54,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.aurum.invest.AurumApp
 import com.aurum.invest.BuildConfig
 import com.aurum.invest.bank.BankNotificationListener
 import com.aurum.invest.ui.components.AurumCard
@@ -61,6 +64,7 @@ import com.aurum.invest.ui.components.GoldGradientText
 import com.aurum.invest.ui.components.PillTag
 import com.aurum.invest.ui.components.SectionHeader
 import com.aurum.invest.ui.theme.AurumColors
+import kotlinx.coroutines.delay
 
 @Composable
 fun SettingsScreen(
@@ -463,6 +467,13 @@ fun SettingsScreen(
                 }
             }
 
+            item(key = "feed-health") {
+                Spacer(Modifier.height(28.dp))
+                SectionHeader(title = "Market data")
+                Spacer(Modifier.height(14.dp))
+                FeedHealthCard()
+            }
+
             item(key = "about") {
                 Spacer(Modifier.height(28.dp))
                 SectionHeader(title = "About")
@@ -492,6 +503,63 @@ fun SettingsScreen(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * What the app has actually spent on market data in the last hour, and what
+ * the provider did with it.
+ *
+ * The price feed rate-limits per device, and when it starts refusing, every
+ * screen looks the same: figures that stop moving. Without a count there is no
+ * telling a quiet market from a runaway sweep — which is exactly the guess
+ * that cost several releases. It refreshes while the screen is open.
+ */
+@Composable
+private fun FeedHealthCard() {
+    val context = LocalContext.current
+    val market = remember(context) {
+        (context.applicationContext as? AurumApp)?.container?.market
+    }
+    var requests by remember { mutableIntStateOf(0) }
+    var refused by remember { mutableIntStateOf(0) }
+    var pausedFor by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(market) {
+        val repo = market ?: return@LaunchedEffect
+        while (true) {
+            requests = repo.feedRequestsLastHour()
+            refused = repo.feedRefusalsLastHour()
+            pausedFor = (repo.quotesPausedUntil() - System.currentTimeMillis()).coerceAtLeast(0L)
+            delay(2_000L)
+        }
+    }
+
+    AurumCard(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "$requests requests in the last hour",
+            style = MaterialTheme.typography.titleMedium,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = if (refused == 0) {
+                "None refused — the feed is answering normally."
+            } else {
+                "$refused refused as too many requests."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (refused == 0) AurumColors.textDim else AurumColors.loss
+        )
+        if (pausedFor > 0L) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "Paused for another ${(pausedFor / 1000L).coerceAtLeast(1L)}s, " +
+                    "then it tries again. Prices shown meanwhile are the last ones read.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.gold
+            )
         }
     }
 }

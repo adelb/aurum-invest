@@ -5,6 +5,9 @@ import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.Quote
 import com.aurum.invest.data.model.ScreenerQuote
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -31,6 +34,62 @@ class YahooClient {
     /** Consecutive refusals, for how long to stay quiet. Reset by a success. */
     @Volatile
     private var strikes: Int = 0
+
+    /**
+     * Every Yahoo call goes through one pacing gate.
+     *
+     * Aurum has a dozen-odd engines that each fetch on their own schedule —
+     * five background workers plus every screen — and not one of them could
+     * see what the others were spending. Optimising them one at a time is
+     * whack-a-mole; the edge limits the DEVICE, so the budget has to be kept
+     * in one place. Requests are spaced [MIN_SPACING_MS] apart, which caps the
+     * burst rate no matter how many callers pile in at once.
+     */
+    private val paceLock = Mutex()
+
+    @Volatile
+    private var nextSlotAt: Long = 0L
+
+    /** Request and refusal times of the last hour — read by the Settings diagnostic. */
+    private val recent = ArrayDeque<Long>()
+    private val refusals = ArrayDeque<Long>()
+
+    /** How many Yahoo requests this app has made in the last hour. */
+    fun requestsLastHour(): Int = synchronized(recent) {
+        prune()
+        recent.size
+    }
+
+    /** How many of them were refused with a 429. */
+    fun refusalsLastHour(): Int = synchronized(recent) {
+        prune()
+        refusals.size
+    }
+
+    private fun prune() {
+        val cutoff = System.currentTimeMillis() - 3_600_000L
+        while (recent.isNotEmpty() && recent.first() < cutoff) recent.removeFirst()
+        while (refusals.isNotEmpty() && refusals.first() < cutoff) refusals.removeFirst()
+    }
+
+    /**
+     * Waits for this call's turn. Each request claims the next free slot, so a
+     * burst of fifty queues into a paced stream instead of arriving at once —
+     * an arrival burst is what edge protections punish hardest.
+     */
+    private suspend fun awaitSlot() {
+        val waitMs = paceLock.withLock {
+            val now = System.currentTimeMillis()
+            val slot = maxOf(now, nextSlotAt)
+            nextSlotAt = slot + MIN_SPACING_MS
+            slot - now
+        }
+        synchronized(recent) {
+            recent.addLast(System.currentTimeMillis() + waitMs)
+            prune()
+        }
+        if (waitMs > 0) delay(waitMs)
+    }
 
     /** v8 chart API, range=1d interval=1m — latest price + previous close from meta. */
     suspend fun fetchQuote(symbol: String): Quote? = withContext(Dispatchers.IO) {
@@ -518,8 +577,9 @@ class YahooClient {
      * Every Yahoo call shares the gate, because the limit is per IP and not
      * per endpoint.
      */
-    private fun getJson(url: String): JSONObject? {
+    private suspend fun getJson(url: String): JSONObject? {
         if (System.currentTimeMillis() < throttledUntil) return null
+        awaitSlot()
         return try {
             val request = Request.Builder()
                 .url(url)
@@ -529,6 +589,7 @@ class YahooClient {
                 .build()
             http.newCall(request).execute().use { response ->
                 if (response.code == 429) {
+                    synchronized(recent) { refusals.addLast(System.currentTimeMillis()) }
                     strikes = (strikes + 1).coerceAtMost(THROTTLE_MAX_STRIKES)
                     val advised = response.header("Retry-After")?.trim()
                         ?.toLongOrNull()?.times(1000L)
@@ -627,6 +688,13 @@ class YahooClient {
         private const val USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
+        /**
+         * Smallest gap between any two Yahoo requests, across the whole app.
+         * ~6 per second at full tilt: fast enough that a shelf still fills
+         * promptly, slow enough that no engine can arrive as a burst.
+         */
+        private const val MIN_SPACING_MS = 160L
 
         /** First quiet spell after a 429; each consecutive refusal doubles it. */
         private const val THROTTLE_BASE_MS = 30_000L

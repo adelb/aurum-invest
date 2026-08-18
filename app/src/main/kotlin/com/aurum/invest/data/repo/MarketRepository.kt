@@ -588,6 +588,21 @@ class MarketRepository(
      */
     fun quotesPausedUntil(): Long = maxOf(quotesCooldownUntil, yahoo.throttledUntil())
 
+    /**
+     * How many market-data requests this app has made in the last hour, and
+     * how many of those the provider refused.
+     *
+     * A dozen engines fetch on their own schedules and none of them can see
+     * what the others spend, so when the feed starts refusing there is no way
+     * to tell an unlucky hour from a runaway sweep. This is the number that
+     * settles it, and it is shown in Settings rather than kept in a log the
+     * user cannot reach.
+     */
+    fun feedRequestsLastHour(): Int = yahoo.requestsLastHour()
+
+    /** How many of [feedRequestsLastHour] came back refused (HTTP 429). */
+    fun feedRefusalsLastHour(): Int = yahoo.refusalsLastHour()
+
     companion object {
         const val GOLD_SYMBOL = "GLD"
 
