@@ -379,35 +379,31 @@ class StocksViewModel(app: Application) : AndroidViewModel(app) {
         } catch (_: Exception) {
             emptyMap()
         }
-        val rows = ArrayList<BrowseRow>(pairs.size)
-        for (chunk in pairs.chunked(8)) {
-            val part = coroutineScope {
-                chunk.map { (symbol, name) ->
-                    async {
-                        val daily = try {
-                            market.getDailyCandles(symbol, 30)
-                        } catch (_: Exception) {
-                            emptyList()
-                        }
-                        val closes = daily.map { it.close }
-                        val spark = closes.takeLast(30)
-                        val twoWeek = if (closes.size > TWO_WEEK_BARS) {
-                            val base = closes[closes.size - 1 - TWO_WEEK_BARS]
-                            if (base > 0.0) (closes.last() - base) / base * 100.0 else null
-                        } else null
-                        BrowseRow(
-                            symbol = symbol,
-                            name = name,
-                            quote = quotes[symbol],
-                            spark = spark,
-                            twoWeekPct = twoWeek,
-                            top = false,
-                            heldPct = _state.value.book.heldWeights[symbol]
-                        )
-                    }
-                }.awaitAll()
-            }
-            rows.addAll(part)
+        // One batched read of the close lines for the whole shelf. This used to
+        // be a request PER SYMBOL, eight at a time — a 22-name shelf cost 22
+        // requests, and tapping through the catalogue cost hundreds in a couple
+        // of minutes, which is what Yahoo's edge starts refusing outright. The
+        // sparkline and the 2-week move only ever needed closes.
+        val series = try {
+            market.getCloseSeries(pairs.map { it.first }, rangeDays = 30)
+        } catch (_: Exception) {
+            emptyMap()
+        }
+        val rows = pairs.map { (symbol, name) ->
+            val closes = series[symbol]?.map { it.close }.orEmpty()
+            val twoWeek = if (closes.size > TWO_WEEK_BARS) {
+                val base = closes[closes.size - 1 - TWO_WEEK_BARS]
+                if (base > 0.0) (closes.last() - base) / base * 100.0 else null
+            } else null
+            BrowseRow(
+                symbol = symbol,
+                name = name,
+                quote = quotes[symbol],
+                spark = closes.takeLast(30),
+                twoWeekPct = twoWeek,
+                top = false,
+                heldPct = _state.value.book.heldWeights[symbol]
+            )
         }
         // The gold highlight goes only to genuine 2-week outperformers —
         // never to "the least bad" of a falling list.

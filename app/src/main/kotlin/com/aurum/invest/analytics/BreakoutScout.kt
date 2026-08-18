@@ -70,8 +70,25 @@ class BreakoutScout(
     suspend fun scan(stocks: List<Pair<String, String>>): List<BreakoutCall> {
         if (stocks.isEmpty()) return emptyList()
         return try {
+            // Decide who is even worth a full candle read from ONE batched
+            // pull of the close lines. [measure] rejects anything under
+            // MIN_R5_PCT anyway and that test needs closes alone, so the same
+            // names survive — they just no longer cost a request each to
+            // discard. A symbol the batch missed is kept, so a gap in the feed
+            // narrows the scan rather than silently dropping a name from it.
+            val series = market.getCloseSeries(stocks.map { it.first }, rangeDays = 30)
+            val worthReading = stocks.filter { (symbol, _) ->
+                val closes = series[symbol]?.map { it.close } ?: return@filter true
+                if (closes.size < 21) return@filter true
+                val last = closes.last()
+                val c5 = closes[closes.size - 6]
+                if (last <= 0.0 || c5 <= 0.0) return@filter true
+                (last / c5 - 1.0) * 100.0 >= MIN_R5_PCT
+            }
+            if (worthReading.isEmpty()) return emptyList()
+
             val setups = ArrayList<Setup>()
-            for (chunk in stocks.chunked(CHUNK)) {
+            for (chunk in worthReading.chunked(CHUNK)) {
                 val part = coroutineScope {
                     chunk.map { (symbol, _) -> async { measure(symbol) } }.awaitAll()
                 }
