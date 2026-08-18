@@ -132,14 +132,20 @@ class ReportsViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching {
                 // Full-ledger replay first — the same integrity gate as the
-                // Edit-position screen. An edit that would make any sell
-                // exceed the shares held at that moment is rejected, never
-                // silently absorbed by the clamp.
+                // Edit-position screen, and the same difference test: only an
+                // edit that WIDENS a symbol's unbacked quantity is rejected.
+                // Judging the ledger's absolute soundness instead made one
+                // incomplete import reject every edit to every other symbol.
                 val problem = portfolio.validateEdit(
                     tx.copy(side = side.name, shares = shares, price = price, fees = fees, ts = ts)
                 )
                 if (problem != null) {
-                    _state.update { it.copy(ledgerError = "Edit rejected: $problem") }
+                    _state.update {
+                        it.copy(
+                            ledgerError = "Edit rejected: $problem Record the missing buy " +
+                                "first, or reduce the sell to what you really sold."
+                        )
+                    }
                     return@runCatching
                 }
                 portfolio.updateTransaction(tx, side, shares, price, fees, ts, plOverride)

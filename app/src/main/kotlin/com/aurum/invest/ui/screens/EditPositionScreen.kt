@@ -181,6 +181,28 @@ fun EditPositionScreen(
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            if (state.ledgerGap > 1e-6) {
+                item {
+                    AurumCard {
+                        Text(
+                            text = "Incomplete history",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = AurumColors.loss
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "${Fmt.qty(state.ledgerGap)} ${state.symbol} " +
+                                "${if (state.ledgerGap == 1.0) "share is" else "shares are"} " +
+                                "sold below with no buy behind them, so the position and its " +
+                                "realized P/L leave those shares out. Add the missing buy — or " +
+                                "reduce the sell to what you really sold — and the gap closes.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AurumColors.textDim
+                        )
+                    }
+                }
+            }
+
             state.position?.let { position ->
                 item {
                     AurumCard {

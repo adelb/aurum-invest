@@ -65,6 +65,29 @@ interface TransactionDao {
             "AND symbol = :symbol AND ref = :ref"
     )
     suspend fun countBankRef(symbol: String, ref: String): Int
+
+    /**
+     * Shape-matching BANK rows that carry NO broker reference. A ref is the
+     * operation's identity, but only against rows that HAVE one: the same
+     * execution imported earlier from a ref-less alert has nothing for
+     * [countBankRef] to match, so without this the ref-carrying copy of that
+     * one execution imports a second time and the ledger oversells. Rows with
+     * a DIFFERENT ref stay excluded — a different ref is a different
+     * operation, which is the whole point of reference identity.
+     */
+    @Query(
+        "SELECT COUNT(*) FROM transactions WHERE source = 'BANK' AND ref IS NULL " +
+            "AND symbol = :symbol AND side = :side AND ABS(shares - :shares) < 0.0001 " +
+            "AND ABS(price - :price) < 0.01 AND ts BETWEEN :tsFrom AND :tsTo"
+    )
+    suspend fun countRefLessBankDuplicates(
+        symbol: String,
+        side: String,
+        shares: Double,
+        price: Double,
+        tsFrom: Long,
+        tsTo: Long
+    ): Int
 }
 
 @Dao

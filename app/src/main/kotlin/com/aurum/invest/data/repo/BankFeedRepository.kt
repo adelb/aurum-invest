@@ -84,7 +84,16 @@ class BankFeedRepository(
                 ?.takeIf { it.isNotEmpty() }
             val duplicate =
                 if (ref != null) {
-                    portfolio.bankRefExists(symbol, ref)
+                    // The reference identifies the operation — but only among
+                    // rows that carry one. This same execution may already sit
+                    // in the ledger from a ref-less alert, where there is no
+                    // ref to recognise it by, so the shape heuristic still runs
+                    // against ref-less rows. Rows with a DIFFERENT ref are left
+                    // alone: those are genuinely different operations.
+                    portfolio.bankRefExists(symbol, ref) ||
+                        portfolio.bankRefLessDuplicateExists(
+                            symbol, side, shares, price, event.postedAt
+                        )
                 } else {
                     portfolio.bankDuplicateExists(symbol, side, shares, price, event.postedAt)
                 }

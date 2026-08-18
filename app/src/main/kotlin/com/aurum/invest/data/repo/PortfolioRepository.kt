@@ -110,17 +110,40 @@ class PortfolioRepository(private val txDao: TransactionDao) {
     suspend fun bankRefExists(symbol: String, ref: String): Boolean =
         txDao.countBankRef(symbol.trim().uppercase(), ref.trim()) > 0
 
+    /**
+     * True when a BANK row with NO reference already matches this trade's
+     * shape near [ts]. A ref-carrying alert must still be checked this way:
+     * the same execution imported from an earlier ref-less alert has no ref
+     * to be recognised by, and importing it again is what leaves a symbol
+     * selling shares the ledger has no buy for.
+     */
+    suspend fun bankRefLessDuplicateExists(
+        symbol: String,
+        side: TradeSide,
+        shares: Double,
+        price: Double,
+        ts: Long
+    ): Boolean = txDao.countRefLessBankDuplicates(
+        symbol = symbol.trim().uppercase(),
+        side = side.name,
+        shares = shares,
+        price = price,
+        tsFrom = ts - DUPLICATE_WINDOW_MS,
+        tsTo = ts + DUPLICATE_WINDOW_MS
+    ) > 0
+
     suspend fun deleteTransaction(tx: TransactionEntity) = txDao.delete(tx)
 
     /**
-     * Replays the ledger WITHOUT [tx] and returns an error message when some
-     * later sell would then exceed the shares held — deleting a buy that a
+     * Replays the ledger WITHOUT [tx] and returns an error message when the
+     * deletion would leave some later sell unbacked — deleting a buy that a
      * recorded sell depended on would silently corrupt every realized number.
-     * Null when the deletion is sound.
+     * Judged as a DIFFERENCE: a gap the ledger already carried is not this
+     * deletion's doing and never blocks it. Null when the deletion is sound.
      */
     suspend fun validateDelete(tx: TransactionEntity): String? {
-        val remaining = txDao.getAllOrdered().filter { it.id != tx.id }
-        return firstOversell(remaining)
+        val before = txDao.getAllOrdered()
+        return worsenedGap(before, before.filter { it.id != tx.id }, "Deleting this trade")
     }
 
     /** Every ledger row for one symbol, newest first — the edit screen's source. */
@@ -155,16 +178,33 @@ class PortfolioRepository(private val txDao: TransactionDao) {
 
     /**
      * Replays the ledger with [edited] in place of its current row (or
-     * appended, for id 0) and returns an error message when any sell would
-     * exceed the shares held at that point — null when the edit is sound.
+     * appended, for id 0) and returns an error message when the edit makes
+     * some sell unbacked — null when the edit is sound.
+     *
+     * The verdict is a DIFFERENCE, not an absolute. The old check refused an
+     * edit whenever the whole ledger contained any unbacked sell, so a single
+     * gap inherited from an incomplete import (a bank SELL whose BUY the app
+     * never saw) rejected every edit to every symbol, naming that symbol in
+     * an error about a trade the user was not touching — and locked the user
+     * out of repairing the gap itself. Only growth in the gap is refused.
      */
     suspend fun validateEdit(edited: TransactionEntity): String? {
-        val all = txDao.getAllOrdered()
+        val before = txDao.getAllOrdered()
+        val after = before
             .filter { it.id != edited.id }
             .plus(edited)
             .sortedWith(compareBy({ it.ts }, { it.id }))
-        return firstOversell(all)
+        return worsenedGap(before, after, "This edit")
     }
+
+    /**
+     * Shares of [symbol] the ledger sells without a buy to back them — 0 for
+     * a sound history. The position and realized P/L ignore those shares, so
+     * the number is what the holding screen must own up to instead of leaving
+     * the user to discover it through a rejected edit.
+     */
+    suspend fun ledgerGapFor(symbol: String): Double =
+        unbackedBySymbol(txDao.getAllOrdered())[symbol.trim().uppercase()] ?: 0.0
 
     /**
      * Deletes every transaction recorded for [symbol] — removes that position
@@ -254,6 +294,64 @@ class PortfolioRepository(private val txDao: TransactionDao) {
                         }
                         held[sym] = (cur - tx.shares).coerceAtLeast(0.0)
                     }
+                }
+            }
+            return null
+        }
+
+        /**
+         * Quantity per symbol that [ordered] sells without a buy to back it,
+         * replaying with the same clamp the position engine uses. Empty for a
+         * sound ledger. This is the measure the edit and delete guards compare
+         * before and after a change: what has to be refused is a change that
+         * MAKES the history less true, not a change made while some unrelated
+         * gap already sits in the book.
+         */
+        fun unbackedBySymbol(ordered: List<TransactionEntity>): Map<String, Double> {
+            val held = HashMap<String, Double>()
+            val unbacked = HashMap<String, Double>()
+            for (tx in ordered) {
+                val sym = tx.symbol.trim().uppercase()
+                val cur = held[sym] ?: 0.0
+                when (tx.side) {
+                    TxSide.BUY -> held[sym] = cur + tx.shares
+                    TxSide.SPLIT -> if (tx.shares > 0.0) held[sym] = cur * tx.shares
+                    else -> {
+                        if (tx.shares > cur) {
+                            unbacked[sym] = (unbacked[sym] ?: 0.0) + (tx.shares - cur)
+                        }
+                        held[sym] = (cur - tx.shares).coerceAtLeast(0.0)
+                    }
+                }
+            }
+            return unbacked
+        }
+
+        /**
+         * The reason to refuse a ledger change, or null to allow it. [subject]
+         * names the change ("This edit", "Deleting this trade") so the message
+         * says what the user actually did. A change is refused only when it
+         * widens some symbol's unbacked quantity — never for a gap that was
+         * already there.
+         */
+        fun worsenedGap(
+            before: List<TransactionEntity>,
+            after: List<TransactionEntity>,
+            subject: String = "This change"
+        ): String? {
+            val was = unbackedBySymbol(before)
+            val now = unbackedBySymbol(after)
+            for ((sym, qty) in now) {
+                val prior = was[sym] ?: 0.0
+                if (qty <= prior + 1e-6) continue
+                // The fact only — each caller adds the advice that fits the
+                // action it was about to take.
+                return if (prior > 1e-6) {
+                    "$subject would widen $sym's ledger gap from ${fmtQty(prior)} to " +
+                        "${fmtQty(qty)} shares sold with no buy behind them."
+                } else {
+                    "$subject would leave ${fmtQty(qty)} $sym sold with no buy to back " +
+                        "them at that moment."
                 }
             }
             return null

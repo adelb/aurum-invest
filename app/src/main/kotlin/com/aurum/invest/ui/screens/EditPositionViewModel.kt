@@ -23,7 +23,14 @@ data class EditPositionState(
     /** The position as the ledger currently computes it — updates live while editing. */
     val position: Position? = null,
     /** Set when an edit was rejected because it would make the ledger oversell. */
-    val editError: String? = null
+    val editError: String? = null,
+    /**
+     * Shares this symbol sells that no buy in the ledger backs — normally 0.
+     * A gap appears when the history is incomplete (a bank SELL imported
+     * without its BUY), and the position quietly ignores those shares. The
+     * screen says so instead of letting the user meet it as a rejected edit.
+     */
+    val ledgerGap: Double = 0.0
 )
 
 /**
@@ -51,8 +58,14 @@ class EditPositionViewModel(app: Application) : AndroidViewModel(app) {
             portfolio.observeTransactionsFor(cleaned).collectLatest { trades ->
                 val position = portfolio.positionsNow()
                     .firstOrNull { it.symbol.equals(cleaned, ignoreCase = true) }
+                val gap = portfolio.ledgerGapFor(cleaned)
                 _state.update {
-                    it.copy(loading = false, trades = trades, position = position)
+                    it.copy(
+                        loading = false,
+                        trades = trades,
+                        position = position,
+                        ledgerGap = gap
+                    )
                 }
             }
         }
@@ -70,14 +83,20 @@ class EditPositionViewModel(app: Application) : AndroidViewModel(app) {
         if (shares <= 0.0 || price <= 0.0) return
         viewModelScope.launch {
             runCatching {
-                // Replay the whole ledger with this row changed — an edit that
-                // would sell more than held at any point is rejected, not
-                // silently absorbed.
+                // Replay the whole ledger with this row changed. Only an edit
+                // that WIDENS the gap between what a symbol sells and what it
+                // ever bought is rejected — a gap the ledger already carried is
+                // not this edit's doing and must stay editable.
                 val problem = portfolio.validateEdit(
                     tx.copy(side = side.name, shares = shares, price = price, fees = fees, ts = ts)
                 )
                 if (problem != null) {
-                    _state.update { it.copy(editError = "Edit rejected: $problem") }
+                    _state.update {
+                        it.copy(
+                            editError = "Edit rejected: $problem Record the missing buy " +
+                                "first, or reduce the sell to what you really sold."
+                        )
+                    }
                     return@runCatching
                 }
                 portfolio.updateTransaction(tx, side, shares, price, fees, ts, plOverride)
