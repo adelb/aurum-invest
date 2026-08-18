@@ -36,7 +36,15 @@ class SectorTrends(
         /** Theme -> proxy ETF. Ordered roughly by how often users ask about them. */
         val SECTORS: List<Triple<String, String, String>> = listOf(
             Triple("semis", "Semiconductors & AI hardware", "SMH"),
-            Triple("ai", "AI & robotics", "BOTZ"),
+            // BOTZ holds the AI-and-automation majors; "robotics" moved to the
+            // drones theme below so two shelves do not both claim the word.
+            Triple("ai", "AI & automation", "BOTZ"),
+            // ROBO is the liquid robotics-and-automation basket. No drone-pure
+            // ETF trades with enough volume to read momentum off honestly, so
+            // this proxies the robotics half and the WATCH names below carry
+            // the drone half — the shelf says so rather than implying the ETF
+            // tracks drones.
+            Triple("drones", "Drones & robotics", "ROBO"),
             Triple("quantum", "Quantum computing", "QTUM"),
             Triple("software", "Software & big tech", "XLK"),
             Triple("oil", "Oil & gas", "XLE"),
@@ -63,6 +71,10 @@ class SectorTrends(
             "ai" to listOf(
                 "PLTR" to "Palantir", "TSLA" to "Tesla",
                 "ISRG" to "Intuitive Surgical", "SYM" to "Symbotic"
+            ),
+            "drones" to listOf(
+                "AVAV" to "AeroVironment", "KTOS" to "Kratos Defense",
+                "RCAT" to "Red Cat Holdings", "UMAC" to "Unusual Machines"
             ),
             "quantum" to listOf(
                 "IONQ" to "IonQ", "RGTI" to "Rigetti",

@@ -80,6 +80,156 @@ object StockCatalog {
             )
         ),
         SectorList(
+            // Drones first, then the robotics and automation names they sit
+            // beside: the shelf is browsed by people following the drone
+            // build-out, and a list that opens on industrial automation buries
+            // exactly what they came for.
+            "Drones & robotics",
+            "drones",
+            listOf(
+                "AVAV" to "AeroVironment",
+                "KTOS" to "Kratos Defense & Security",
+                "RCAT" to "Red Cat Holdings",
+                "UMAC" to "Unusual Machines",
+                "ONDS" to "Ondas Holdings",
+                "AIRO" to "AIRO Group Holdings",
+                "UAVS" to "AgEagle Aerial Systems",
+                "DPRO" to "Draganfly",
+                "EH" to "EHang Holdings",
+                "JOBY" to "Joby Aviation",
+                "ACHR" to "Archer Aviation",
+                "RDW" to "Redwire",
+                "ISRG" to "Intuitive Surgical",
+                "SYM" to "Symbotic",
+                "TER" to "Teradyne",
+                "ROK" to "Rockwell Automation",
+                "CGNX" to "Cognex",
+                "ZBRA" to "Zebra Technologies",
+                "SERV" to "Serve Robotics",
+                "RR" to "Richtech Robotics",
+                "PDYN" to "Palladyne AI",
+                "IRBT" to "iRobot"
+            )
+        ),
+        SectorList(
+            "Defense & aerospace",
+            "defense",
+            listOf(
+                "LMT" to "Lockheed Martin",
+                "RTX" to "RTX",
+                "NOC" to "Northrop Grumman",
+                "GD" to "General Dynamics",
+                "LHX" to "L3Harris Technologies",
+                "BA" to "Boeing",
+                "TDG" to "TransDigm",
+                "HWM" to "Howmet Aerospace",
+                "HEI" to "HEICO",
+                "TXT" to "Textron",
+                "LDOS" to "Leidos",
+                "BAH" to "Booz Allen Hamilton",
+                "CACI" to "CACI International",
+                "SAIC" to "SAIC",
+                "MRCY" to "Mercury Systems",
+                "KTOS" to "Kratos Defense & Security",
+                "AVAV" to "AeroVironment",
+                "RKLB" to "Rocket Lab",
+                "LUNR" to "Intuitive Machines"
+            )
+        ),
+        SectorList(
+            "Quantum computing",
+            "quantum",
+            listOf(
+                "IONQ" to "IonQ",
+                "RGTI" to "Rigetti Computing",
+                "QBTS" to "D-Wave Quantum",
+                "QUBT" to "Quantum Computing Inc",
+                "ARQQ" to "Arqit Quantum",
+                "LAES" to "SEALSQ",
+                "IBM" to "IBM",
+                "GOOGL" to "Alphabet",
+                "MSFT" to "Microsoft",
+                "HON" to "Honeywell",
+                "NVDA" to "NVIDIA"
+            )
+        ),
+        SectorList(
+            "Biotech",
+            "biotech",
+            listOf(
+                "VRTX" to "Vertex Pharmaceuticals",
+                "REGN" to "Regeneron Pharmaceuticals",
+                "GILD" to "Gilead Sciences",
+                "AMGN" to "Amgen",
+                "BIIB" to "Biogen",
+                "MRNA" to "Moderna",
+                "ALNY" to "Alnylam Pharmaceuticals",
+                "BMRN" to "BioMarin Pharmaceutical",
+                "INCY" to "Incyte",
+                "NBIX" to "Neurocrine Biosciences",
+                "SRPT" to "Sarepta Therapeutics",
+                "EXEL" to "Exelixis",
+                "UTHR" to "United Therapeutics",
+                "RARE" to "Ultragenyx Pharmaceutical",
+                "IONS" to "Ionis Pharmaceuticals",
+                "CRSP" to "CRISPR Therapeutics",
+                "NTLA" to "Intellia Therapeutics",
+                "BEAM" to "Beam Therapeutics",
+                "VKTX" to "Viking Therapeutics",
+                "ARWR" to "Arrowhead Pharmaceuticals",
+                "HALO" to "Halozyme Therapeutics",
+                "AXSM" to "Axsome Therapeutics"
+            )
+        ),
+        SectorList(
+            "Nuclear & uranium",
+            "nuclear",
+            listOf(
+                "CCJ" to "Cameco",
+                "LEU" to "Centrus Energy",
+                "UEC" to "Uranium Energy",
+                "UUUU" to "Energy Fuels",
+                "DNN" to "Denison Mines",
+                "NXE" to "NexGen Energy",
+                "URG" to "Ur-Energy",
+                "SMR" to "NuScale Power",
+                "OKLO" to "Oklo",
+                "NNE" to "Nano Nuclear Energy",
+                "LTBR" to "Lightbridge",
+                "ASPI" to "ASP Isotopes",
+                "BWXT" to "BWX Technologies",
+                "CEG" to "Constellation Energy",
+                "VST" to "Vistra",
+                "TLN" to "Talen Energy"
+            )
+        ),
+        SectorList(
+            "Solar & clean energy",
+            "solar",
+            listOf(
+                "FSLR" to "First Solar",
+                "ENPH" to "Enphase Energy",
+                "SEDG" to "SolarEdge Technologies",
+                "RUN" to "Sunrun",
+                "NXT" to "Nextracker",
+                "ARRY" to "Array Technologies",
+                "SHLS" to "Shoals Technologies",
+                "CSIQ" to "Canadian Solar",
+                "JKS" to "JinkoSolar",
+                "PLUG" to "Plug Power",
+                "BE" to "Bloom Energy",
+                "BLDP" to "Ballard Power Systems",
+                "FCEL" to "FuelCell Energy",
+                "ORA" to "Ormat Technologies",
+                "BEP" to "Brookfield Renewable",
+                "AMRC" to "Ameresco"
+                // GE Vernova stays on the Industrials shelf: it is power
+                // equipment broadly, and listing it here would take its theme
+                // attribution off Industrials for a clean-energy claim only
+                // part of its business supports.
+            )
+        ),
+        SectorList(
             "Financials",
             "banks",
             listOf(

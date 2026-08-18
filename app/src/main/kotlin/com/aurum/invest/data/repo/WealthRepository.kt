@@ -77,7 +77,7 @@ class WealthRepository(
 
     companion object {
         private const val PULSE_KEY = "marketpulse:v2"
-        private const val TRENDS_KEY = "sectortrends:v2"
+        private const val TRENDS_KEY = "sectortrends:v3"
         private const val FLOW_KEY = "moneyflow:v2"
         // v7: standalone verdict + allocation engines, new grade scales — a v6
         // payload would deserialize into a review that means something else.
