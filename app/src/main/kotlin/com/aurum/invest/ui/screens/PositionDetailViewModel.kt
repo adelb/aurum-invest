@@ -86,7 +86,7 @@ class PositionDetailViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
         /** How often the live price ticker re-prices the header quote while this screen is visible. */
-        private const val LIVE_PRICE_TICK_MS = 1_000L
+        private const val LIVE_PRICE_TICK_MS = 15_000L
     }
 
     init {

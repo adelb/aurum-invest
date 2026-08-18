@@ -111,7 +111,7 @@ class StocksViewModel(app: Application) : AndroidViewModel(app) {
         private const val TWO_WEEK_BARS = 10
 
         /** How often the live price ticker re-quotes the watchlist while it's on screen. */
-        private const val LIVE_PRICE_TICK_MS = 1_000L
+        private const val LIVE_PRICE_TICK_MS = 15_000L
     }
 
     init {

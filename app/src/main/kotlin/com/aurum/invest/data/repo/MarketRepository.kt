@@ -39,12 +39,15 @@ class MarketRepository(
         if (cachedQuote != null && !cachedQuote.lite && now - cached.updatedAt <= maxAgeMs) {
             return cachedQuote
         }
+        if (now < quotesCooldownUntil) return cachedQuote
         val fresh = yahoo.fetchQuote(symbol)
         if (fresh != null) {
             writeCache(key, quoteToJson(fresh).toString())
             return fresh
         }
-        // Network failed — serve stale cache when available.
+        // Network failed — serve stale cache when available, and stop asking
+        // for a moment so a throttle is not fed by the screen's own timer.
+        quotesCooldownUntil = now + THROTTLE_COOLDOWN_MS
         return cachedQuote
     }
 
@@ -73,12 +76,24 @@ class MarketRepository(
             }
         }
         if (misses.isEmpty()) return out
+        if (now < quotesCooldownUntil) {
+            // Throttled a moment ago. Serve what we have rather than spending
+            // another request on a refusal — the quotes keep their own
+            // fetchedAt, so the screens still say how old these prices are.
+            misses.forEach { symbol -> stale[symbol]?.let { out[symbol] = it } }
+            return out
+        }
 
         val fetched = coroutineScope {
             misses.chunked(BATCH_SIZE)
                 .map { chunk -> async { yahoo.fetchQuotesBatch(chunk) } }
                 .awaitAll()
         }.fold(HashMap<String, Quote>()) { acc, map -> acc.apply { putAll(map) } }
+        // Nothing came back for anything asked for: that is a throttle or a
+        // dead connection, not a bad symbol. Back off, or the live screens'
+        // timers keep hammering and hold the throttle open — which is how a
+        // price sits unchanged for half an hour while the market trades.
+        if (fetched.isEmpty()) quotesCooldownUntil = now + THROTTLE_COOLDOWN_MS
 
         for (symbol in misses) {
             val fresh = fetched[symbol]
@@ -480,8 +495,22 @@ class MarketRepository(
             emptyList()
         }
 
+    /**
+     * When to stop asking for quotes until, after a read came back with
+     * nothing. Yahoo throttles per IP and the live screens ask on a timer, so
+     * calling straight through a throttle is what KEEPS it in place. Shared
+     * across the single and batch reads because the throttle is per IP, not
+     * per endpoint. Nothing is concealed by it: cached quotes carry their own
+     * fetchedAt, so the screens still report how old the prices are.
+     */
+    @Volatile
+    private var quotesCooldownUntil: Long = 0L
+
     companion object {
         const val GOLD_SYMBOL = "GLD"
+
+        /** How long to leave Yahoo alone after a quote read returns nothing. */
+        private const val THROTTLE_COOLDOWN_MS = 45_000L
 
         /** Symbols per spark request. Yahoo handles this comfortably in one call. */
         private const val BATCH_SIZE = 40

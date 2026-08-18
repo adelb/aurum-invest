@@ -641,7 +641,11 @@ private fun HeroSummary(
                 )
             }
         }
-        if (pricesAsOf > 0L && System.currentTimeMillis() - pricesAsOf > 15 * 60_000L) {
+        // Three minutes is roughly twelve missed ticks — past that the reads
+        // are failing, not merely slow, and the figures above are a cached
+        // price wearing a live screen's clothes. Fifteen minutes was the old
+        // threshold and it let exactly that go unsaid for a quarter of an hour.
+        if (pricesAsOf > 0L && System.currentTimeMillis() - pricesAsOf > 3 * 60_000L) {
             Text(
                 text = "Prices as of ${Fmt.timeShort(pricesAsOf)} (${Fmt.timeAgo(pricesAsOf)})",
                 style = MaterialTheme.typography.labelSmall,

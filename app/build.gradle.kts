@@ -13,8 +13,8 @@ android {
         applicationId = "com.aurum.invest"
         minSdk = 26
         targetSdk = 34
-        versionCode = 48
-        versionName = "8.2"
+        versionCode = 49
+        versionName = "8.3"
         vectorDrawables { useSupportLibrary = true }
     }
 

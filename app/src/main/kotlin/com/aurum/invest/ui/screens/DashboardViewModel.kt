@@ -120,8 +120,8 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                     .collectLatest { wallet -> _state.update { it.copy(wallet = wallet) } }
             }
         }
-        // Live price ticker: re-prices every open holding once a second while
-        // the dashboard is actually on screen (subscriptionCount == 0 once the
+        // Live price ticker: re-prices every open holding on a timer while the
+        // dashboard is actually on screen (subscriptionCount == 0 once the
         // composable stops collecting, e.g. backgrounded or navigated away).
         // Only quotes + the numbers derived from them refresh on this cadence
         // — sparklines, advice, and extended-hours stay from the last full
@@ -141,9 +141,9 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
         if (holdings.isEmpty()) return
         val symbols = holdings.map { it.view.position.symbol }.distinct()
 
-        // A tiny maxAge (rather than 0) avoids a redundant network hit if two
-        // ticks land within the same second, while still reading "live" —
-        // the cache itself is always at least this fresh on this screen.
+        // Just under the tick (rather than 0) so two screens ticking together
+        // share one read instead of each firing its own, while still reading
+        // "live" — the cache is always at least this fresh on this screen.
         val quotes = container.market.getQuotes(symbols, maxAgeMs = LIVE_PRICE_TICK_MS - 100L)
         if (quotes.isEmpty()) return
 
@@ -172,8 +172,17 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
-        /** How often the live price ticker re-prices holdings while the dashboard is visible. */
-        private const val LIVE_PRICE_TICK_MS = 1_000L
+        /**
+         * How often the live price ticker re-prices holdings while the
+         * dashboard is visible.
+         *
+         * This was once a second, which was worse than pointless: the batch
+         * quote series only moves once a minute, and asking Yahoo every second
+         * from three live screens got the device throttled per IP. Throttled
+         * reads fall back to the cached quote, so the figures then sat frozen
+         * for as long as the throttle lasted while still presenting as live.
+         */
+        private const val LIVE_PRICE_TICK_MS = 15_000L
     }
 
     /** Re-runs the whole pipeline with fresh quotes (bypasses the quote cache). */

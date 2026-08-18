@@ -254,9 +254,9 @@ fun DeltaMoney(value: Double, modifier: Modifier = Modifier, style: TextStyle = 
  * turns vertically onto its new digit the way an odometer wheel rolls, while
  * every digit that stayed the same holds still. The figure also flashes green
  * when it rose and red when it fell before settling back to [baseColor]. This
- * is for the figures the one-second live ticker re-prices (holdings value, net
- * worth, total P/L, liquidity …): without it a digit simply differs from the
- * one that was there a moment ago, and the user cannot tell which number moved
+ * is for the figures the live ticker re-prices (holdings value, net worth,
+ * total P/L, liquidity …): without it a digit simply differs from the one
+ * that was there a moment ago, and the user cannot tell which number moved
  * or which way.
  *
  * The whole figure used to flip on its X axis instead. That said "this number
@@ -351,8 +351,8 @@ fun AnimatedMoney(
  * [digit] is the only thing that starts a turn, so a wheel whose digit did not
  * change never moves — that is precisely what makes the figure point at what
  * changed. The turn itself runs in the draw phase: the position is read while
- * drawing, so a second-by-second ticker costs two glyph draws and neither a
- * recomposition nor a re-layout of the screen around it.
+ * drawing, so each tick costs two glyph draws and neither a recomposition nor
+ * a re-layout of the screen around it.
  */
 @Composable
 private fun DigitWheel(
@@ -523,8 +523,8 @@ private const val ROLL_MS = 420
 private const val ROLL_STAGGER_MS = 22
 
 /**
- * Ceiling on that lag. A long figure must still come to rest well inside the
- * one-second tick that hands it the next number, or the wheels never settle.
+ * Ceiling on that lag. A long figure must still come to rest well before the
+ * tick that hands it the next number, or the wheels never settle.
  */
 private const val ROLL_STAGGER_CAP_MS = 130
 

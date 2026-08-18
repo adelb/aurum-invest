@@ -62,7 +62,12 @@ class YahooClient {
                     .newBuilder()
                     .addQueryParameter("symbols", symbols.joinToString(","))
                     .addQueryParameter("range", "1d")
-                    .addQueryParameter("interval", "5m")
+                    // 1m, not 5m. This series IS the live price on every list
+                    // screen, so the interval is the finest the price can ever
+                    // move: at 5m a "live" figure re-read every second still
+                    // could not change more than twelve times an hour, and sat
+                    // visibly frozen between bars while the market traded.
+                    .addQueryParameter("interval", "1m")
                     .build()
                     .toString()
                 val root = getJson(url) ?: return@withContext emptyMap()
