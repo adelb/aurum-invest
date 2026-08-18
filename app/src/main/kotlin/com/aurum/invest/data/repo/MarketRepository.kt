@@ -506,6 +506,15 @@ class MarketRepository(
     @Volatile
     private var quotesCooldownUntil: Long = 0L
 
+    /**
+     * When quotes will be asked for again, or 0 when nothing is holding them
+     * back. The live screens read this so they can say WHY a price stopped
+     * moving rather than only how long ago it was read — "the data provider is
+     * refusing us for another two minutes" is a fact the user can act on; a
+     * bare timestamp on a frozen number is a puzzle.
+     */
+    fun quotesPausedUntil(): Long = maxOf(quotesCooldownUntil, yahoo.throttledUntil())
+
     companion object {
         const val GOLD_SYMBOL = "GLD"
 

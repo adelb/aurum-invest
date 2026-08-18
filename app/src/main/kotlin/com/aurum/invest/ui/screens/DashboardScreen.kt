@@ -179,7 +179,8 @@ fun DashboardScreen(
                     HeroSummary(
                         summary = state.summary,
                         wallet = state.wallet,
-                        pricesAsOf = state.pricesAsOf
+                        pricesAsOf = state.pricesAsOf,
+                        pricesPaused = state.pricesPaused
                     )
                 }
 
@@ -542,7 +543,8 @@ private fun HeaderRow(
 private fun HeroSummary(
     summary: PortfolioSummary?,
     wallet: WalletState = WalletState.UNSET,
-    pricesAsOf: Long = 0L
+    pricesAsOf: Long = 0L,
+    pricesPaused: Boolean = false
 ) {
     val s = summary ?: PortfolioSummary(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     Column(modifier = Modifier.fillMaxWidth().animateContentSize()) {
@@ -645,9 +647,20 @@ private fun HeroSummary(
         // are failing, not merely slow, and the figures above are a cached
         // price wearing a live screen's clothes. Fifteen minutes was the old
         // threshold and it let exactly that go unsaid for a quarter of an hour.
-        if (pricesAsOf > 0L && System.currentTimeMillis() - pricesAsOf > 3 * 60_000L) {
+        val stale = pricesAsOf > 0L && System.currentTimeMillis() - pricesAsOf > 3 * 60_000L
+        if (stale || pricesPaused) {
             Text(
-                text = "Prices as of ${Fmt.timeShort(pricesAsOf)} (${Fmt.timeAgo(pricesAsOf)})",
+                text = buildString {
+                    if (pricesAsOf > 0L) {
+                        append("Prices as of ${Fmt.timeShort(pricesAsOf)} (${Fmt.timeAgo(pricesAsOf)})")
+                    } else {
+                        append("Prices unavailable")
+                    }
+                    // The reason, when there is one. A frozen figure with only
+                    // a timestamp reads as a quiet market; naming the refusal
+                    // says it is the feed, not the tape.
+                    if (pricesPaused) append(" — the price feed is rate-limiting us, retrying shortly")
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = AurumColors.gold
             )

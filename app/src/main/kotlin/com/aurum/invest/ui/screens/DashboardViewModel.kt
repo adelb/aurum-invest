@@ -74,7 +74,13 @@ data class DashboardState(
     /** The user's stated total wallet, derived invested/liquidity/P&L, and net worth. */
     val wallet: WalletState = WalletState.UNSET,
     /** Oldest fetch time among the quotes shown; 0 when nothing was priced. */
-    val pricesAsOf: Long = 0L
+    val pricesAsOf: Long = 0L,
+    /**
+     * Set while the data provider is refusing our reads, so the screen can say
+     * why the figures stopped moving instead of leaving a frozen number to be
+     * read as a quiet market.
+     */
+    val pricesPaused: Boolean = false
 )
 
 class DashboardViewModel(app: Application) : AndroidViewModel(app) {
@@ -145,7 +151,13 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
         // share one read instead of each firing its own, while still reading
         // "live" — the cache is always at least this fresh on this screen.
         val quotes = container.market.getQuotes(symbols, maxAgeMs = LIVE_PRICE_TICK_MS - 100L)
-        if (quotes.isEmpty()) return
+        val paused = container.market.quotesPausedUntil() > System.currentTimeMillis()
+        if (quotes.isEmpty()) {
+            // Nothing came back and nothing was cached. Still record WHY, or a
+            // screen with no prices at all explains itself least of any.
+            _state.update { it.copy(pricesPaused = paused) }
+            return
+        }
 
         val ordered = container.portfolio.orderedTransactionsNow()
         val dayStart = Dates.todayStartMs()
@@ -166,7 +178,8 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
             it.copy(
                 holdings = newRows.sortedByDescending { r -> r.view.marketValue },
                 summary = summary,
-                pricesAsOf = pricesAsOf
+                pricesAsOf = pricesAsOf,
+                pricesPaused = container.market.quotesPausedUntil() > System.currentTimeMillis()
             )
         }
     }

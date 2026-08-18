@@ -19,6 +19,19 @@ import java.util.concurrent.TimeUnit
  */
 class YahooClient {
 
+    /**
+     * When Yahoo's edge should be asked again, after it refused this device
+     * with a 429. Zero when nothing is being refused. Shared by every call on
+     * this client — the limit is per IP, so one endpoint being refused means
+     * they all are.
+     */
+    @Volatile
+    private var throttledUntil: Long = 0L
+
+    /** Consecutive refusals, for how long to stay quiet. Reset by a success. */
+    @Volatile
+    private var strikes: Int = 0
+
     /** v8 chart API, range=1d interval=1m — latest price + previous close from meta. */
     suspend fun fetchQuote(symbol: String): Quote? = withContext(Dispatchers.IO) {
         try {
@@ -428,33 +441,50 @@ class YahooClient {
             .build()
             .toString()
 
+    /** When Yahoo's edge stops refusing this device, or 0 when it is not. */
+    fun throttledUntil(): Long = throttledUntil
+
     /**
      * Executes a GET and parses the body as JSON. Returns null on any failure.
-     * Yahoo answers 429 when a burst comes too fast from one IP; that case
-     * gets one backoff retry rather than surfacing as missing data.
+     *
+     * Yahoo's edge answers 429 "Too Many Requests" per IP, and it does not
+     * forgive quickly — a device that has been asking too often stays refused
+     * for minutes. So a 429 is not retried: the old code slept 700ms and asked
+     * again, which spent a second request on a refusal and counted against the
+     * very limit it was waiting out. Instead the whole client goes quiet for a
+     * spell that DOUBLES with each consecutive refusal, honouring Retry-After
+     * when the response carries one, and resets the moment a read succeeds.
+     * Every Yahoo call shares the gate, because the limit is per IP and not
+     * per endpoint.
      */
     private fun getJson(url: String): JSONObject? {
-        repeat(2) { attempt ->
-            try {
-                val request = Request.Builder()
-                    .url(url)
-                    .header("User-Agent", USER_AGENT)
-                    .get()
-                    .build()
-                http.newCall(request).execute().use { response ->
-                    if (response.code == 429 && attempt == 0) {
-                        Thread.sleep(700L)
-                        return@use
-                    }
-                    if (!response.isSuccessful) return null
-                    val body = response.body?.string() ?: return null
-                    return JSONObject(body)
+        if (System.currentTimeMillis() < throttledUntil) return null
+        return try {
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", USER_AGENT)
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            http.newCall(request).execute().use { response ->
+                if (response.code == 429) {
+                    strikes = (strikes + 1).coerceAtMost(THROTTLE_MAX_STRIKES)
+                    val advised = response.header("Retry-After")?.trim()
+                        ?.toLongOrNull()?.times(1000L)
+                    val wait = (advised ?: (THROTTLE_BASE_MS shl (strikes - 1)))
+                        .coerceIn(THROTTLE_BASE_MS, THROTTLE_CEILING_MS)
+                    throttledUntil = System.currentTimeMillis() + wait
+                    return null
                 }
-            } catch (_: Exception) {
-                return null
+                if (!response.isSuccessful) return null
+                val body = response.body?.string() ?: return null
+                strikes = 0
+                throttledUntil = 0L
+                JSONObject(body)
             }
+        } catch (_: Exception) {
+            null
         }
-        return null
     }
 
     private fun chartResult(root: JSONObject): JSONObject? {
@@ -526,8 +556,25 @@ class YahooClient {
     }
 
     companion object {
+        /**
+         * A COMPLETE browser User-Agent. The string used to stop at
+         * "AppleWebKit/537.36", which is not a UA any browser sends — it names
+         * an engine and then trails off. Yahoo's edge is measurably harsher on
+         * requests that do not look like a browser, and there is no upside to
+         * sending a half-formed one.
+         */
         private const val USER_AGENT =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
+        /** First quiet spell after a 429; each consecutive refusal doubles it. */
+        private const val THROTTLE_BASE_MS = 30_000L
+
+        /** Longest that quiet spell ever gets. */
+        private const val THROTTLE_CEILING_MS = 300_000L
+
+        /** Doublings past this add nothing — the ceiling is already reached. */
+        private const val THROTTLE_MAX_STRIKES = 4
 
         private val US_EXCHANGES = setOf(
             "NYQ", "NMS", "NGM", "NCM", "ASE", "PCX", "BTS", "NAS", "NYSE"
