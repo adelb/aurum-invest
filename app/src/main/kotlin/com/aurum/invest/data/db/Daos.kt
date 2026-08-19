@@ -89,6 +89,26 @@ interface BankEventDao {
 }
 
 @Dao
+interface EngineCallDao {
+    @Insert
+    suspend fun insert(call: EngineCallEntity): Long
+
+    /** Only ever fills in the forward outcomes — the call itself is immutable. */
+    @Update
+    suspend fun update(call: EngineCallEntity)
+
+    @Query("SELECT * FROM engine_calls ORDER BY ts DESC")
+    suspend fun all(): List<EngineCallEntity>
+
+    @Query("SELECT * FROM engine_calls WHERE fwd5Pct IS NULL OR fwd20Pct IS NULL ORDER BY ts ASC")
+    suspend fun unscored(): List<EngineCallEntity>
+
+    /** Dedupe guard: how many identical calls were already logged since [sinceTs]. */
+    @Query("SELECT COUNT(*) FROM engine_calls WHERE kind = :kind AND symbol = :symbol AND ts >= :sinceTs")
+    suspend fun countSince(kind: String, symbol: String, sinceTs: Long): Int
+}
+
+@Dao
 interface PicksDao {
     @Insert
     suspend fun insertAll(picks: List<WeeklyPickEntity>)

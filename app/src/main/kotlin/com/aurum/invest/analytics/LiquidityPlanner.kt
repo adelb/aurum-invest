@@ -1,6 +1,9 @@
 package com.aurum.invest.analytics
 
+import com.aurum.invest.data.model.EarningsInfo
 import com.aurum.invest.data.repo.InvestorProfile
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -78,7 +81,9 @@ object LiquidityPlanner {
         book: BookContext,
         strategy: WeeklyStrategy?,
         profile: InvestorProfile,
-        marketNote: String = ""
+        marketNote: String = "",
+        /** Next earnings per candidate symbol; absent = unmeasured, no gate. */
+        earnings: Map<String, EarningsInfo> = emptyMap()
     ): DeploymentPlan {
         val now = System.currentTimeMillis()
         val caveat = "Every figure is computed from live prices, the 35-technique board, and " +
@@ -154,6 +159,20 @@ object LiquidityPlanner {
 
             val scored = gap.picks.take(MAX_PER_THEME)
                 .filter { it.price > 0.0 }
+                .filter { pick ->
+                    // The earnings blackout: no new money into a name whose
+                    // report lands inside the window — a print is a coin flip
+                    // no conviction score survives. Unknown dates never gate.
+                    val next = earnings[pick.symbol]?.nextTs
+                    val soon = next != null &&
+                        next <= now + WealthEngine.EARNINGS_BLACKOUT_DAYS * 86_400_000L
+                    if (soon && next != null) {
+                        skippedThemes += "${pick.symbol} sized out — earnings " +
+                            earningsDate(next) +
+                            (if (earnings[pick.symbol]?.estimate == true) " (est.)" else "")
+                    }
+                    !soon
+                }
                 .map { it to convictionOf(it) }
                 .filter { (_, c) -> c >= MIN_CONVICTION }
             if (scored.isEmpty()) {
@@ -300,6 +319,9 @@ object LiquidityPlanner {
         out += "Conviction $conviction/100 from the measured evidence above."
         return out
     }
+
+    private fun earningsDate(ts: Long): String =
+        SimpleDateFormat("MMM d", Locale.US).format(Date(ts))
 
     private fun plural(n: Int) = if (n == 1) "" else "s"
     private fun money(v: Double): String =

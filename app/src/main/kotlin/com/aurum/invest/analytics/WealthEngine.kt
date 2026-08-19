@@ -1,9 +1,12 @@
 package com.aurum.invest.analytics
 
 import com.aurum.invest.data.model.Candle
+import com.aurum.invest.data.model.EarningsInfo
 import com.aurum.invest.data.model.PositionView
 import com.aurum.invest.data.repo.InvestorProfile
 import com.aurum.invest.data.repo.WalletState
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
@@ -36,6 +39,9 @@ data class HoldingEvaluation(
      */
     val trailStop: Double?,
     val stopDistancePct: Double?,     // how far the stop sits below the price
+    /** Next earnings report, when one is known and near; null otherwise. */
+    val nextEarningsTs: Long? = null,
+    val earningsEstimate: Boolean = false,
     val move: HoldingMove,
     /** 0..100 — how strongly the measured evidence backs [move]. */
     val conviction: Int,
@@ -108,7 +114,9 @@ data class WealthInputs(
     val vix: Double?,
     val profile: InvestorProfile,
     /** Realized outcome of every closed sell in the ledger, chronological. */
-    val sellOutcomes: List<Double>
+    val sellOutcomes: List<Double>,
+    /** Next earnings dates per holding; absent = unmeasured, gate stands down. */
+    val earnings: Map<String, EarningsInfo> = emptyMap()
 )
 
 /**
@@ -150,6 +158,16 @@ object WealthEngine {
     /** Chandelier exit parameters — 22-day high, 3 ATRs of room. */
     private const val CHANDELIER_LOOKBACK = 22
     private const val CHANDELIER_ATR_MULT = 3.0
+
+    /**
+     * No ADD inside this many days of a known earnings date — a report is a
+     * binary event no board read survives. An UNKNOWN date never blocks:
+     * absence of data is unmeasured, not "no earnings soon".
+     */
+    const val EARNINGS_BLACKOUT_DAYS = 7
+
+    /** A known report inside this window is worth a line on the holding. */
+    const val EARNINGS_SHOW_DAYS = 14
 
     fun evaluate(inputs: WealthInputs): WealthReport {
         val now = System.currentTimeMillis()
@@ -285,10 +303,29 @@ object WealthEngine {
             )
         }
 
+        // ---- earnings proximity, when the date is known -----------------
+        val now = System.currentTimeMillis()
+        val earnings = inputs.earnings[symbol]
+        val nextEarnings = earnings?.nextTs
+        val earningsSoon = nextEarnings != null &&
+            nextEarnings <= now + EARNINGS_BLACKOUT_DAYS * 86_400_000L
+        val earningsNear = nextEarnings != null &&
+            nextEarnings <= now + EARNINGS_SHOW_DAYS * 86_400_000L
+        if (nextEarnings != null && earningsNear) {
+            reasons += String.format(
+                Locale.US, "Earnings %s%s.",
+                earningsDate(nextEarnings),
+                if (earnings.estimate) " (est.)" else ""
+            )
+        }
+
         // ---- the move, from measured evidence only ----------------------
         val maxPos = inputs.profile.maxPositionPct
         val bearishShare = if (total > 0) (total - bullish) * 100.0 / total else 0.0
         val bullishShare = if (total > 0) bullish * 100.0 / total else 0.0
+        val addSetup = weight < maxPos * 0.5 && total >= 10 && bullishShare >= 60.0 &&
+            above50 == true && above200 == true &&
+            (inputs.wallet?.deployable ?: 0.0) > 0.0
         val move: HoldingMove
         val conviction: Int
         when {
@@ -320,10 +357,9 @@ object WealthEngine {
                     )
                 )
             }
-            // ADD: room under half the cap, strong board, intact trend, cash available.
-            weight < maxPos * 0.5 && total >= 10 && bullishShare >= 60.0 &&
-                above50 == true && above200 == true &&
-                (inputs.wallet?.deployable ?: 0.0) > 0.0 -> {
+            // ADD: room under half the cap, strong board, intact trend, cash
+            // available — and no earnings report inside the blackout window.
+            addSetup && !earningsSoon -> {
                 move = HoldingMove.ADD
                 conviction = bullishShare.roundToInt().coerceIn(0, 100)
                 reasons.add(
@@ -342,6 +378,19 @@ object WealthEngine {
                     total == 0 -> 0
                     else -> max(bullishShare, 100.0 - bearishShare).roundToInt().coerceIn(0, 100)
                 }
+                if (addSetup && earningsSoon && nextEarnings != null) {
+                    reasons.add(
+                        0,
+                        String.format(
+                            Locale.US,
+                            "The add setup is live, but earnings land %s%s — inside the " +
+                                "%d-day blackout, adds wait for the print.",
+                            earningsDate(nextEarnings),
+                            if (earnings?.estimate == true) " (est.)" else "",
+                            EARNINGS_BLACKOUT_DAYS
+                        )
+                    )
+                }
             }
         }
 
@@ -359,6 +408,8 @@ object WealthEngine {
             above200 = above200,
             trailStop = trailStop?.let { round2(it) },
             stopDistancePct = stopDistance?.let { round1(it) },
+            nextEarningsTs = nextEarnings.takeIf { earningsNear },
+            earningsEstimate = earnings?.estimate == true && earningsNear,
             move = move,
             conviction = conviction,
             reasons = reasons
@@ -825,6 +876,9 @@ object WealthEngine {
     private fun money(v: Double): String =
         if (abs(v) >= 10_000) String.format(Locale.US, "$%,.0f", v)
         else String.format(Locale.US, "$%,.2f", v)
+
+    private fun earningsDate(ts: Long): String =
+        SimpleDateFormat("MMM d", Locale.US).format(Date(ts))
 
     private fun round1(v: Double): Double = Math.round(v * 10.0) / 10.0
     private fun round2(v: Double): Double = Math.round(v * 100.0) / 100.0

@@ -2,6 +2,7 @@ package com.aurum.invest.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -47,6 +48,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -63,8 +67,12 @@ import com.aurum.invest.analytics.DeploymentPlan
 import com.aurum.invest.analytics.HoldingEvaluation
 import com.aurum.invest.analytics.HoldingMove
 import com.aurum.invest.analytics.ManagementAction
+import com.aurum.invest.analytics.CurvePoint
+import com.aurum.invest.analytics.EngineRecordReport
 import com.aurum.invest.analytics.NextSessionPick
 import com.aurum.invest.analytics.NextSessionReport
+import com.aurum.invest.analytics.PerformanceReport
+import com.aurum.invest.analytics.RecordBucket
 import com.aurum.invest.analytics.RiskStats
 import com.aurum.invest.analytics.TechniqueVerdict
 import com.aurum.invest.analytics.WealthDiscipline
@@ -195,6 +203,23 @@ private fun WealthContent(
             item { MarketPulseCard(pulse = state.pulse, loading = state.pulseLoading) }
         }
 
+        // 1b — the verdict: the user's ACTUAL trading measured against SPY.
+        item {
+            WealthSectionHeader(
+                title = "The verdict — you vs the market",
+                expanded = open("verdict"),
+                trailing = state.performance?.let { Fmt.signedPct(it.edgePct) + " edge" }
+            ) { toggle("verdict") }
+        }
+        if (open("verdict")) {
+            item {
+                PerformanceCard(
+                    perf = state.performance,
+                    loading = state.performanceLoading
+                )
+            }
+        }
+
         // 2 — the wealth engine's verdict on the whole position.
         item {
             WealthSectionHeader(
@@ -261,6 +286,21 @@ private fun WealthContent(
                         onOpen = { sym -> if (sym.isNotEmpty()) onOpenDetail(sym) }
                     )
                 }
+            }
+        }
+
+        // 4b — the engines' own graded record: every call scored, no exceptions.
+        if (state.record != null) {
+            item {
+                WealthSectionHeader(
+                    title = "The engine's record",
+                    expanded = open("record"),
+                    trailing = state.record.buckets.sumOf { it.graded }
+                        .takeIf { it > 0 }?.let { "$it graded" }
+                ) { toggle("record") }
+            }
+            if (open("record")) {
+                item { EngineRecordCard(record = state.record) }
             }
         }
 
@@ -1649,6 +1689,290 @@ private fun ManagementActionRow(action: ManagementAction, onOpen: (String) -> Un
  * Risk & performance of the CURRENT composition, replayed over the window —
  * labeled for exactly what it is: today's weights, not the trade history.
  */
+@Composable
+private fun PerformanceCard(perf: PerformanceReport?, loading: Boolean) {
+    if (perf == null) {
+        AurumCard {
+            Text(
+                text = if (loading) {
+                    "Replaying every trade in your ledger against real closes and SPY…"
+                } else {
+                    "The verdict needs your trade history and reachable market data — " +
+                        "record a trade, or pull down to retry."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
+        return
+    }
+    AurumCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = perf.headline,
+                style = MaterialTheme.typography.titleMedium,
+                color = AurumColors.text,
+                modifier = Modifier.weight(1f)
+            )
+            InfoDot(title = "The verdict", explanation = Meanings.VERDICT)
+        }
+        Spacer(Modifier.height(12.dp))
+        if (perf.curve.size >= 2) {
+            VerdictCurve(curve = perf.curve)
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(AurumColors.gold)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "Your trading",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+                Spacer(Modifier.width(14.dp))
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(AurumColors.info)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "SPY, same span",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            StatTile(
+                label = "Your return (TWR)",
+                value = Fmt.signedPct(perf.twrPct),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.deltaColor(perf.twrPct),
+                info = "Time-weighted return" to (
+                    "Your trading's return with the timing of deposits stripped out — " +
+                        "each day's gain is chained regardless of how much money was in. " +
+                        "This is the number that judges the PICKING, and the one fund " +
+                        "managers are graded on."
+                    )
+            )
+            StatTile(
+                label = "SPY same span",
+                value = Fmt.signedPct(perf.spyTwrPct),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.deltaColor(perf.spyTwrPct)
+            )
+            StatTile(
+                label = "Edge",
+                value = Fmt.signedPct(perf.edgePct),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.deltaColor(perf.edgePct)
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            StatTile(
+                label = "Annualized",
+                value = perf.twrAnnPct?.let { Fmt.signedPct(it) } ?: "—",
+                modifier = Modifier.weight(1f),
+                valueColor = perf.twrAnnPct?.let { AurumColors.deltaColor(it) }
+                    ?: AurumColors.textDim
+            )
+            StatTile(
+                label = "Money-weighted",
+                value = perf.mwrAnnPct?.let { Fmt.signedPct(it) + "/yr" } ?: "—",
+                modifier = Modifier.weight(1f),
+                valueColor = perf.mwrAnnPct?.let { AurumColors.deltaColor(it) }
+                    ?: AurumColors.textDim,
+                info = "Money-weighted return" to (
+                    "The annual rate your actual dollars experienced (XIRR over every " +
+                        "trade). It differs from the time-weighted figure when big money " +
+                        "arrived at good or bad moments — the gap between them is your " +
+                        "TIMING, graded."
+                    )
+            )
+            StatTile(
+                label = "Max drawdown",
+                value = Fmt.pct(perf.maxDrawdownPct),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.loss
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            StatTile(
+                label = "You put in",
+                value = Fmt.money(perf.investedIn),
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                label = "You took out",
+                value = Fmt.money(perf.takenOut),
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            StatTile(
+                label = "Your book now",
+                value = Fmt.money(perf.bookNow),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.gold
+            )
+            StatTile(
+                label = "Same flows in SPY",
+                value = Fmt.money(perf.spyAltNow),
+                modifier = Modifier.weight(1f),
+                valueColor = if (perf.bookNow >= perf.spyAltNow) AurumColors.textDim
+                else AurumColors.info,
+                info = "Same flows in SPY" to (
+                    "The alternate universe: every dollar your trades moved, moved into " +
+                        "SPY on the same days instead. If this number beats your book, " +
+                        "the index would have done your work better — worth knowing, " +
+                        "not worth hiding."
+                    )
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = "Measured ${Fmt.dateShortYear(perf.startTs)} – ${Fmt.dateShortYear(perf.endTs)}" +
+                " · ${perf.sessions} sessions · ${Fmt.pct(perf.coveragePct)} of the book priced.",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+        perf.notes.forEach { note ->
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = note,
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+        }
+    }
+}
+
+/** Two indexed lines (both start at 100): the book's TWR chain vs SPY. */
+@Composable
+private fun VerdictCurve(curve: List<CurvePoint>) {
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(120.dp)
+    ) {
+        val lo = minOf(curve.minOf { it.book }, curve.minOf { it.spy })
+        val hi = maxOf(curve.maxOf { it.book }, curve.maxOf { it.spy })
+        val span = (hi - lo).takeIf { it > 1e-6 } ?: 1.0
+        fun y(v: Double): Float =
+            (size.height * (1f - ((v - lo) / span).toFloat() * 0.9f - 0.05f))
+        fun x(i: Int): Float = size.width * i / (curve.size - 1).coerceAtLeast(1)
+
+        // The 100 line — where the money started.
+        if (100.0 in lo..hi) {
+            drawLine(
+                color = AurumColors.hairline,
+                start = androidx.compose.ui.geometry.Offset(0f, y(100.0)),
+                end = androidx.compose.ui.geometry.Offset(size.width, y(100.0)),
+                strokeWidth = 1.dp.toPx(),
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f))
+            )
+        }
+        val spyPath = Path()
+        val bookPath = Path()
+        curve.forEachIndexed { i, p ->
+            if (i == 0) {
+                spyPath.moveTo(x(i), y(p.spy))
+                bookPath.moveTo(x(i), y(p.book))
+            } else {
+                spyPath.lineTo(x(i), y(p.spy))
+                bookPath.lineTo(x(i), y(p.book))
+            }
+        }
+        drawPath(spyPath, color = AurumColors.info, style = Stroke(width = 1.5.dp.toPx()))
+        drawPath(bookPath, color = AurumColors.gold, style = Stroke(width = 2.dp.toPx()))
+    }
+}
+
+@Composable
+private fun EngineRecordCard(record: EngineRecordReport) {
+    AurumCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = record.headline,
+                style = MaterialTheme.typography.titleSmall,
+                color = AurumColors.text,
+                modifier = Modifier.weight(1f)
+            )
+            InfoDot(title = "The engine's record", explanation = Meanings.ENGINE_RECORD)
+        }
+        record.buckets.forEach { bucket ->
+            Spacer(Modifier.height(12.dp))
+            RecordBucketRow(bucket)
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = record.caveat,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+    }
+}
+
+@Composable
+private fun RecordBucketRow(bucket: RecordBucket) {
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = bucket.label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = AurumColors.text,
+                modifier = Modifier.weight(1f)
+            )
+            if (bucket.winRatePct != null) {
+                Text(
+                    text = String.format(
+                        Locale.US, "%.0f%% right · floor %.0f%%",
+                        bucket.winRatePct, bucket.wilsonLowerPct ?: 0.0
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = when {
+                        (bucket.wilsonLowerPct ?: 0.0) >= 50.0 -> AurumColors.gain
+                        bucket.winRatePct >= 50.0 -> AurumColors.gold
+                        else -> AurumColors.loss
+                    }
+                )
+            } else {
+                Text(
+                    text = "${bucket.graded}/${bucket.total} graded",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = bucket.note +
+                (bucket.avgFwd20Pct?.let {
+                    String.format(Locale.US, " Average move %+.1f%%.", it)
+                } ?: ""),
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+        Text(
+            text = "Right means: ${bucket.winMeaning}.",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+    }
+}
+
 @Composable
 private fun RiskStatsCard(risk: RiskStats) {
     AurumCard {

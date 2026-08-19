@@ -1,11 +1,15 @@
 package com.aurum.invest.data.remote
 
 import com.aurum.invest.data.model.Candle
+import com.aurum.invest.data.model.EarningsInfo
 import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.Quote
 import com.aurum.invest.data.model.ScreenerQuote
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.Cookie
+import okhttp3.CookieJar
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -475,7 +479,132 @@ class YahooClient {
             }
         }
 
+    /**
+     * The next earnings dates for MANY symbols in one v7 quote request.
+     *
+     * This is the one call in the client that needs Yahoo's cookie+crumb
+     * handshake (the v7 quote API rejects bare requests with 401): a visit to
+     * fc.yahoo.com sets the consent cookie, /v1/test/getcrumb converts it to
+     * a crumb, and both ride along here. The crumb is cached in memory and
+     * refreshed once on a 401 — beyond that the whole feature degrades to
+     * absent data, never to a guessed date.
+     *
+     * A returned symbol with no earnings fields (ETFs, funds) maps to an
+     * [EarningsInfo] with a null [EarningsInfo.nextTs] — "checked, none
+     * known". A symbol Yahoo didn't answer for is absent entirely.
+     */
+    suspend fun fetchEarningsDates(symbols: List<String>): Map<String, EarningsInfo> =
+        withContext(Dispatchers.IO) {
+            if (symbols.isEmpty()) return@withContext emptyMap()
+            try {
+                val root = crumbedQuoteJson(symbols) ?: return@withContext emptyMap()
+                val results = root.optJSONObject("quoteResponse")
+                    ?.optJSONArray("result")
+                    ?: return@withContext emptyMap()
+                val now = System.currentTimeMillis()
+                val out = HashMap<String, EarningsInfo>(results.length())
+                for (i in 0 until results.length()) {
+                    val q = results.optJSONObject(i) ?: continue
+                    val symbol = q.optString("symbol", "")
+                    if (symbol.isEmpty()) continue
+                    // Yahoo splits the date across three fields whose roles
+                    // shift as a report approaches; the earliest one still in
+                    // the future (with a day of slack for "today") is the next
+                    // report whichever field carries it.
+                    val next = listOf(
+                        "earningsTimestamp", "earningsTimestampStart", "earningsTimestampEnd"
+                    ).mapNotNull { key ->
+                        q.optLong(key, 0L).takeIf { it > 0L }?.times(1000L)
+                    }.filter { it >= now - 86_400_000L }.minOrNull()
+                    out[symbol] = EarningsInfo(
+                        symbol = symbol,
+                        nextTs = next,
+                        estimate = q.optBoolean("isEarningsDateEstimate", false),
+                        fetchedAt = now
+                    )
+                }
+                out
+            } catch (_: Exception) {
+                emptyMap()
+            }
+        }
+
     // ---- internals ---------------------------------------------------------
+
+    /** One v7 quote call with the crumb attached; retries once on a stale crumb. */
+    private fun crumbedQuoteJson(symbols: List<String>): JSONObject? {
+        repeat(2) { attempt ->
+            val crumb = ensureCrumb(force = attempt > 0) ?: return null
+            val url = "https://query1.finance.yahoo.com/v7/finance/quote".toHttpUrl()
+                .newBuilder()
+                .addQueryParameter("symbols", symbols.joinToString(","))
+                .addQueryParameter(
+                    "fields",
+                    "symbol,earningsTimestamp,earningsTimestampStart," +
+                        "earningsTimestampEnd,isEarningsDateEstimate"
+                )
+                .addQueryParameter("crumb", crumb)
+                .build()
+                .toString()
+            try {
+                val request = Request.Builder().url(url).header("User-Agent", USER_AGENT).get().build()
+                cookieHttp.newCall(request).execute().use { response ->
+                    when {
+                        response.code == 401 && attempt == 0 -> {} // stale crumb — refresh and retry
+                        !response.isSuccessful -> return null
+                        else -> {
+                            val body = response.body?.string() ?: return null
+                            return JSONObject(body)
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                return null
+            }
+        }
+        return null
+    }
+
+    /**
+     * The cached crumb, fetched on first need: fc.yahoo.com sets the cookie
+     * (its own response is a 404 — that's normal), then getcrumb returns the
+     * token. Null when Yahoo won't hand one out; callers treat that as
+     * missing data, never as an error to surface.
+     */
+    private fun ensureCrumb(force: Boolean = false): String? {
+        if (!force) crumb?.let { return it }
+        synchronized(crumbLock) {
+            if (!force) crumb?.let { return it }
+            try {
+                val seed = Request.Builder()
+                    .url("https://fc.yahoo.com")
+                    .header("User-Agent", USER_AGENT)
+                    .get()
+                    .build()
+                try {
+                    cookieHttp.newCall(seed).execute().close()
+                } catch (_: Exception) {
+                    // The seed request only exists to set the cookie; even a
+                    // failed body read can have done that.
+                }
+                val request = Request.Builder()
+                    .url("https://query1.finance.yahoo.com/v1/test/getcrumb")
+                    .header("User-Agent", USER_AGENT)
+                    .get()
+                    .build()
+                cookieHttp.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return null
+                    val token = response.body?.string()?.trim() ?: return null
+                    // A JSON error body is not a crumb.
+                    if (token.isEmpty() || token.startsWith("{")) return null
+                    crumb = token
+                    return token
+                }
+            } catch (_: Exception) {
+                return null
+            }
+        }
+    }
 
     private fun chartUrl(symbol: String, range: String, interval: String): String =
         "https://query1.finance.yahoo.com/v8/finance/chart".toHttpUrl()
@@ -596,6 +725,32 @@ class YahooClient {
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
+            .build()
+
+        /** The crumb for the v7 quote endpoint; refreshed once on a 401. */
+        @Volatile
+        private var crumb: String? = null
+        private val crumbLock = Any()
+
+        /** In-memory Yahoo cookies — the consent cookie set by fc.yahoo.com
+         * must travel to query1.finance.yahoo.com, so matching goes by the
+         * cookie's own domain rule, not by which host stored it. */
+        private val cookieStore = HashMap<String, Cookie>()
+
+        /** The crumb flow's client: same pool, plus the cookie jar. */
+        private val cookieHttp: OkHttpClient = http.newBuilder()
+            .cookieJar(object : CookieJar {
+                override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
+                    synchronized(cookieStore) {
+                        for (c in cookies) cookieStore[c.domain + "|" + c.name] = c
+                    }
+                }
+
+                override fun loadForRequest(url: HttpUrl): List<Cookie> =
+                    synchronized(cookieStore) {
+                        cookieStore.values.filter { it.matches(url) }
+                    }
+            })
             .build()
     }
 }

@@ -25,13 +25,16 @@ class WealthRepository(
     private val news: NewsRepository,
     private val settings: SettingsRepository,
     /** Today's entry/power boards — optional context for the next-session scan. */
-    private val picks: PicksRepository? = null
+    private val picks: PicksRepository? = null,
+    /** The self-scoring call ledger; every action and pick is logged through it. */
+    private val record: RecordRepository? = null
 ) {
 
     companion object {
         // v2: the VIX read gained its 5-session drift.
         private const val PULSE_KEY = "marketpulse:v2"
         private const val NEXT_SESSION_KEY = "nextsession:v4"
+        private const val PERFORMANCE_KEY = "performance:v1"
     }
 
     // ---- market pulse -------------------------------------------------------
@@ -174,6 +177,8 @@ class WealthRepository(
                         updatedAt = System.currentTimeMillis()
                     )
                 )
+                // Every pick goes on the permanent record, priced as issued.
+                runCatching { record?.logPicks(report) }
             }
             report
         } catch (_: Exception) {
@@ -213,6 +218,8 @@ class WealthRepository(
             val spy = runCatching { market.getDailyCandles("SPY", 365) }
                 .getOrDefault(emptyList())
             val sectors = runCatching { market.getSectors(open.map { it.symbol }) }
+                .getOrDefault(emptyMap())
+            val earnings = runCatching { market.getEarningsDates(open.map { it.symbol }) }
                 .getOrDefault(emptyMap())
             val pulse = runCatching { getMarketPulse() }.getOrNull()
             val profile = runCatching { settings.investorProfile.first() }
@@ -260,7 +267,7 @@ class WealthRepository(
                     }
                 }
             }
-            com.aurum.invest.analytics.WealthEngine.evaluate(
+            val report = com.aurum.invest.analytics.WealthEngine.evaluate(
                 com.aurum.invest.analytics.WealthInputs(
                     wallet = walletState,
                     views = views,
@@ -269,9 +276,20 @@ class WealthRepository(
                     spy = spy,
                     vix = pulse?.vix,
                     profile = profile,
-                    sellOutcomes = sellOutcomes
+                    sellOutcomes = sellOutcomes,
+                    earnings = earnings
                 )
             )
+            // The buy/sell-side actions go on the permanent record too.
+            runCatching {
+                record?.logActions(
+                    report.actions,
+                    views.mapNotNull { v ->
+                        v.quote?.price?.let { v.position.symbol to it }
+                    }.toMap()
+                )
+            }
+            report
         }
     } catch (_: Exception) {
         null
@@ -294,15 +312,153 @@ class WealthRepository(
         val profile = runCatching { settings.investorProfile.first() }
             .getOrDefault(InvestorProfile.DEFAULT)
         val marketNote = runCatching { getMarketPulse() }.getOrNull()?.headline ?: ""
+        // Earnings dates for every candidate name — the blackout gate's input.
+        val candidates = strategy?.gaps.orEmpty()
+            .flatMap { gap -> gap.picks.map { it.symbol } }
+            .distinct()
+        val earnings = runCatching { market.getEarningsDates(candidates) }
+            .getOrDefault(emptyMap())
         com.aurum.invest.analytics.LiquidityPlanner.build(
             liquidity = liquidity,
             book = book,
             strategy = strategy,
             profile = profile,
-            marketNote = marketNote
+            marketNote = marketNote,
+            earnings = earnings
         )
     } catch (_: Exception) {
         null
+    }
+
+    // ---- the performance verdict --------------------------------------------
+
+    /**
+     * The verdict on the user's ACTUAL trading — time-weighted return vs SPY,
+     * the same-flows SPY alternative, and the whole-ledger money-weighted
+     * rate. Served from cache while fresh AND while the ledger is unchanged
+     * (its fingerprint rides inside the cached JSON, so a new trade recomputes
+     * immediately); the stale copy serves when the market is unreachable.
+     */
+    suspend fun getPerformance(
+        portfolio: PortfolioRepository,
+        maxAgeMs: Long = 21_600_000L
+    ): com.aurum.invest.analytics.PerformanceReport? = try {
+        val ordered = portfolio.orderedTransactionsNow()
+        if (ordered.isEmpty()) {
+            null
+        } else {
+            val fp = ledgerFingerprint(ordered)
+            val cached = try {
+                cacheDao.get(PERFORMANCE_KEY)
+            } catch (_: Exception) {
+                null
+            }
+            val now = System.currentTimeMillis()
+            val cachedReport = cached?.let { entry ->
+                try {
+                    val o = org.json.JSONObject(entry.json)
+                    if (o.optString("fp") == fp) {
+                        com.aurum.invest.analytics.PerformanceEngine.fromJson(
+                            o.optString("report")
+                        )
+                    } else null
+                } catch (_: Exception) {
+                    null
+                }
+            }
+            if (cachedReport != null && now - cached.updatedAt <= maxAgeMs) {
+                cachedReport
+            } else {
+                computePerformance(ordered, fp) ?: cachedReport
+            }
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    /** Forces the full recompute (pull-to-refresh). */
+    suspend fun recomputePerformance(
+        portfolio: PortfolioRepository
+    ): com.aurum.invest.analytics.PerformanceReport? = try {
+        val ordered = portfolio.orderedTransactionsNow()
+        if (ordered.isEmpty()) null
+        else computePerformance(ordered, ledgerFingerprint(ordered))
+    } catch (_: Exception) {
+        null
+    }
+
+    private suspend fun computePerformance(
+        ordered: List<com.aurum.invest.data.db.TransactionEntity>,
+        fp: String
+    ): com.aurum.invest.analytics.PerformanceReport? = try {
+        coroutineScope {
+            val trades = ordered.map {
+                com.aurum.invest.analytics.LedgerTrade(
+                    ts = it.ts,
+                    symbol = it.symbol.trim().uppercase(),
+                    side = it.side,
+                    shares = it.shares,
+                    price = it.price,
+                    fees = it.fees
+                )
+            }
+            val daysNeeded =
+                ((System.currentTimeMillis() - ordered.minOf { it.ts }) / 86_400_000L)
+                    .toInt() + 30
+            val symbols = trades.map { it.symbol }.distinct()
+            val candles = symbols.map { s ->
+                async {
+                    s to runCatching { market.getDailyCandles(s, daysNeeded) }
+                        .getOrDefault(emptyList())
+                }
+            }.awaitAll().toMap()
+            val spy = runCatching { market.getDailyCandles("SPY", daysNeeded) }
+                .getOrDefault(emptyList())
+            val open = PortfolioRepository.computePositions(ordered)
+                .filter { PortfolioRepository.isOpen(it) }
+            val quotes = runCatching { market.getQuotes(open.map { it.symbol }) }
+                .getOrDefault(emptyMap())
+                .mapValues { it.value.price }
+            val report = com.aurum.invest.analytics.PerformanceEngine.evaluate(
+                trades = trades,
+                candles = candles,
+                spy = spy,
+                quotes = quotes
+            )
+            if (report != null) {
+                cacheDao.put(
+                    CacheEntity(
+                        key = PERFORMANCE_KEY,
+                        json = org.json.JSONObject().apply {
+                            put("fp", fp)
+                            put(
+                                "report",
+                                com.aurum.invest.analytics.PerformanceEngine.toJson(report)
+                            )
+                        }.toString(),
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+            }
+            report
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    /** Changes whenever any row is added, edited, or removed. */
+    private fun ledgerFingerprint(
+        ordered: List<com.aurum.invest.data.db.TransactionEntity>
+    ): String {
+        var hash = 1_125_899_906_842_597L
+        for (tx in ordered) {
+            hash = hash * 31 + tx.id
+            hash = hash * 31 + tx.ts
+            hash = hash * 31 + tx.side.hashCode()
+            hash = hash * 31 + java.lang.Double.doubleToLongBits(tx.shares)
+            hash = hash * 31 + java.lang.Double.doubleToLongBits(tx.price)
+        }
+        return "${ordered.size}:$hash"
     }
 
     /** Recomputes the market rating from live data and stores it. */

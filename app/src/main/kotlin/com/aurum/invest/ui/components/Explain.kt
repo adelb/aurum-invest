@@ -171,4 +171,20 @@ object Meanings {
             "stock is the theme shelf's strongest board-passed name; the alternates " +
             "passed the same gate. When no wallet is set, the split shows the 4-month " +
             "plan's base instead - percentages of intent, not measured cash."
+
+    const val VERDICT =
+        "Your ACTUAL trades replayed day by day against real closing prices, next to " +
+            "what SPY did over the same sessions and what the same dollars pushed into " +
+            "SPY on the same days would be worth. Time-weighted return grades your " +
+            "picking; money-weighted grades your dollars' timing; the gap between them " +
+            "is the timing itself. This is the trade history judged - the Risk & " +
+            "performance card below replays only today's composition."
+
+    const val ENGINE_RECORD =
+        "Every ADD, TRIM, and EXIT the wealth engine issues, and every next-session " +
+            "pick, is logged at its live price the moment it appears - then scored " +
+            "against what the name actually did 5 and 20 sessions later. Nothing is " +
+            "deleted or regraded, no rate is claimed under 10 graded calls, and the " +
+            "Wilson floor is the number to trust: the win rate the record PROVES with " +
+            "95% confidence, not the one it shows."
 }

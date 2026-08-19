@@ -13,9 +13,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         WatchItemEntity::class,
         CacheEntity::class,
         BankEventEntity::class,
-        WeeklyPickEntity::class
+        WeeklyPickEntity::class,
+        EngineCallEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AurumDatabase : RoomDatabase() {
@@ -24,6 +25,7 @@ abstract class AurumDatabase : RoomDatabase() {
     abstract fun cacheDao(): CacheDao
     abstract fun bankEventDao(): BankEventDao
     abstract fun picksDao(): PicksDao
+    abstract fun engineCallDao(): EngineCallDao
 
     companion object {
         /** v2: transactions gain the nullable realized-outcome override. */
@@ -73,7 +75,7 @@ abstract class AurumDatabase : RoomDatabase() {
 
         // The ten copied columns exist identically in schemas 2, 3, AND 4, and
         // the four side tables never changed shape across them — one rebuild
-        // body honestly serves every upgrade path.
+        // body honestly serves every upgrade path. Room composes 2→5→6 etc.
         private val MIGRATION_2_5 = object : Migration(2, 5) {
             override fun migrate(db: SupportSQLiteDatabase) = rebuildTransactionsToV10(db)
         }
@@ -84,12 +86,31 @@ abstract class AurumDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) = rebuildTransactionsToV10(db)
         }
 
+        /**
+         * v6: the engines' self-scoring call ledger. A NEW table (engine_calls,
+         * deliberately not v9's dormant advice_log, whose shape differs) — no
+         * existing data is touched on any path.
+         */
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `engine_calls` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`ts` INTEGER NOT NULL, `kind` TEXT NOT NULL, " +
+                        "`symbol` TEXT NOT NULL, `refPrice` REAL NOT NULL, " +
+                        "`note` TEXT NOT NULL, `fwd5Pct` REAL, `fwd20Pct` REAL)"
+                )
+            }
+        }
+
         // No destructive fallback: the user's ledger must survive every app
         // update — upgrades AND the v9→v10 rebuild alike. Any future schema
         // change MUST ship an explicit Migration.
         fun build(context: Context): AurumDatabase =
             Room.databaseBuilder(context, AurumDatabase::class.java, "aurum.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_5, MIGRATION_3_5, MIGRATION_4_5)
+                .addMigrations(
+                    MIGRATION_1_2, MIGRATION_2_5, MIGRATION_3_5, MIGRATION_4_5, MIGRATION_5_6
+                )
                 .build()
     }
 }

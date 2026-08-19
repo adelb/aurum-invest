@@ -349,6 +349,68 @@ class MarketRepository(
         return cached?.json?.takeIf { it.isNotBlank() }
     }
 
+    /**
+     * Next earnings dates for many symbols, cached 12 hours per symbol. A
+     * cached entry with no date means "checked, none known" (ETFs, funds) and
+     * is served without a refetch; a symbol whose lookup failed is absent and
+     * retried next call — the earnings gate treats absent as unmeasured.
+     */
+    suspend fun getEarningsDates(
+        symbols: List<String>,
+        maxAgeMs: Long = 43_200_000L
+    ): Map<String, com.aurum.invest.data.model.EarningsInfo> {
+        if (symbols.isEmpty()) return emptyMap()
+        val wanted = symbols.map { it.trim().uppercase() }.distinct()
+        val now = System.currentTimeMillis()
+        val out = HashMap<String, com.aurum.invest.data.model.EarningsInfo>(wanted.size)
+        val misses = ArrayList<String>()
+        for (symbol in wanted) {
+            val cached = readCache("earnings:$symbol")
+            val info = cached?.let { earningsFromJson(it.json) }
+            // A known date that has already passed is stale whatever its age —
+            // the next report's date needs a fresh look.
+            val passed = info?.nextTs?.let { it < now - 86_400_000L } == true
+            if (info != null && now - cached.updatedAt <= maxAgeMs && !passed) {
+                out[symbol] = info
+            } else {
+                misses.add(symbol)
+            }
+        }
+        if (misses.isEmpty()) return out
+        val fetched = coroutineScope {
+            misses.chunked(BATCH_SIZE)
+                .map { chunk -> async { yahoo.fetchEarningsDates(chunk) } }
+                .awaitAll()
+        }.fold(HashMap<String, com.aurum.invest.data.model.EarningsInfo>()) { acc, map ->
+            acc.apply { putAll(map) }
+        }
+        for ((symbol, info) in fetched) {
+            writeCache("earnings:$symbol", earningsToJson(info).toString())
+            out[symbol] = info
+        }
+        return out
+    }
+
+    private fun earningsToJson(e: com.aurum.invest.data.model.EarningsInfo): JSONObject =
+        JSONObject().apply {
+            put("symbol", e.symbol)
+            if (e.nextTs != null) put("next", e.nextTs)
+            put("est", e.estimate)
+            put("at", e.fetchedAt)
+        }
+
+    private fun earningsFromJson(s: String): com.aurum.invest.data.model.EarningsInfo? = try {
+        val o = JSONObject(s)
+        com.aurum.invest.data.model.EarningsInfo(
+            symbol = o.getString("symbol"),
+            nextTs = if (o.has("next")) o.getLong("next") else null,
+            estimate = o.optBoolean("est", false),
+            fetchedAt = o.optLong("at", 0L)
+        )
+    } catch (_: Exception) {
+        null
+    }
+
     /** Sectors for many symbols, concurrently; unknown symbols are simply absent. */
     suspend fun getSectors(symbols: List<String>): Map<String, String> {
         if (symbols.isEmpty()) return emptyMap()

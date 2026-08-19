@@ -51,6 +51,27 @@ data class BankEventEntity(
     val parsedJson: String? = null
 )
 
+/**
+ * One call an engine made, logged at its live price so it can be graded
+ * against what actually happened. Rows are never edited except to fill the
+ * forward outcomes, and never deleted — the record is the record.
+ * (Named engine_calls, NOT advice_log: v9-era files carry a dormant
+ * advice_log with a different shape, and Room must never collide with it.)
+ */
+@Entity(tableName = "engine_calls")
+data class EngineCallEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val ts: Long,
+    val kind: String,           // ADD / TRIM / EXIT / PICK
+    val symbol: String,
+    val refPrice: Double,       // the live price the call was made at
+    val note: String = "",
+    /** Percent move 5 sessions after the call; null until enough sessions pass. */
+    val fwd5Pct: Double? = null,
+    /** Percent move 20 sessions after the call; null until enough sessions pass. */
+    val fwd20Pct: Double? = null
+)
+
 @Entity(tableName = "weekly_picks")
 data class WeeklyPickEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

@@ -6,8 +6,10 @@ import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
 import com.aurum.invest.analytics.BookContext
 import com.aurum.invest.analytics.DeploymentPlan
+import com.aurum.invest.analytics.EngineRecordReport
 import com.aurum.invest.analytics.MarketRating
 import com.aurum.invest.analytics.NextSessionReport
+import com.aurum.invest.analytics.PerformanceReport
 import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.analytics.WealthReport
 import com.aurum.invest.analytics.WeeklyStrategy
@@ -49,6 +51,11 @@ data class WealthState(
     /** The next-session engine's measured picks with analog follow-through. */
     val nextSession: NextSessionReport? = null,
     val nextSessionLoading: Boolean = true,
+    /** The verdict: the user's ACTUAL trading measured against SPY. */
+    val performance: PerformanceReport? = null,
+    val performanceLoading: Boolean = true,
+    /** The engines' own graded call record. */
+    val record: EngineRecordReport? = null,
     /** True while a pull-to-refresh recompute is in flight. */
     val refreshing: Boolean = false
 )
@@ -65,6 +72,8 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
     private var deployJob: Job? = null
     private var reportJob: Job? = null
     private var nextSessionJob: Job? = null
+    private var performanceJob: Job? = null
+    private var recordJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -89,9 +98,11 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                 refreshStrategy()
                 refreshDeployment()
                 refreshReport()
+                refreshPerformance()
             }
         }
         refreshNextSession()
+        refreshRecord()
         // A wallet change (top-up, first setup) re-sizes everything at once.
         viewModelScope.launch {
             container.wallet.total.collectLatest {
@@ -113,6 +124,33 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
             _state.update {
                 it.copy(nextSession = ns ?: it.nextSession, nextSessionLoading = false)
             }
+        }
+    }
+
+    /**
+     * The verdict — cache-served while the ledger is unchanged; the cached
+     * fingerprint makes a new trade recompute it automatically.
+     */
+    private fun refreshPerformance(force: Boolean = false) {
+        performanceJob?.cancel()
+        performanceJob = viewModelScope.launch {
+            _state.update { it.copy(performanceLoading = true) }
+            val perf =
+                if (force) wealth.recomputePerformance(container.portfolio)
+                else wealth.getPerformance(container.portfolio)
+            _state.update {
+                it.copy(performance = perf ?: it.performance, performanceLoading = false)
+            }
+        }
+    }
+
+    /** Scores every call whose sessions have played out, then grades the record. */
+    private fun refreshRecord() {
+        recordJob?.cancel()
+        recordJob = viewModelScope.launch {
+            runCatching { container.record.scorePending() }
+            val record = runCatching { container.record.getRecord() }.getOrNull()
+            if (record != null) _state.update { it.copy(record = record) }
         }
     }
 
@@ -185,6 +223,8 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                 refreshDeployment()
                 refreshReport()
                 refreshNextSession(force = true)
+                refreshPerformance(force = true)
+                refreshRecord()
             } finally {
                 _state.update { it.copy(refreshing = false) }
             }

@@ -274,3 +274,17 @@ data class CandleFeed(
     val status: FeedStatus,
     val asOf: Long
 )
+
+/**
+ * The next earnings date Yahoo knows for a symbol. [nextTs] null means the
+ * lookup SUCCEEDED and no upcoming report is known (ETFs, funds) — a symbol
+ * whose lookup failed is simply absent from the map, never faked as
+ * earnings-free. [estimate] carries Yahoo's own isEarningsDateEstimate flag,
+ * shown to the user as "(est.)" rather than silently treated as confirmed.
+ */
+data class EarningsInfo(
+    val symbol: String,
+    val nextTs: Long?,
+    val estimate: Boolean,
+    val fetchedAt: Long
+)
