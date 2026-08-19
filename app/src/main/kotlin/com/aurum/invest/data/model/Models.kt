@@ -260,3 +260,17 @@ data class BankEvent(
         const val STATUS_DISMISSED = "DISMISSED"
     }
 }
+
+/**
+ * Provenance of a served feed. "No data", "stale data", and "fetch failed"
+ * are different answers and must never be conflated: an empty FRESH candle
+ * feed means verified-thin-history; an empty FAILED one means we don't know.
+ */
+enum class FeedStatus { FRESH, STALE, FAILED }
+
+/** Daily candles plus where they came from and when they were read. */
+data class CandleFeed(
+    val candles: List<Candle>,
+    val status: FeedStatus,
+    val asOf: Long
+)

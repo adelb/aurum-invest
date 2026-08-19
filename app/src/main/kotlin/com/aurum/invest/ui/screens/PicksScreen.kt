@@ -247,7 +247,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.dailyItems(
             item {
                 Text(
                     text = "Stocks the engine reads as capable of a 3-10%+ up-move today, " +
-                        "from momentum, volume, the 15 techniques, pre/post-market prints, and news.",
+                        "from momentum, volume, the 35 techniques, pre/post-market prints, and news.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
@@ -316,7 +316,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.powerItems(
                     text = "The 10 strongest candidates to buy in the last 90 minutes and hold " +
                         "into tomorrow: the whole market screened for names finishing near " +
                         "their daily high on hot volume after 4 strong trading days, confirmed " +
-                        "by the 15-technique board. Refresh inside the window for the live read.",
+                        "by the 35-technique board. Refresh inside the window for the live read.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
@@ -551,7 +551,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
                 Text(
                     text = "The 10 best entry prices on the market right now: hundreds of names " +
                         "from Yahoo's market-wide screens, kept only when the long trend is " +
-                        "intact, the price has pulled back toward support, and the 15-technique " +
+                        "intact, the price has pulled back toward support, and the 35-technique " +
                         "board does not read the dip as a falling knife.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim

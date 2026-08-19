@@ -56,6 +56,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.foundation.layout.fillMaxHeight
 import com.aurum.invest.analytics.AllocationSlice
 import com.aurum.invest.analytics.BookContext
+import com.aurum.invest.analytics.DeployLine
+import com.aurum.invest.analytics.DeploymentPlan
+import com.aurum.invest.analytics.LiquidityPlanner
+import com.aurum.invest.analytics.MarketPulse
+import com.aurum.invest.analytics.SectorDeployment
 import com.aurum.invest.analytics.GapStatus
 import com.aurum.invest.analytics.MarketCall
 import com.aurum.invest.analytics.MarketMover
@@ -70,7 +75,11 @@ import com.aurum.invest.analytics.WealthAllocation
 import com.aurum.invest.analytics.WealthPlan
 import com.aurum.invest.analytics.WeeklyStrategy
 import com.aurum.invest.core.Fmt
+import com.aurum.invest.ui.components.ActionBadge
 import com.aurum.invest.ui.components.AurumCard
+import com.aurum.invest.ui.components.DeltaMoney
+import com.aurum.invest.ui.components.InfoDot
+import com.aurum.invest.ui.components.Meanings
 import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.PillTag
@@ -105,7 +114,7 @@ fun WealthScreen(onOpenAnalysis: (String) -> Unit, onOpenDetail: (String) -> Uni
                     text = when {
                         state.editing -> "Your 4-month investment plan"
                         state.plan != null -> "Weekly plan · updated ${Fmt.timeAgo(state.plan!!.updatedAt)}"
-                        else -> "Your 4-month investment plan"
+                        else -> "Your portfolio, your liquidity, this week's market"
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = AurumColors.textDim
@@ -117,11 +126,11 @@ fun WealthScreen(onOpenAnalysis: (String) -> Unit, onOpenDetail: (String) -> Uni
                     color = AurumColors.gold,
                     strokeWidth = 2.dp
                 )
-            } else if (!state.editing && state.plan != null) {
+            } else if (!state.editing) {
                 IconButton(onClick = vm::startEditing) {
                     Icon(
                         Icons.Rounded.Edit,
-                        contentDescription = "Edit amounts",
+                        contentDescription = "Edit the 4-month goal",
                         tint = AurumColors.textDim
                     )
                 }
@@ -148,57 +157,10 @@ fun WealthScreen(onOpenAnalysis: (String) -> Unit, onOpenDetail: (String) -> Uni
                 SetupForm(
                     initialBase = state.baseAmount,
                     initialTarget = state.targetProfit,
-                    canCancel = state.plan != null,
+                    canCancel = true,
                     onCancel = vm::cancelEditing,
                     onSave = vm::save
                 )
-            }
-            state.computing && state.plan == null -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = AurumColors.gold)
-                        Spacer(Modifier.height(14.dp))
-                        Text(
-                            text = "Scanning sectors, techniques, news, and insider flow…",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = AurumColors.textDim
-                        )
-                    }
-                }
-            }
-            state.plan == null -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(horizontal = 32.dp)
-                    ) {
-                        Text(
-                            text = "Could not build the plan",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = AurumColors.text
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = "Market data was unreachable. Check the connection and try again.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = AurumColors.textDim
-                        )
-                        Spacer(Modifier.height(14.dp))
-                        Button(
-                            onClick = vm::refresh,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = AurumColors.gold,
-                                contentColor = AurumColors.bg
-                            )
-                        ) { Text("Retry") }
-                    }
-                }
             }
             else -> {
                 AurumRefreshBox(
@@ -206,14 +168,21 @@ fun WealthScreen(onOpenAnalysis: (String) -> Unit, onOpenDetail: (String) -> Uni
                     onRefresh = vm::refresh,
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    PlanContent(
-                        plan = state.plan!!,
+                    WealthContent(
+                        plan = state.plan,
                         pulse = state.pulse,
                         pulseLoading = state.pulseLoading,
                         book = state.book,
                         pulseSectors = state.pulseSectors,
                         strategy = state.strategy,
                         strategyLoading = state.strategyLoading,
+                        liquidity = state.liquidity,
+                        deployPlan = state.deployPlan,
+                        deployLoading = state.deployLoading,
+                        holdingReads = state.holdingReads,
+                        holdingsLoading = state.holdingsLoading,
+                        goalConfigured = state.baseAmount != null,
+                        onSetupGoal = vm::startEditing,
                         onOpenAnalysis = onOpenAnalysis,
                         onOpenDetail = onOpenDetail
                     )
@@ -268,7 +237,7 @@ private fun SetupForm(
                 Text(
                     text = "Tell Aurum how much you want to put to work and what profit you " +
                         "aim for over the next 4 months. Every week the plan re-reads the " +
-                        "market — trending sectors, the 15-technique board on every candidate, " +
+                        "market — trending sectors, the 35-technique board on every candidate, " +
                         "news, and insider flow — and tells you what to buy, for how much, " +
                         "and when to sell.",
                     style = MaterialTheme.typography.bodyMedium,
@@ -332,14 +301,21 @@ private fun SetupForm(
 // ---------------------------------------------------------------- plan view
 
 @Composable
-private fun PlanContent(
-    plan: WealthPlan,
+private fun WealthContent(
+    plan: WealthPlan?,
     pulse: MarketRating?,
     pulseLoading: Boolean,
     book: BookContext,
     pulseSectors: Map<String, String>,
     strategy: WeeklyStrategy?,
     strategyLoading: Boolean,
+    liquidity: Double?,
+    deployPlan: DeploymentPlan?,
+    deployLoading: Boolean,
+    holdingReads: List<HoldingRead>,
+    holdingsLoading: Boolean,
+    goalConfigured: Boolean,
+    onSetupGoal: () -> Unit,
     onOpenAnalysis: (String) -> Unit,
     onOpenDetail: (String) -> Unit
 ) {
@@ -363,6 +339,62 @@ private fun PlanContent(
         if (open("pulse")) {
             item { MarketPulseCard(pulse = pulse, loading = pulseLoading) }
         }
+
+        // Your portfolio — every holding read through the advice engine.
+        if (holdingReads.isNotEmpty() || holdingsLoading) {
+            item {
+                WealthSectionHeader(
+                    title = "Your portfolio — the evaluation",
+                    expanded = open("evaluation"),
+                    trailing = holdingReads
+                        .count { it.advice != null && it.advice.action != com.aurum.invest.data.model.AdviceAction.HOLD }
+                        .takeIf { it > 0 }?.let { "$it to act on" }
+                        ?: if (holdingReads.isNotEmpty()) "all clear" else null
+                ) { toggle("evaluation") }
+            }
+            if (open("evaluation")) {
+                if (holdingReads.isEmpty()) {
+                    item {
+                        AurumCard {
+                            Text(
+                                text = "Reading every holding against its own price history…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AurumColors.textDim
+                            )
+                        }
+                    }
+                } else {
+                    items(holdingReads.size) { i ->
+                        HoldingReadRow(
+                            read = holdingReads[i],
+                            onOpen = { onOpenDetail(holdingReads[i].view.position.symbol) },
+                            onAnalyze = { onOpenAnalysis(holdingReads[i].view.position.symbol) }
+                        )
+                    }
+                }
+            }
+        }
+
+        // Your liquidity — the management answer: sectors, stocks, dollars.
+        item {
+            WealthSectionHeader(
+                title = "Your liquidity — where to deploy it",
+                expanded = open("deploy"),
+                trailing = liquidity?.let { Fmt.money(it.coerceAtLeast(0.0)) }
+            ) { toggle("deploy") }
+        }
+        if (open("deploy")) {
+            item {
+                DeploymentCard(
+                    plan = deployPlan,
+                    loading = deployLoading,
+                    liquidity = liquidity,
+                    onOpenAnalysis = onOpenAnalysis,
+                    onOpenDetail = onOpenDetail
+                )
+            }
+        }
+
         if (!book.isEmpty) {
             item {
                 WealthSectionHeader(
@@ -451,50 +483,58 @@ private fun PlanContent(
                 }
             }
         }
-        item {
-            WealthSectionHeader("The goal", open("goal")) { toggle("goal") }
-        }
-        if (open("goal")) {
-            item { GoalCard(plan) }
-        }
-        item {
-            WealthSectionHeader("This week's market trend", open("trend")) { toggle("trend") }
-        }
-        if (open("trend")) {
-            item { SectorCard(plan, onOpenAnalysis) }
-        }
-
-        item {
-            WealthSectionHeader("This week's allocation", open("alloc")) { toggle("alloc") }
-        }
-        if (open("alloc")) {
-            items(plan.allocations.size) { i ->
-                AllocationCard(
-                    allocation = plan.allocations[i],
-                    onOpenAnalysis = onOpenAnalysis,
-                    onOpenDetail = onOpenDetail
-                )
-            }
-            item { TotalsCard(plan) }
-            item { ActionsCard(plan) }
-        }
-        if (plan.marketNotes.isNotEmpty()) {
+        if (plan != null) {
             item {
-                WealthSectionHeader("Insider & big-money flow", open("insider")) { toggle("insider") }
+                WealthSectionHeader("The goal", open("goal")) { toggle("goal") }
             }
-            if (open("insider")) {
-                item { NewsCard(plan, onOpen = { url ->
-                    try {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                    } catch (_: Exception) {
-                        // no browser — ignore
-                    }
-                }) }
+            if (open("goal")) {
+                item { GoalCard(plan) }
             }
+            item {
+                WealthSectionHeader("This week's market trend", open("trend")) { toggle("trend") }
+            }
+            if (open("trend")) {
+                item { SectorCard(plan, onOpenAnalysis) }
+            }
+
+            item {
+                WealthSectionHeader("This week's allocation", open("alloc")) { toggle("alloc") }
+            }
+            if (open("alloc")) {
+                items(plan.allocations.size) { i ->
+                    AllocationCard(
+                        allocation = plan.allocations[i],
+                        onOpenAnalysis = onOpenAnalysis,
+                        onOpenDetail = onOpenDetail
+                    )
+                }
+                item { TotalsCard(plan) }
+                item { ActionsCard(plan) }
+            }
+            if (plan.marketNotes.isNotEmpty()) {
+                item {
+                    WealthSectionHeader("Insider & big-money flow", open("insider")) { toggle("insider") }
+                }
+                if (open("insider")) {
+                    item { NewsCard(plan, onOpen = { url ->
+                        try {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        } catch (_: Exception) {
+                            // no browser — ignore
+                        }
+                    }) }
+                }
+            }
+        } else if (!goalConfigured) {
+            item { GoalOfferCard(onSetup = onSetupGoal) }
         }
         item {
             Text(
-                text = plan.caveat,
+                text = plan?.caveat ?: (
+                    deployPlan?.caveat
+                        ?: "Every number on this screen is computed from live market data and " +
+                            "the 35-technique board — decision support, not financial advice."
+                ),
                 style = MaterialTheme.typography.labelSmall,
                 color = AurumColors.textDim,
                 modifier = Modifier.padding(horizontal = 4.dp)
@@ -568,22 +608,26 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
                     strokeWidth = 2.dp
                 )
             } else if (pulse != null) {
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
-                        text = "${pulse.score}",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = when (pulse.call) {
-                            MarketCall.INVEST -> AurumColors.gain
-                            MarketCall.SELECTIVE -> AurumColors.gold
-                            MarketCall.DEFENSIVE -> AurumColors.loss
-                        }
-                    )
-                    Text(
-                        text = " /100",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.textDim
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(
+                            text = "${pulse.score}",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = when (pulse.call) {
+                                MarketCall.INVEST -> AurumColors.gain
+                                MarketCall.SELECTIVE -> AurumColors.gold
+                                MarketCall.DEFENSIVE -> AurumColors.loss
+                            }
+                        )
+                        Text(
+                            text = " /100",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = AurumColors.textDim
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    InfoDot(title = "Market pulse score", explanation = Meanings.PULSE_SCORE)
                 }
             }
         }
@@ -622,6 +666,11 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
             style = MaterialTheme.typography.bodyMedium,
             color = AurumColors.textDim
         )
+
+        // The VIX index — the market's own 30-day swing forecast, first-class
+        // rather than buried in the reasons list.
+        Spacer(Modifier.height(12.dp))
+        VixBlock(vix = pulse.vix, change5d = pulse.vixChange5d)
 
         if (pulse.reasons.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
@@ -680,8 +729,8 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
  * allocation card and the Picks tags use, so the numbers agree everywhere.
  */
 @Composable
-private fun BookCard(book: BookContext, plan: WealthPlan) {
-    val trending = plan.topSectors.firstOrNull()
+private fun BookCard(book: BookContext, plan: WealthPlan?) {
+    val trending = plan?.topSectors?.firstOrNull()
     val notes = PortfolioLens.exposureNotes(book, trending?.key, trending?.label)
     AurumCard {
         Row(
@@ -1252,7 +1301,7 @@ private fun SectorCard(plan: WealthPlan, onOpenAnalysis: (String) -> Unit) {
         plan.topSectors.forEach { s -> SectorRow(s, onOpenAnalysis) }
         Spacer(Modifier.height(6.dp))
         Text(
-            text = "Tap a ticker for its 15-technique analysis.",
+            text = "Tap a ticker for its 35-technique analysis.",
             style = MaterialTheme.typography.labelSmall,
             color = AurumColors.textDim
         )
@@ -1434,7 +1483,7 @@ private fun AllocationCard(
             )
             Spacer(Modifier.width(6.dp))
             Text(
-                text = "15-technique analysis",
+                text = "35-technique analysis",
                 style = MaterialTheme.typography.labelMedium,
                 color = AurumColors.gold
             )
@@ -1552,5 +1601,420 @@ private fun NewsCard(plan: WealthPlan, onOpen: (String) -> Unit) {
                 }
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------- v10 additions
+
+/**
+ * The VIX index row of the market pulse: level, volatility regime, 5-session
+ * drift, and the explain dot. An unreachable read says so — no level is ever
+ * invented for it.
+ */
+@Composable
+private fun VixBlock(vix: Double?, change5d: Double?) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "VIX — expected 30-day swings",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = AurumColors.textDim
+                )
+                Spacer(Modifier.width(6.dp))
+                InfoDot(title = "The VIX index", explanation = Meanings.VIX)
+            }
+            Spacer(Modifier.height(2.dp))
+            if (vix == null) {
+                Text(
+                    text = "Unavailable this run — the volatility read could not be measured.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            } else {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        text = String.format(java.util.Locale.US, "%.1f", vix),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = when {
+                            vix < 20.0 -> AurumColors.gain
+                            vix < 25.0 -> AurumColors.gold
+                            else -> AurumColors.loss
+                        }
+                    )
+                    if (change5d != null) {
+                        Text(
+                            text = String.format(
+                                java.util.Locale.US, "  %s%.1f pts · 5 days",
+                                if (change5d >= 0) "+" else "", change5d
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            // A RISING vix is the adverse direction — color by
+                            // meaning, not by sign.
+                            color = when {
+                                change5d <= -0.05 -> AurumColors.gain
+                                change5d >= 0.05 -> AurumColors.loss
+                                else -> AurumColors.textDim
+                            },
+                            modifier = Modifier.padding(bottom = 3.dp)
+                        )
+                    }
+                }
+            }
+        }
+        if (vix != null) {
+            PillTag(
+                text = MarketPulse.vixRegime(vix),
+                color = when {
+                    vix < 20.0 -> AurumColors.gain
+                    vix < 25.0 -> AurumColors.gold
+                    else -> AurumColors.loss
+                }
+            )
+        }
+    }
+}
+
+/**
+ * One holding of the portfolio evaluation: what it is worth, how it stands
+ * against the money put in, and the advice engine's verdict with its numbers.
+ */
+@Composable
+private fun HoldingReadRow(
+    read: HoldingRead,
+    onOpen: () -> Unit,
+    onAnalyze: () -> Unit
+) {
+    val view = read.view
+    val advice = read.advice
+    AurumCard {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.clickable { onOpen() }
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = view.position.symbol,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text
+                )
+                Text(
+                    text = "${Fmt.qty(view.position.shares)} sh · avg ${Fmt.money(view.position.avgCost)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = Fmt.money(view.marketValue),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    DeltaMoney(value = view.unrealizedPl, style = MaterialTheme.typography.labelSmall)
+                    Text(
+                        text = "  ·  ",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                    DeltaPct(value = view.unrealizedPlPct, style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+        if (advice != null) {
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ActionBadge(action = advice.action)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = advice.headline,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.text,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            advice.reasons.take(2).forEach { r ->
+                Row(modifier = Modifier.padding(top = 4.dp)) {
+                    Text(
+                        text = "•  ",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.gold
+                    )
+                    Text(
+                        text = r,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            val targets = buildList {
+                advice.targetPrice?.let { add("target " + Fmt.money(it)) }
+                advice.stopLoss?.let { add("stop " + Fmt.money(it)) }
+            }
+            if (targets.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = targets.joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.gold
+                )
+            }
+        } else {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "No live read for this holding this run — nothing is guessed.",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.clickable { onAnalyze() }
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.QueryStats,
+                contentDescription = null,
+                tint = AurumColors.gold,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "Full 35-technique analysis",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.gold
+            )
+        }
+    }
+}
+
+/**
+ * The liquidity-management card: how much of the wallet's uninvested cash to
+ * deploy, into which sectors, into which stocks, and how much into each —
+ * with the reserve and its reason said out loud.
+ */
+@Composable
+private fun DeploymentCard(
+    plan: DeploymentPlan?,
+    loading: Boolean,
+    liquidity: Double?,
+    onOpenAnalysis: (String) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
+    AurumCard {
+        if (liquidity == null) {
+            Text(
+                text = "Set your total wallet on the Dashboard and Aurum derives your real " +
+                    "uninvested cash — then this card says how much to deploy, into which " +
+                    "sectors, and into which stocks.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+            return@AurumCard
+        }
+        if (plan == null) {
+            Text(
+                text = if (loading) "Sizing your liquidity against the week's sector scan…"
+                else "The deployment plan needs market data. Pull down to retry.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+            return@AurumCard
+        }
+        Text(
+            text = plan.headline,
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "Updated ${Fmt.timeAgo(plan.computedAt)} · liquidity ${Fmt.money(plan.liquidity)}" +
+                if (plan.marketNote.isNotBlank()) " · ${plan.marketNote}" else "",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+        plan.sectors.forEach { sector ->
+            Spacer(Modifier.height(12.dp))
+            SectorDeployGroup(sector, onOpenAnalysis, onOpenDetail)
+        }
+        if (plan.reserve > 0.0) {
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StatTile(label = "Reserve cash", value = Fmt.money(plan.reserve))
+                Spacer(Modifier.width(8.dp))
+                InfoDot(title = "Reserve cash", explanation = Meanings.RESERVE_CASH)
+            }
+            if (plan.reserveReason.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = plan.reserveReason,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = plan.policyNote,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+    }
+}
+
+/** One sector's slice: verdict on coverage, its dollars, and its named stocks. */
+@Composable
+private fun SectorDeployGroup(
+    sector: SectorDeployment,
+    onOpenAnalysis: (String) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = sector.label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "${sector.lines.size} stock${if (sector.lines.size == 1) "" else "s"} · " +
+                            Fmt.money(sector.amount) +
+                            " · ${Fmt.pct(sector.heldPct)} held → ${Fmt.pct(sector.targetPct)} target",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.gold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    InfoDot(title = "Sector target", explanation = Meanings.SECTOR_TARGET)
+                }
+            }
+            when (sector.status) {
+                GapStatus.MISSING -> PillTag(text = "Missing", color = AurumColors.loss)
+                GapStatus.UNDER -> PillTag(text = "Light", color = AurumColors.gold)
+                GapStatus.COVERED -> PillTag(text = "Covered", color = AurumColors.gain)
+                GapStatus.OVER -> PillTag(text = "Heavy", color = AurumColors.textDim)
+            }
+        }
+        sector.lines.forEach { line ->
+            Spacer(Modifier.height(8.dp))
+            DeployLineRow(line, onOpenAnalysis, onOpenDetail)
+        }
+    }
+}
+
+@Composable
+private fun DeployLineRow(
+    line: DeployLine,
+    onOpenAnalysis: (String) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
+    Column(modifier = Modifier.clickable { onOpenDetail(line.symbol) }) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "#${line.rank}  ${line.symbol} · ${line.name}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "~${Fmt.qty(line.approxShares)} sh at ${Fmt.money(line.price)} · " +
+                        "entry ≈ ${Fmt.money(line.entry)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = Fmt.money(line.amount),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.gold
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "${line.conviction}/100 conviction",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    InfoDot(title = "Conviction", explanation = Meanings.CONVICTION)
+                }
+            }
+        }
+        line.rationale.take(2).forEach { r ->
+            Row(modifier = Modifier.padding(top = 2.dp)) {
+                Text(
+                    text = "•  ",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.gold
+                )
+                Text(
+                    text = r,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .padding(top = 4.dp)
+                .clickable { onOpenAnalysis(line.symbol) }
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.QueryStats,
+                contentDescription = null,
+                tint = AurumColors.gold,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "Full analysis",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.gold
+            )
+        }
+    }
+}
+
+/** Offered, never forced: the 4-month goal plan is one tap away. */
+@Composable
+private fun GoalOfferCard(onSetup: () -> Unit) {
+    AurumCard {
+        Text(
+            text = "Want a 4-month plan on top?",
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "Set a base amount and a profit target, and every week Aurum rebuilds a " +
+                "concrete buy list against them — sectors, stocks, dollars, entries, and exits.",
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+        Spacer(Modifier.height(10.dp))
+        Button(
+            onClick = onSetup,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = AurumColors.gold,
+                contentColor = AurumColors.bg
+            )
+        ) { Text("Set the goal") }
     }
 }

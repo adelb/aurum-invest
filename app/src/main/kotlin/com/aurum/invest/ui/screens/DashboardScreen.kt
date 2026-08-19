@@ -68,7 +68,9 @@ import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.PortfolioSummary
 import com.aurum.invest.data.repo.TargetsRepository
+import com.aurum.invest.data.repo.WalletState
 import com.aurum.invest.ui.components.ActionBadge
+import com.aurum.invest.ui.components.AnimatedMoney
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.DeltaMoney
@@ -76,6 +78,7 @@ import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.EmptyState
 import com.aurum.invest.ui.components.ExtHoursChips
 import com.aurum.invest.ui.components.GoldGradientText
+import com.aurum.invest.ui.components.InfoDot
 import com.aurum.invest.ui.components.PillTag
 import com.aurum.invest.ui.components.SectionHeader
 import com.aurum.invest.ui.components.Sparkline
@@ -94,6 +97,18 @@ fun DashboardScreen(
     val state by vm.state.collectAsStateWithLifecycle()
     var confirmRemove by remember { mutableStateOf<String?>(null) }
     var targetFor by remember { mutableStateOf<HoldingRow?>(null) }
+    var showWalletDialog by remember { mutableStateOf(false) }
+
+    if (showWalletDialog) {
+        WalletSetupDialog(
+            current = state.wallet.total,
+            onDismiss = { showWalletDialog = false },
+            onSave = { amount ->
+                vm.setWalletTotal(amount)
+                showWalletDialog = false
+            }
+        )
+    }
 
     targetFor?.let { row ->
         SellTargetDialog(
@@ -159,12 +174,23 @@ fun DashboardScreen(
 
                 item {
                     Spacer(Modifier.height(20.dp))
-                    HeroSummary(summary = state.summary)
+                    HeroSummary(summary = state.summary, wallet = state.wallet)
                 }
 
                 item {
                     Spacer(Modifier.height(20.dp))
                     SummaryTiles(summary = state.summary)
+                    TextButton(onClick = { showWalletDialog = true }) {
+                        Text(
+                            text = if (state.wallet.configured) {
+                                "Edit total wallet"
+                            } else {
+                                "Set your total wallet"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = AurumColors.gold
+                        )
+                    }
                 }
 
                 if (state.holdings.size >= 2) {
@@ -453,19 +479,24 @@ private fun HeaderRow(
 }
 
 @Composable
-private fun HeroSummary(summary: PortfolioSummary?) {
+private fun HeroSummary(summary: PortfolioSummary?, wallet: WalletState = WalletState.UNSET) {
     val s = summary ?: PortfolioSummary(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     Column(modifier = Modifier.fillMaxWidth().animateContentSize()) {
         Text(
-            text = "Total value",
+            // "Holdings value", not "Total value": uninvested cash is its own
+            // line below — the sum of open positions must never masquerade as
+            // account equity.
+            text = "Holdings value",
             style = MaterialTheme.typography.labelMedium,
             color = AurumColors.textDim
         )
         Spacer(Modifier.height(4.dp))
-        Text(
-            text = Fmt.money(s.marketValue),
+        // Rolls per digit and flashes by direction as the prices re-price the
+        // book — only the places that changed move.
+        AnimatedMoney(
+            value = s.marketValue,
             style = MaterialTheme.typography.displayLarge,
-            color = AurumColors.text
+            baseColor = AurumColors.text
         )
         Spacer(Modifier.height(4.dp))
         // The headline delta: how the holdings stand AGAINST THE MONEY PUT IN
@@ -500,6 +531,100 @@ private fun HeroSummary(summary: PortfolioSummary?) {
                 color = AurumColors.textDim
             )
         }
+        if (wallet.configured) {
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                WalletStat(label = "Wallet", value = wallet.total, modifier = Modifier.weight(1f))
+                WalletStat(label = "Invested", value = wallet.invested, modifier = Modifier.weight(1f))
+                WalletStat(
+                    label = "Liquidity",
+                    value = wallet.liquidity,
+                    modifier = Modifier.weight(1f),
+                    valueColor = if (wallet.shortfall) AurumColors.loss else AurumColors.text
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            // The second row closes the loop: what the sells booked, the
+            // accumulated P/L, and what the wallet is actually worth today.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                WalletStat(
+                    label = "Realized",
+                    value = wallet.realizedPl,
+                    modifier = Modifier.weight(1f),
+                    signed = true
+                )
+                WalletStat(
+                    label = "Total P/L",
+                    value = wallet.totalPl,
+                    modifier = Modifier.weight(1f),
+                    signed = true
+                )
+                WalletStat(label = "Net worth", value = wallet.netWorth, modifier = Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(4.dp))
+            // Says out loud how the three cash figures relate, so a sell that
+            // moves liquidity is never mistaken for a number drifting on its own.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Liquidity = wallet − invested + realized · " +
+                        "net worth = liquidity + holdings",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+                Spacer(Modifier.width(6.dp))
+                InfoDot(
+                    title = "The wallet identity",
+                    explanation = "You state one number — the total cash you committed to " +
+                        "investing. Aurum reads what is deployed (invested cost) and what " +
+                        "your sells have booked (realized P/L) from the ledger, and derives " +
+                        "liquidity = wallet − invested + realized. A sell returns its cost " +
+                        "basis AND its profit to liquidity. Net worth is liquidity plus " +
+                        "what the holdings are worth right now. Change the wallet total " +
+                        "only when you actually add or withdraw money."
+                )
+            }
+            if (wallet.shortfall) {
+                Text(
+                    text = "Your ledger has ${Fmt.moneyExact(-wallet.liquidity)} more deployed than " +
+                        "the stated wallet covers — raise the total if you've added money.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.gold
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WalletStat(
+    label: String,
+    value: Double,
+    modifier: Modifier = Modifier,
+    signed: Boolean = false,
+    valueColor: androidx.compose.ui.graphics.Color = AurumColors.text
+) {
+    Column(modifier = modifier) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim,
+            maxLines = 1
+        )
+        // Exact cents (rounding $25,477.30 to "$25,477" hides money the user
+        // has), and animated so a figure moved by the live prices announces
+        // itself instead of silently differing from a second ago.
+        AnimatedMoney(
+            value = value,
+            style = MaterialTheme.typography.bodyMedium,
+            baseColor = if (signed) AurumColors.deltaColor(value) else valueColor,
+            signed = signed
+        )
     }
 }
 
@@ -822,6 +947,63 @@ private fun SellTargetDialog(
                     Text("Cancel", color = AurumColors.textDim)
                 }
             }
+        }
+    )
+}
+
+@Composable
+private fun WalletSetupDialog(
+    current: Double,
+    onDismiss: () -> Unit,
+    onSave: (Double) -> Unit
+) {
+    var amountText by remember {
+        mutableStateOf(if (current > 0.0) Fmt.money(current).filter { it.isDigit() || it == '.' } else "")
+    }
+    val amount = amountText.replace(",", "").trim().toDoubleOrNull()
+    val valid = amount != null && amount > 0.0
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = AurumColors.surface,
+        titleContentColor = AurumColors.text,
+        textContentColor = AurumColors.textDim,
+        title = { Text("Set your total wallet") },
+        text = {
+            Column {
+                Text(
+                    text = "Enter the money you put in for investing — the capital itself, " +
+                        "before any profit. Aurum reads what's invested from your ledger, " +
+                        "and every sell returns its cost plus the P/L it booked to your " +
+                        "liquidity. Only change this when you actually add or withdraw cash.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = amountText,
+                    onValueChange = { amountText = it },
+                    label = { Text("Total wallet ($)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { if (amount != null) onSave(amount) },
+                enabled = valid,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AurumColors.gold,
+                    contentColor = AurumColors.bg,
+                    disabledContainerColor = AurumColors.surfaceHigh,
+                    disabledContentColor = AurumColors.textDim
+                )
+            ) { Text("Save") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel", color = AurumColors.textDim) }
         }
     )
 }

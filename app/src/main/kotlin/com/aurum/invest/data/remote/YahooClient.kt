@@ -110,7 +110,10 @@ class YahooClient {
                     rangeDays <= 30 -> "1mo"
                     rangeDays <= 95 -> "3mo"
                     rangeDays <= 190 -> "6mo"
-                    else -> "1y"
+                    rangeDays <= 400 -> "1y"
+                    // The technique-trust replay needs a year of graded days
+                    // PLUS indicator warm-up before each one.
+                    else -> "2y"
                 }
                 val root = getJson(chartUrl(symbol, range = range, interval = "1d"))
                     ?: return@withContext emptyList()

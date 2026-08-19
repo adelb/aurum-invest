@@ -29,7 +29,8 @@ class WealthRepository(
 
     companion object {
         private const val PLAN_KEY = "wealthplan"
-        private const val PULSE_KEY = "marketpulse"
+        // v2: the VIX read gained its 5-session drift.
+        private const val PULSE_KEY = "marketpulse:v2"
     }
 
     /** (base, target) or null when the user has not set the inputs yet. */
@@ -136,6 +137,34 @@ class WealthRepository(
         } catch (_: Exception) {
             null
         }
+
+    // ---- liquidity deployment ----------------------------------------------
+
+    /**
+     * The liquidity-management answer for THIS wallet and THIS book: how much
+     * of the uninvested cash to deploy, into which trendy sectors, into which
+     * stocks, and how much into each — sized under the investor's own caps.
+     * Pure math over the cached strategy scan; null only when even the scan
+     * could not be attempted.
+     */
+    suspend fun getDeploymentPlan(
+        liquidity: Double,
+        book: BookContext
+    ): com.aurum.invest.analytics.DeploymentPlan? = try {
+        val strategy = getStrategy(book, liquidity)
+        val profile = runCatching { settings.investorProfile.first() }
+            .getOrDefault(InvestorProfile.DEFAULT)
+        val marketNote = runCatching { getMarketPulse() }.getOrNull()?.headline ?: ""
+        com.aurum.invest.analytics.LiquidityPlanner.build(
+            liquidity = liquidity,
+            book = book,
+            strategy = strategy,
+            profile = profile,
+            marketNote = marketNote
+        )
+    } catch (_: Exception) {
+        null
+    }
 
     /** Recomputes the market rating from live data and stores it. */
     suspend fun recomputeMarketPulse(): MarketRating? {

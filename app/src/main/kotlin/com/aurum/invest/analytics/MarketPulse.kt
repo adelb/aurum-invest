@@ -63,6 +63,8 @@ data class MarketRating(
     val advancersPct: Double,           // % of scanned names green in the last session
     val scannedCount: Int,              // how many liquid names the breadth used
     val vix: Double?,                   // null when the volatility read failed
+    /** VIX now minus its close 5 sessions ago, in points; null when history was short. */
+    val vixChange5d: Double? = null,
     val indexes: List<IndexRead>,
     val bestYesterday: List<MarketMover>,
     val nextDay: List<TomorrowPick>
@@ -82,7 +84,7 @@ data class MarketRating(
  * Score >= 60 -> INVEST, >= 42 -> SELECTIVE, else DEFENSIVE. Alongside the
  * verdict it collects the last session's best performers (liquidity-gated so
  * a halted micro-cap spike can't rank) and scans for names positioned for the
- * next session, each confirmed by the 15-technique board with an honest
+ * next session, each confirmed by the 35-technique board with an honest
  * ATR-based range. Never throws — null on total failure.
  */
 class MarketPulse(private val market: MarketRepository) {
@@ -94,6 +96,20 @@ class MarketPulse(private val market: MarketRepository) {
             "IWM" to "Russell 2000"
         )
         private const val VIX_SYMBOL = "^VIX"
+
+        /**
+         * The volatility regime a VIX level sits in — the same bands the
+         * score's vixPoints uses, so the label on screen and the points in
+         * the score can never tell different stories.
+         */
+        fun vixRegime(vix: Double): String = when {
+            vix < 14.0 -> "Very calm"
+            vix < 17.0 -> "Calm"
+            vix < 20.0 -> "Normal"
+            vix < 25.0 -> "Elevated"
+            vix < 30.0 -> "Stressed"
+            else -> "Fear regime"
+        }
         private const val SHORTLIST = 18
         private const val CANDLE_CHUNK = 6
 
@@ -109,6 +125,7 @@ class MarketPulse(private val market: MarketRepository) {
             put("advancers", r.advancersPct)
             put("scanned", r.scannedCount)
             if (r.vix != null) put("vix", r.vix)
+            if (r.vixChange5d != null) put("vix5d", r.vixChange5d)
             put("indexes", JSONArray().apply {
                 r.indexes.forEach { ix ->
                     put(JSONObject().apply {
@@ -222,6 +239,7 @@ class MarketPulse(private val market: MarketRepository) {
                 advancersPct = o.optDouble("advancers", 50.0),
                 scannedCount = o.optInt("scanned", 0),
                 vix = if (o.has("vix")) o.getDouble("vix") else null,
+                vixChange5d = if (o.has("vix5d")) o.getDouble("vix5d") else null,
                 indexes = indexes,
                 bestYesterday = best,
                 nextDay = next
@@ -233,18 +251,13 @@ class MarketPulse(private val market: MarketRepository) {
 
     suspend fun compute(dateIso: String): MarketRating? {
         return try {
-            val (indexes, vix, pool) = coroutineScope {
+            val (indexes, vixRead, pool) = coroutineScope {
                 val indexD = INDEXES.map { (sym, name) -> async { indexRead(sym, name) } }
-                val vixD = async {
-                    try {
-                        market.getQuote(VIX_SYMBOL)?.price?.takeIf { it > 0.0 }
-                    } catch (_: Exception) {
-                        null
-                    }
-                }
+                val vixD = async { vixRead() }
                 val poolD = async { screenerPool() }
                 Triple(indexD.awaitAll().filterNotNull(), vixD.await(), poolD.await())
             }
+            val (vix, vixChange5d) = vixRead
             if (indexes.isEmpty() && pool.isEmpty()) return null
 
             // Breadth + participation across the scanned liquid names.
@@ -299,6 +312,7 @@ class MarketPulse(private val market: MarketRepository) {
                 advancersPct = round1(advancers),
                 scannedCount = measurable.size,
                 vix = vix?.let { round1(it) },
+                vixChange5d = vixChange5d?.let { round1(it) },
                 indexes = indexes,
                 bestYesterday = best,
                 nextDay = next
@@ -346,6 +360,28 @@ class MarketPulse(private val market: MarketRepository) {
             weightSum += w
         }
         return if (weightSum > 0.0) total / weightSum * 40.0 else 20.0
+    }
+
+    /**
+     * The volatility read: spot VIX plus its move over the last 5 sessions.
+     * Daily candles carry both; the live quote, when it serves, refines the
+     * spot. Either half that cannot be measured is null, never defaulted.
+     */
+    private suspend fun vixRead(): Pair<Double?, Double?> {
+        val closes = try {
+            market.getDailyCandles(VIX_SYMBOL, 30).map { it.close }.filter { it > 0.0 }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val quote = try {
+            market.getQuote(VIX_SYMBOL)?.price?.takeIf { it > 0.0 }
+        } catch (_: Exception) {
+            null
+        }
+        val spot = quote ?: closes.lastOrNull()
+        val fiveAgo = if (closes.size >= 6) closes[closes.size - 6] else null
+        val change = if (spot != null && fiveAgo != null) spot - fiveAgo else null
+        return spot to change
     }
 
     private fun vixPoints(vix: Double?): Double = when {
@@ -458,7 +494,7 @@ class MarketPulse(private val market: MarketRepository) {
     /**
      * Names positioned for the next session: strong-but-not-blow-off day,
      * closing near the high, above the 50-day, volume running hot — then the
-     * ~18 best are confirmed against RSI, ATR and the 15-technique board.
+     * ~18 best are confirmed against RSI, ATR and the 35-technique board.
      */
     private suspend fun tomorrowPicks(pool: List<ScreenerQuote>): List<TomorrowPick> {
         val shortlist = pool.asSequence()

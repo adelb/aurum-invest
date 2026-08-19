@@ -10,6 +10,7 @@ import com.aurum.invest.data.repo.PicksRepository
 import com.aurum.invest.data.repo.PortfolioRepository
 import com.aurum.invest.data.repo.SettingsRepository
 import com.aurum.invest.data.repo.TargetsRepository
+import com.aurum.invest.data.repo.WalletRepository
 import com.aurum.invest.data.repo.WatchRepository
 import com.aurum.invest.data.repo.WealthRepository
 import com.aurum.invest.work.Schedules
@@ -38,6 +39,7 @@ class AppContainer(app: Application) {
     val yahoo = YahooClient()
     val market = MarketRepository(yahoo, db.cacheDao())
     val portfolio = PortfolioRepository(db.transactionDao())
+    val wallet = WalletRepository(app, portfolio)
     val watch = WatchRepository(db.watchDao())
     val news = NewsRepository(db.cacheDao())
     val picks = PicksRepository(db.picksDao(), market, db.cacheDao(), news)

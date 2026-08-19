@@ -14,6 +14,7 @@ import com.aurum.invest.data.model.PortfolioSummary
 import com.aurum.invest.data.model.Position
 import com.aurum.invest.data.model.PositionView
 import com.aurum.invest.data.repo.PortfolioRepository
+import com.aurum.invest.data.repo.WalletState
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -65,7 +67,13 @@ data class DashboardState(
     val summary: PortfolioSummary? = null,
     val holdings: List<HoldingRow> = emptyList(),
     /** The book sliced by sector — shared math with Picks and Wealth. */
-    val book: BookContext = BookContext.EMPTY
+    val book: BookContext = BookContext.EMPTY,
+    /**
+     * The derived wallet: the user's stated total plus what the ledger shows
+     * as invested and booked — liquidity = total − invested + realized P/L,
+     * computed in exactly one place ([WalletState.liquidityOf]).
+     */
+    val wallet: WalletState = WalletState.UNSET
 )
 
 class DashboardViewModel(app: Application) : AndroidViewModel(app) {
@@ -90,6 +98,23 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                         _state.update { it.copy(loading = false) }
                     }
                 }
+        }
+        // The wallet inputs live in their own store — a top-up must re-derive
+        // liquidity immediately, without waiting for a ledger change.
+        viewModelScope.launch {
+            combine(container.wallet.total, container.wallet.configured) { t, c -> t to c }
+                .collectLatest { (total, configured) ->
+                    _state.update {
+                        it.copy(wallet = WalletState.of(total, configured, it.summary))
+                    }
+                }
+        }
+    }
+
+    /** Stores the user's stated total investing cash; everything else derives. */
+    fun setWalletTotal(amount: Double) {
+        viewModelScope.launch {
+            runCatching { container.wallet.setTotal(amount) }
         }
     }
 
@@ -200,11 +225,17 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
             rowsList to sectorsD.await()
         }
 
+        val walletState = WalletState.of(
+            total = runCatching { container.wallet.total.first() }.getOrDefault(0.0),
+            configured = runCatching { container.wallet.configured.first() }.getOrDefault(false),
+            summary = summary
+        )
         _state.value = DashboardState(
             loading = false,
             summary = summary,
             holdings = rows.sortedByDescending { it.view.marketValue },
-            book = PortfolioLens.build(openViews, sectors)
+            book = PortfolioLens.build(openViews, sectors),
+            wallet = walletState
         )
     }
 }

@@ -22,7 +22,7 @@ import org.json.JSONObject
  * the 4-month target, the stop, the expected profit, and when to buy and sell.
  *
  * Every number is derived from real analysis, honestly:
- *  - the 15-technique board votes on every candidate (bearish boards are out)
+ *  - the 35-technique board votes on every candidate (bearish boards are out)
  *  - this week's trending sectors (via ETF momentum + news tone) boost their members
  *  - news sentiment and insider/institutional headlines adjust conviction
  *  - expected 4-month moves extrapolate observed 20/60-day momentum with decay,
@@ -299,7 +299,7 @@ class WealthPlanner(
             }
             if (screened.isEmpty()) return null
 
-            // 4 — deep read of the finalists with the 15-technique board + news.
+            // 4 — deep read of the finalists with the 35-technique board + news.
             val finalists = screened.sortedByDescending { it.raw }.take(FINALISTS)
             val deep = ArrayList<Deep>()
             for (chunk in finalists.chunked(DEEP_CHUNK)) {
@@ -369,7 +369,7 @@ class WealthPlanner(
                 gapNote = gapNote,
                 weeklyActions = weeklyActions(cashReserve),
                 marketNotes = marketNotes,
-                caveat = "Recomputed every week from live prices, the 15-technique board, sector " +
+                caveat = "Recomputed every week from live prices, the 35-technique board, sector " +
                     "momentum, and public news. Expected profits are momentum extrapolations, " +
                     "not promises — decision support, not financial advice."
             )
@@ -632,7 +632,7 @@ class WealthPlanner(
 
     private fun weeklyActions(cashReserve: Double): List<String> = listOf(
         "Place the buys above and set price alerts at every stop and every target.",
-        "Re-open Wealth each Monday: the plan re-reads sectors, the 15-technique board, news, " +
+        "Re-open Wealth each Monday: the plan re-reads sectors, the 35-technique board, news, " +
             "and insider flow, then re-ranks the allocation.",
         "If a position closes below its stop, sell it — the next weekly scan redeploys the cash.",
         "If a position hits half its 4-month target inside the first month, take a third off the table.",

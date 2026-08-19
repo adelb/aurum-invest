@@ -53,4 +53,92 @@ class SettingsRepository(private val context: Context) {
             it[keyWealthTarget] = target
         }
     }
+    // ---- Investor profile (suitability layer) -------------------------------
+
+    private val keyProfileSet = booleanPreferencesKey("profile_set")
+    private val keyHorizon = stringPreferencesKey("profile_horizon")
+    private val keyTolerance = stringPreferencesKey("profile_tolerance")
+    private val keyRiskPerTrade = doublePreferencesKey("profile_risk_per_trade")
+    private val keyMaxPosition = doublePreferencesKey("profile_max_position")
+    private val keyMaxSector = doublePreferencesKey("profile_max_sector")
+
+    val investorProfile: Flow<InvestorProfile> = context.dataStore.data.map { p ->
+        InvestorProfile(
+            configured = p[keyProfileSet] ?: false,
+            horizon = p[keyHorizon] ?: InvestorProfile.DEFAULT.horizon,
+            riskTolerance = p[keyTolerance] ?: InvestorProfile.DEFAULT.riskTolerance,
+            riskPerTradePct = p[keyRiskPerTrade] ?: InvestorProfile.DEFAULT.riskPerTradePct,
+            maxPositionPct = p[keyMaxPosition] ?: InvestorProfile.DEFAULT.maxPositionPct,
+            maxSectorPct = p[keyMaxSector] ?: InvestorProfile.DEFAULT.maxSectorPct
+        )
+    }
+
+    suspend fun setInvestorProfile(profile: InvestorProfile) {
+        context.dataStore.edit {
+            it[keyProfileSet] = true
+            it[keyHorizon] = profile.horizon
+            it[keyTolerance] = profile.riskTolerance
+            it[keyRiskPerTrade] = profile.riskPerTradePct.coerceIn(0.25, 5.0)
+            it[keyMaxPosition] = profile.maxPositionPct.coerceIn(5.0, 100.0)
+            it[keyMaxSector] = profile.maxSectorPct.coerceIn(10.0, 100.0)
+        }
+    }
+
+}
+
+/**
+ * The investor's own policy — the suitability layer every sized suggestion
+ * reads. Defaults are balanced and labeled as defaults until configured.
+ */
+data class InvestorProfile(
+    val configured: Boolean,
+    /** SHORT (weeks), MEDIUM (months), LONG (years). */
+    val horizon: String,
+    /** CONSERVATIVE / BALANCED / AGGRESSIVE. */
+    val riskTolerance: String,
+    /** Max % of account equity a single trade may lose at its stop. */
+    val riskPerTradePct: Double,
+    /** Max % of holdings value in one position before trimming is advised. */
+    val maxPositionPct: Double,
+    /** Max % of holdings value in one sector before capping is advised. */
+    val maxSectorPct: Double
+) {
+    companion object {
+        const val HORIZON_SHORT = "SHORT"
+        const val HORIZON_MEDIUM = "MEDIUM"
+        const val HORIZON_LONG = "LONG"
+        const val TOL_CONSERVATIVE = "CONSERVATIVE"
+        const val TOL_BALANCED = "BALANCED"
+        const val TOL_AGGRESSIVE = "AGGRESSIVE"
+
+        /** Balanced defaults, used (and labeled as defaults) until the user configures. */
+        val DEFAULT = InvestorProfile(
+            configured = false,
+            horizon = HORIZON_MEDIUM,
+            riskTolerance = TOL_BALANCED,
+            riskPerTradePct = 2.0,
+            maxPositionPct = 22.0,
+            maxSectorPct = 35.0
+        )
+
+        /** Suggested risk-per-trade for a tolerance tier. */
+        fun suggestedRisk(tolerance: String): Double = when (tolerance) {
+            TOL_CONSERVATIVE -> 1.0
+            TOL_AGGRESSIVE -> 3.0
+            else -> 2.0
+        }
+    }
+
+    /** One-line provenance for recommendation cards: which policy shaped this advice. */
+    fun label(): String {
+        val tol = riskTolerance.lowercase().replaceFirstChar { it.uppercase() }
+        val hor = when (horizon) {
+            HORIZON_SHORT -> "short horizon"
+            HORIZON_LONG -> "long horizon"
+            else -> "medium horizon"
+        }
+        val base = "$tol · $hor · ${riskPerTradePct}% risk/trade · " +
+            "${maxPositionPct.toInt()}% max position · ${maxSectorPct.toInt()}% max sector"
+        return if (configured) "Your profile: $base" else "Default policy (profile not set): $base"
+    }
 }

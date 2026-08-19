@@ -54,6 +54,41 @@ class PortfolioRepository(private val txDao: TransactionDao) {
 
     suspend fun deleteTransaction(tx: TransactionEntity) = txDao.delete(tx)
 
+    /**
+     * Replays the ledger WITHOUT [tx] and returns an error message when the
+     * deletion would leave some later sell unbacked — deleting a buy that a
+     * recorded sell depended on would silently corrupt every realized number.
+     * Judged as a DIFFERENCE: a gap the ledger already carried is not this
+     * deletion's doing and never blocks it. Null when the deletion is sound.
+     */
+    suspend fun validateDelete(tx: TransactionEntity): String? {
+        val before = txDao.getAllOrdered()
+        return worsenedGap(before, before.filter { it.id != tx.id }, "Deleting this trade")
+    }
+
+    /**
+     * Replays the ledger with [edited] in place of its current row (or
+     * appended, for id 0) and returns an error message when the edit makes
+     * some sell unbacked — null when the edit is sound. The verdict is a
+     * DIFFERENCE, not an absolute: only growth in a symbol's gap is refused,
+     * so one incomplete import can never lock every other edit in the app.
+     */
+    suspend fun validateEdit(edited: TransactionEntity): String? {
+        val before = txDao.getAllOrdered()
+        val after = before
+            .filter { it.id != edited.id }
+            .plus(edited)
+            .sortedWith(compareBy({ it.ts }, { it.id }))
+        return worsenedGap(before, after, "This edit")
+    }
+
+    /**
+     * Shares of [symbol] the ledger sells without a buy to back them — 0 for
+     * a sound history.
+     */
+    suspend fun ledgerGapFor(symbol: String): Double =
+        unbackedBySymbol(txDao.getAllOrdered())[symbol.trim().uppercase()] ?: 0.0
+
     /** Every ledger row for one symbol, newest first — the edit screen's source. */
     fun observeTransactionsFor(symbol: String): Flow<List<TransactionEntity>> =
         txDao.observeForSymbol(symbol.trim().uppercase())
@@ -97,6 +132,58 @@ class PortfolioRepository(private val txDao: TransactionDao) {
         txDao.countForSymbol(symbol.trim().uppercase())
 
     companion object {
+
+        /**
+         * Shares each symbol sells without a buy to back them at that moment
+         * in the replay — 0 (absent) for a sound history.
+         */
+        fun unbackedBySymbol(ordered: List<TransactionEntity>): Map<String, Double> {
+            val held = HashMap<String, Double>()
+            val unbacked = HashMap<String, Double>()
+            for (tx in ordered) {
+                val sym = tx.symbol.trim().uppercase()
+                val cur = held[sym] ?: 0.0
+                if (tx.side == TradeSide.BUY.name) {
+                    held[sym] = cur + tx.shares
+                } else {
+                    if (tx.shares > cur) {
+                        unbacked[sym] = (unbacked[sym] ?: 0.0) + (tx.shares - cur)
+                    }
+                    held[sym] = (cur - tx.shares).coerceAtLeast(0.0)
+                }
+            }
+            return unbacked
+        }
+
+        /**
+         * The difference-based ledger guard: an error message only when
+         * [after] widens some symbol's unbacked quantity vs [before] — never
+         * for a gap that was already there.
+         */
+        fun worsenedGap(
+            before: List<TransactionEntity>,
+            after: List<TransactionEntity>,
+            subject: String = "This change"
+        ): String? {
+            val was = unbackedBySymbol(before)
+            val now = unbackedBySymbol(after)
+            for ((sym, qty) in now) {
+                val prior = was[sym] ?: 0.0
+                if (qty <= prior + 1e-6) continue
+                return if (prior > 1e-6) {
+                    "$subject would widen $sym's ledger gap from ${fmtQty(prior)} to " +
+                        "${fmtQty(qty)} shares sold with no buy behind them."
+                } else {
+                    "$subject would leave ${fmtQty(qty)} $sym sold with no buy to back " +
+                        "them at that moment."
+                }
+            }
+            return null
+        }
+
+        private fun fmtQty(v: Double): String =
+            if (v == v.toLong().toDouble()) v.toLong().toString()
+            else String.format(java.util.Locale.US, "%.4f", v)
 
         fun computePositions(ordered: List<TransactionEntity>): List<Position> {
             data class Acc(var shares: Double = 0.0, var avg: Double = 0.0, var realized: Double = 0.0)

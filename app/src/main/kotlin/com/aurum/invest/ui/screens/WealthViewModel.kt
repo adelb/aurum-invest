@@ -4,11 +4,15 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
+import com.aurum.invest.analytics.AdviceEngine
 import com.aurum.invest.analytics.BookContext
+import com.aurum.invest.analytics.DeploymentPlan
 import com.aurum.invest.analytics.MarketRating
 import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.analytics.WeeklyStrategy
 import com.aurum.invest.analytics.WealthPlan
+import com.aurum.invest.data.model.Advice
+import com.aurum.invest.data.model.PositionView
 import com.aurum.invest.data.repo.PortfolioRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,6 +21,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+
+/** One holding read through the advice engine for the Wealth evaluation. */
+data class HoldingRead(
+    val view: PositionView,
+    val advice: Advice?
+)
 
 data class WealthState(
     val loading: Boolean = true,
@@ -36,7 +46,15 @@ data class WealthState(
     val pulseSectors: Map<String, String> = emptyMap(),
     /** This week's sector gaps + deployment plan for this book. */
     val strategy: WeeklyStrategy? = null,
-    val strategyLoading: Boolean = true
+    val strategyLoading: Boolean = true,
+    /** The wallet's uninvested cash; null until the user states a total. */
+    val liquidity: Double? = null,
+    /** The liquidity-management answer: sectors, stocks, dollars, reserve. */
+    val deployPlan: DeploymentPlan? = null,
+    val deployLoading: Boolean = true,
+    /** Every open holding read through the advice engine — the evaluation. */
+    val holdingReads: List<HoldingRead> = emptyList(),
+    val holdingsLoading: Boolean = true
 )
 
 class WealthViewModel(app: Application) : AndroidViewModel(app) {
@@ -48,6 +66,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<WealthState> = _state.asStateFlow()
 
     private var strategyJob: Job? = null
+    private var deployJob: Job? = null
 
     init {
         // The market pulse is independent of the user's plan inputs.
@@ -61,7 +80,15 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
             container.portfolio.observePositions().collectLatest { positions ->
                 val open = positions.filter { PortfolioRepository.isOpen(it) }
                 if (open.isEmpty()) {
-                    _state.update { it.copy(book = BookContext.EMPTY) }
+                    _state.update {
+                        it.copy(
+                            book = BookContext.EMPTY,
+                            holdingReads = emptyList(),
+                            holdingsLoading = false
+                        )
+                    }
+                    refreshStrategy()
+                    refreshDeployment()
                     return@collectLatest
                 }
                 val quotes = container.market.getQuotes(open.map { it.symbol })
@@ -69,12 +96,39 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                 val sectors = container.market.getSectors(open.map { it.symbol })
                 _state.update { it.copy(book = PortfolioLens.build(views, sectors)) }
                 refreshStrategy()
+                refreshDeployment()
+                // The evaluation: every holding read through the advice engine
+                // against its own cached daily candles — hold / take-profit /
+                // cut-loss, with the numbers behind the call.
+                val reads = views.map { view ->
+                    val daily = runCatching {
+                        container.market.getDailyCandles(view.position.symbol, 120)
+                    }.getOrDefault(emptyList())
+                    val advice =
+                        if (view.quote != null && daily.size >= 2) {
+                            runCatching {
+                                AdviceEngine.sellAdvice(view.position, view.quote, daily, newsScore = 0)
+                            }.getOrNull()
+                        } else null
+                    HoldingRead(view = view, advice = advice)
+                }.sortedByDescending { it.view.marketValue }
+                _state.update { it.copy(holdingReads = reads, holdingsLoading = false) }
+            }
+        }
+        // A wallet change (top-up, first setup) must re-size the deployment
+        // and the weekly split immediately.
+        viewModelScope.launch {
+            container.wallet.total.collectLatest {
+                refreshStrategy()
+                refreshDeployment()
             }
         }
         viewModelScope.launch {
             val inputs = wealth.getInputs()
             if (inputs == null) {
-                _state.update { it.copy(loading = false, editing = true) }
+                // No goal set: the Wealth tab still evaluates the portfolio
+                // and the liquidity — the 4-month plan is offered, not forced.
+                _state.update { it.copy(loading = false, editing = false) }
                 refreshStrategy()
                 return@launch
             }
@@ -121,9 +175,34 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
         strategyJob = viewModelScope.launch {
             _state.update { it.copy(strategyLoading = true) }
             val st = _state.value
-            val strategy = wealth.getStrategy(st.book, st.baseAmount ?: 0.0)
+            // The week's split is sized from the wallet's REAL uninvested
+            // cash when it is stated; the 4-month base is only the fallback.
+            val liquidity = runCatching { container.wallet.liquidityNow() }.getOrNull()
+            val investable = liquidity ?: (st.baseAmount ?: 0.0)
+            val strategy = wealth.getStrategy(st.book, investable)
             _state.update {
-                it.copy(strategy = strategy ?: it.strategy, strategyLoading = false)
+                it.copy(
+                    strategy = strategy ?: it.strategy,
+                    strategyLoading = false,
+                    liquidity = liquidity
+                )
+            }
+        }
+    }
+
+    /** The liquidity-management answer, rebuilt from the wallet and the book. */
+    private fun refreshDeployment() {
+        deployJob?.cancel()
+        deployJob = viewModelScope.launch {
+            _state.update { it.copy(deployLoading = true) }
+            val liquidity = runCatching { container.wallet.liquidityNow() }.getOrNull()
+            val plan = wealth.getDeploymentPlan(liquidity ?: 0.0, _state.value.book)
+            _state.update {
+                it.copy(
+                    liquidity = liquidity,
+                    deployPlan = plan ?: it.deployPlan,
+                    deployLoading = false
+                )
             }
         }
     }
@@ -154,6 +233,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
             val plan = wealth.recompute()
             _state.update { it.copy(computing = false, plan = plan ?: it.plan) }
             refreshStrategy()
+            refreshDeployment()
         }
     }
 

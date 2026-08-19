@@ -25,6 +25,20 @@ object Fmt {
         return "$sign$symbol${f.format(abs(v))}"
     }
 
+    /**
+     * Always two decimals, however large the amount. [money] drops the cents
+     * above $10,000 to keep dense lists narrow, which is wrong for the wallet
+     * figures — a balance that reads "$25,477" hides money the user has.
+     */
+    fun moneyExact(v: Double, symbol: String = "$"): String =
+        if (v < 0) "-$symbol${money2.format(abs(v))}" else "$symbol${money2.format(v)}"
+
+    /** [moneyExact] with an explicit +/- sign — for P/L figures. */
+    fun signedMoneyExact(v: Double, symbol: String = "$"): String {
+        val sign = if (v >= 0) "+" else "-"
+        return "$sign$symbol${money2.format(abs(v))}"
+    }
+
     fun pct(v: Double): String = "${pct2.format(v)}%"
 
     fun signedPct(v: Double): String {
@@ -44,12 +58,21 @@ object Fmt {
 
     fun qty(v: Double): String = qtyFmt.format(v)
 
+    /** Plain 2-decimal number, no currency symbol — for non-USD amounts. */
+    fun num2(v: Double): String = money2.format(v)
+
     /** "2.06" not "2.0600" — for pre-filling editable number fields. */
     fun trimNumber(v: Double): String =
         java.math.BigDecimal.valueOf(v).stripTrailingZeros().toPlainString()
 
     fun dateShort(ts: Long): String =
         SimpleDateFormat("MMM d", Locale.US).format(Date(ts))
+
+    /** "MMM yyyy" — for chart date axes spanning a year or more, where "MMM d"
+     * alone would repeat the same month across different years with no way
+     * to tell which is which (e.g. a 1Y or 5Y price chart). */
+    fun dateWithYear(ts: Long): String =
+        SimpleDateFormat("MMM yyyy", Locale.US).format(Date(ts))
 
     fun dateTime(ts: Long): String =
         SimpleDateFormat("MMM d, HH:mm", Locale.US).format(Date(ts))

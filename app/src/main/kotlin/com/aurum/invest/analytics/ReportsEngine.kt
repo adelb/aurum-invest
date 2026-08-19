@@ -12,7 +12,7 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.TemporalAdjusters
 import java.util.Locale
 
-enum class ReportPeriod { DAY, WEEK, MONTH }
+enum class ReportPeriod { DAY, WEEK, MONTH, YEAR }
 
 /** One transaction as it appears inside a period report. */
 data class TradeLine(
@@ -28,6 +28,21 @@ data class TradeLine(
     val plOverridden: Boolean = false
 )
 
+/** How a report card nests its trade list — one level finer than the period itself. */
+enum class TradeGrouping { NONE, DAY, WEEK, MONTH }
+
+/** A finer-grained slice of a [PeriodReport]'s trades — e.g. one day inside a week card. */
+data class TradeGroup(
+    val key: String,
+    val label: String,
+    val buysCount: Int,
+    val buysTotal: Double,
+    val sellsCount: Int,
+    val sellsTotal: Double,
+    val realizedPl: Double,
+    val trades: List<TradeLine>
+)
+
 /** Aggregated trade activity for one day, one week, or one month. */
 data class PeriodReport(
     val periodKey: String,        // day: ISO "2026-08-10"; week: ISO Monday; month: "2026-08"
@@ -39,9 +54,14 @@ data class PeriodReport(
     val sellsCount: Int,
     val sellsTotal: Double,
     val realizedPl: Double,
+    val accumulatedPl: Double,    // cumulative realizedPl from the ledger's start through this period, inclusive
     val bestTrade: TradeLine?,    // highest realizedPl among the period sells
     val worstTrade: TradeLine?,   // lowest realizedPl among the period sells
-    val trades: List<TradeLine>   // chronological
+    val trades: List<TradeLine>,  // chronological
+    /** How [trades] should be presented: collapsed under a finer period, or flat. */
+    val grouping: TradeGrouping = TradeGrouping.NONE,
+    /** Present only when [grouping] != NONE — the finer buckets, most recent first. */
+    val groups: List<TradeGroup> = emptyList()
 )
 
 /**
@@ -55,6 +75,7 @@ object ReportsEngine {
     private val monthKeyFmt = DateTimeFormatter.ofPattern("yyyy-MM", Locale.US)
     private val monthLabelFmt = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.US)
     private val dayLabelFmt = DateTimeFormatter.ofPattern("EEEE, MMM d", Locale.US)
+    private val yearKeyFmt = DateTimeFormatter.ofPattern("yyyy", Locale.US)
 
     fun build(transactions: List<TransactionEntity>, period: ReportPeriod): List<PeriodReport> {
         if (transactions.isEmpty()) return emptyList()
@@ -78,8 +99,11 @@ object ReportsEngine {
             val symbol = tx.symbol.trim().uppercase()
             val acc = bySymbol.getOrPut(symbol) { Acc() }
 
-            // Replicate PortfolioRepository.computePositions exactly.
             val realized: Double?
+            // Effective quantity: sells clamp to the held amount, matching the
+            // position engine, so the report's totals can never disagree with
+            // the portfolio's truth.
+            val effShares: Double
             if (tx.side == TradeSide.BUY.name) {
                 val newShares = acc.shares + tx.shares
                 if (newShares > 0) {
@@ -87,8 +111,8 @@ object ReportsEngine {
                 }
                 acc.shares = newShares
                 realized = null
+                effShares = tx.shares
             } else {
-                // never sell more than held; ignore the excess
                 val qty = minOf(tx.shares, acc.shares)
                 val computed = if (qty > 0) {
                     val r = qty * (tx.price - acc.avg) - tx.fees
@@ -104,6 +128,7 @@ object ReportsEngine {
                 // The user's pinned outcome wins over the replayed number —
                 // same rule as PortfolioRepository.computePositions.
                 realized = tx.plOverride ?: computed
+                effShares = qty
             }
 
             val day = Instant.ofEpochMilli(tx.ts).atZone(zone).toLocalDate()
@@ -113,13 +138,15 @@ object ReportsEngine {
                     day.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)).toString()
                 ReportPeriod.MONTH ->
                     day.format(monthKeyFmt)
+                ReportPeriod.YEAR ->
+                    day.format(yearKeyFmt)
             }
 
             val bucket = buckets.getOrPut(key) { Bucket() }
             bucket.trades += TradeLine(
                 symbol = symbol,
                 side = tx.side,
-                shares = tx.shares,
+                shares = effShares,
                 price = tx.price,
                 ts = tx.ts,
                 realizedPl = realized,
@@ -131,7 +158,7 @@ object ReportsEngine {
                 bucket.buysTotal += tx.shares * tx.price + tx.fees
             } else {
                 bucket.sellsCount += 1
-                bucket.sellsTotal += tx.shares * tx.price - tx.fees
+                bucket.sellsTotal += effShares * tx.price - tx.fees
             }
         }
 
@@ -158,8 +185,26 @@ object ReportsEngine {
                     startTs = ym.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
                     endTs = ym.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1
                 }
+                ReportPeriod.YEAR -> {
+                    val year = key.toInt()
+                    label = key
+                    val start = LocalDate.of(year, 1, 1)
+                    startTs = start.atStartOfDay(zone).toInstant().toEpochMilli()
+                    endTs = start.plusYears(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1
+                }
             }
             val sells = bucket.trades.filter { it.realizedPl != null }
+            val grouping = when (period) {
+                ReportPeriod.DAY -> TradeGrouping.NONE
+                ReportPeriod.WEEK -> TradeGrouping.DAY
+                ReportPeriod.MONTH -> TradeGrouping.WEEK
+                ReportPeriod.YEAR -> TradeGrouping.MONTH
+            }
+            val groups = if (grouping == TradeGrouping.NONE) {
+                emptyList()
+            } else {
+                buildGroups(bucket.trades, grouping, zone)
+            }
             PeriodReport(
                 periodKey = key,
                 label = label,
@@ -170,10 +215,66 @@ object ReportsEngine {
                 sellsCount = bucket.sellsCount,
                 sellsTotal = bucket.sellsTotal,
                 realizedPl = sells.sumOf { it.realizedPl ?: 0.0 },
+                accumulatedPl = 0.0,
                 bestTrade = sells.maxByOrNull { it.realizedPl ?: 0.0 },
                 worstTrade = sells.minByOrNull { it.realizedPl ?: 0.0 },
-                trades = bucket.trades
+                trades = bucket.trades,
+                grouping = grouping,
+                groups = groups
             )
-        }.sortedByDescending { it.periodKey }
+        }.sortedBy { it.periodKey }
+            .let { ascending ->
+                var running = 0.0
+                ascending.map { report ->
+                    running += report.realizedPl
+                    report.copy(accumulatedPl = running)
+                }
+            }
+            .sortedByDescending { it.periodKey }
+    }
+
+    /**
+     * Slices [trades] (already chronological, belonging to one period) into
+     * finer buckets — days inside a week, weeks inside a month, months inside
+     * a year — most recent bucket first, so a report card can show its trade
+     * list "collapsed under the related [finer period]" instead of one flat list.
+     */
+    private fun buildGroups(
+        trades: List<TradeLine>,
+        grouping: TradeGrouping,
+        zone: ZoneId
+    ): List<TradeGroup> {
+        val buckets = LinkedHashMap<String, MutableList<TradeLine>>()
+        for (t in trades) {
+            val day = Instant.ofEpochMilli(t.ts).atZone(zone).toLocalDate()
+            val key = when (grouping) {
+                TradeGrouping.DAY -> day.toString()
+                TradeGrouping.WEEK -> day.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)).toString()
+                TradeGrouping.MONTH -> day.format(monthKeyFmt)
+                TradeGrouping.NONE -> return emptyList()
+            }
+            buckets.getOrPut(key) { mutableListOf() } += t
+        }
+        return buckets.map { (key, lines) ->
+            val label = when (grouping) {
+                TradeGrouping.DAY -> LocalDate.parse(key).format(dayLabelFmt)
+                TradeGrouping.WEEK -> Dates.weekStartLabel(key)
+                TradeGrouping.MONTH -> YearMonth.parse(key, monthKeyFmt).atDay(1).format(monthLabelFmt)
+                TradeGrouping.NONE -> key
+            }
+            val sells = lines.filter { it.realizedPl != null }
+            val buys = lines.filter { it.side == TradeSide.BUY.name }
+            TradeGroup(
+                key = key,
+                label = label,
+                buysCount = buys.size,
+                buysTotal = buys.sumOf { it.shares * it.price },
+                sellsCount = sells.size,
+                sellsTotal = sells.sumOf { it.shares * it.price },
+                realizedPl = sells.sumOf { it.realizedPl ?: 0.0 },
+                trades = lines
+            )
+        }.sortedByDescending { it.key }
     }
 }
+

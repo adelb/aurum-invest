@@ -3,7 +3,9 @@ package com.aurum.invest.data.repo
 import com.aurum.invest.data.db.CacheDao
 import com.aurum.invest.data.db.CacheEntity
 import com.aurum.invest.data.model.Candle
+import com.aurum.invest.data.model.CandleFeed
 import com.aurum.invest.data.model.ExtendedHours
+import com.aurum.invest.data.model.FeedStatus
 import com.aurum.invest.data.model.Quote
 import com.aurum.invest.data.model.ScreenerQuote
 import com.aurum.invest.data.remote.YahooClient
@@ -109,20 +111,73 @@ class MarketRepository(
         symbol: String,
         rangeDays: Int = 120,
         maxAgeMs: Long = 21_600_000L
-    ): List<Candle> {
-        val key = "candles:$symbol:$rangeDays"
+    ): List<Candle> = getDailyCandlesFeed(symbol, rangeDays, maxAgeMs).candles
+
+    /**
+     * Daily candles WITH provenance: an empty FRESH feed means the symbol was
+     * reached and genuinely has that little history; FAILED means the fetch
+     * broke and nothing is cached — different diagnoses, never conflated.
+     *
+     * Storage is SUPERSET-RANGED: one canonical series per symbol, kept at
+     * the deepest range any caller has asked for. A 60-day caller of a symbol
+     * whose year is already cached is served a slice of it — zero requests —
+     * and the slice reproduces exactly the Yahoo bucket a direct fetch would
+     * have returned, so no caller ever sees fewer bars than before.
+     */
+    suspend fun getDailyCandlesFeed(
+        symbol: String,
+        rangeDays: Int = 120,
+        maxAgeMs: Long = 21_600_000L
+    ): CandleFeed {
+        val key = "candles:$symbol"
         val now = System.currentTimeMillis()
         val cached = readCache(key)
-        if (cached != null && now - cached.updatedAt <= maxAgeMs) {
-            val parsed = candlesFromJson(cached.json)
-            if (parsed.isNotEmpty()) return parsed
+        val stored = cached?.let { candleStoreFromJson(it.json) }
+        if (stored != null && stored.first >= bucketDays(rangeDays) &&
+            now - cached.updatedAt <= maxAgeMs
+        ) {
+            val sliced = sliceToBucket(stored.second, rangeDays, cached.updatedAt)
+            if (sliced.isNotEmpty()) return CandleFeed(sliced, FeedStatus.FRESH, cached.updatedAt)
         }
-        val fresh = yahoo.fetchDailyCandles(symbol, rangeDays)
+        // Fetch at least as deep as the canonical series already goes, so a
+        // shallow caller can never narrow what a deep caller relies on.
+        val fetchDays = maxOf(rangeDays, stored?.first ?: 0)
+        val fresh = yahoo.fetchDailyCandles(symbol, fetchDays)
         if (fresh.isNotEmpty()) {
-            writeCache(key, candlesToJson(fresh).toString())
-            return fresh
+            writeCache(key, candleStoreToJson(bucketDays(fetchDays), fresh))
+            return CandleFeed(sliceToBucket(fresh, rangeDays, now), FeedStatus.FRESH, now)
         }
-        return cached?.let { candlesFromJson(it.json) } ?: emptyList()
+        val staleCanonical = stored?.second
+            ?.let { sliceToBucket(it, rangeDays, cached!!.updatedAt) }
+            .orEmpty()
+        if (staleCanonical.isNotEmpty()) {
+            return CandleFeed(staleCanonical, FeedStatus.STALE, cached!!.updatedAt)
+        }
+        // Last resort: the pre-v10 per-range key, so an upgrade with the
+        // network down still serves what it had.
+        val legacy = readCache("candles:$symbol:$rangeDays")
+        val legacyCandles = legacy?.let { candlesFromJson(it.json) }.orEmpty()
+        return if (legacyCandles.isNotEmpty()) {
+            CandleFeed(legacyCandles, FeedStatus.STALE, legacy!!.updatedAt)
+        } else {
+            CandleFeed(emptyList(), FeedStatus.FAILED, 0L)
+        }
+    }
+
+    /** The canonical per-symbol store: the depth it was fetched at, plus the bars. */
+    private fun candleStoreToJson(rangeDays: Int, candles: List<Candle>): String =
+        JSONObject().apply {
+            put("range", rangeDays)
+            put("candles", candlesToJson(candles))
+        }.toString()
+
+    private fun candleStoreFromJson(s: String): Pair<Int, List<Candle>>? = try {
+        val o = JSONObject(s)
+        val range = o.optInt("range", 0)
+        val candles = candlesFromJson(o.optString("candles"))
+        if (range <= 0 || candles.isEmpty()) null else range to candles
+    } catch (_: Exception) {
+        null
     }
 
     /**
@@ -420,6 +475,38 @@ class MarketRepository(
 
     companion object {
         const val GOLD_SYMBOL = "GLD"
+
+        private const val DAY_MS = 86_400_000L
+
+        /**
+         * The calendar days Yahoo's chart API actually returns for a
+         * [rangeDays] request — its range parameter is a coarse bucket
+         * (5d / 1mo / 3mo / 6mo / 1y / 2y), so a "60-day" fetch has always
+         * come back with three months of bars. Slicing the canonical series
+         * to the SAME bucket keeps every caller's bar count identical to
+         * what a direct fetch gave it.
+         */
+        fun bucketDays(rangeDays: Int): Int = when {
+            rangeDays <= 7 -> 7
+            rangeDays <= 30 -> 30
+            rangeDays <= 95 -> 95
+            rangeDays <= 190 -> 190
+            rangeDays <= 400 -> 400
+            else -> 730
+        }
+
+        /**
+         * The tail of [candles] a [rangeDays] request would have fetched
+         * directly, measured back from [asOf] (the store's fetch time, so a
+         * stale slice is judged against when the bars were read, not now).
+         */
+        fun sliceToBucket(candles: List<Candle>, rangeDays: Int, asOf: Long): List<Candle> {
+            if (candles.isEmpty()) return candles
+            val cutoff = asOf - bucketDays(rangeDays) * DAY_MS
+            var start = candles.size
+            while (start > 0 && candles[start - 1].ts >= cutoff) start--
+            return if (start == 0) candles else candles.subList(start, candles.size)
+        }
 
         /** Symbols per spark request. Yahoo handles this comfortably in one call. */
         private const val BATCH_SIZE = 40
