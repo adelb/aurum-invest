@@ -7,6 +7,7 @@ import com.aurum.invest.AurumApp
 import com.aurum.invest.analytics.BookContext
 import com.aurum.invest.analytics.DeploymentPlan
 import com.aurum.invest.analytics.MarketRating
+import com.aurum.invest.analytics.NextSessionReport
 import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.analytics.WealthReport
 import com.aurum.invest.analytics.WeeklyStrategy
@@ -45,6 +46,9 @@ data class WealthState(
     /** The wealth engine's evaluation: health, holdings, risk, actions. */
     val report: WealthReport? = null,
     val reportLoading: Boolean = true,
+    /** The next-session engine's measured picks with analog follow-through. */
+    val nextSession: NextSessionReport? = null,
+    val nextSessionLoading: Boolean = true,
     /** True while a pull-to-refresh recompute is in flight. */
     val refreshing: Boolean = false
 )
@@ -60,6 +64,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
     private var strategyJob: Job? = null
     private var deployJob: Job? = null
     private var reportJob: Job? = null
+    private var nextSessionJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -86,12 +91,27 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                 refreshReport()
             }
         }
+        refreshNextSession()
         // A wallet change (top-up, first setup) re-sizes everything at once.
         viewModelScope.launch {
             container.wallet.total.collectLatest {
                 refreshStrategy()
                 refreshDeployment()
                 refreshReport()
+            }
+        }
+    }
+
+    /** The next-session scan — cache-served between the 20-minute recomputes. */
+    private fun refreshNextSession(force: Boolean = false) {
+        nextSessionJob?.cancel()
+        nextSessionJob = viewModelScope.launch {
+            _state.update { it.copy(nextSessionLoading = true) }
+            val ns =
+                if (force) wealth.recomputeNextSession(container.portfolio)
+                else wealth.getNextSession(container.portfolio)
+            _state.update {
+                it.copy(nextSession = ns ?: it.nextSession, nextSessionLoading = false)
             }
         }
     }
@@ -143,8 +163,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
     /** Sector lookups for the pulse's suggested stocks (cached 30 days). */
     private suspend fun classifyPulse(pulse: MarketRating?) {
         if (pulse == null) return
-        val symbols = (pulse.bestYesterday.map { it.symbol } +
-            pulse.nextDay.map { it.symbol }).distinct()
+        val symbols = pulse.bestYesterday.map { it.symbol }.distinct()
         if (symbols.isEmpty()) return
         val sectors = container.market.getSectors(symbols)
         if (sectors.isNotEmpty()) {
@@ -165,6 +184,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                 refreshStrategy()
                 refreshDeployment()
                 refreshReport()
+                refreshNextSession(force = true)
             } finally {
                 _state.update { it.copy(refreshing = false) }
             }

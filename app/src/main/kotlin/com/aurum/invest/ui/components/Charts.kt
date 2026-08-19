@@ -269,21 +269,40 @@ fun ZoomablePriceChart(
         )
 
         // Date axis: first / middle / last visible bar. Intraday windows get
-        // times, multi-day windows get dates.
+        // times; multi-day windows get dates; a window that spans months or
+        // crosses a calendar year carries the YEAR — "Aug 19" on an all-history
+        // chart is a riddle, not a label. Labels that would land on each other
+        // are skipped, and repeats (three slots in the same month) collapse —
+        // a zoomed-in window shows one honest label instead of a pile-up.
         if (ts.isNotEmpty()) {
-            val intraday = ts.last() - ts.first() <= 48L * 3_600_000L
-            fun axisLabel(t: Long): String =
-                if (intraday) Fmt.timeShort(t) else Fmt.dateShort(t)
+            val windowSpanMs = ts.last() - ts.first()
+            val intraday = windowSpanMs <= 48L * 3_600_000L
+            val monthsScale = windowSpanMs >= 300L * 86_400_000L
+            val crossesYears = !intraday &&
+                yearOf(ts.first()) != yearOf(ts.last())
+            fun axisLabel(t: Long): String = when {
+                intraday -> Fmt.timeShort(t)
+                monthsScale -> Fmt.dateWithYear(t)     // "Aug 2025"
+                crossesYears -> Fmt.dateShortYear(t)   // "Aug 19 '25"
+                else -> Fmt.dateShort(t)
+            }
             val slots = listOf(0, win.size / 2, win.size - 1).distinct()
+            var prevRight = Float.NEGATIVE_INFINITY
+            var prevLabel: String? = null
             for (i in slots) {
-                val text = AnnotatedString(axisLabel(ts[i]))
+                val labelText = axisLabel(ts[i])
+                if (labelText == prevLabel) continue
+                val text = AnnotatedString(labelText)
                 val w = textMeasurer.measure(text, labelStyle).size.width
                 val x = (i * stepX - w / 2f).coerceIn(0f, size.width - w)
+                if (x < prevRight + 16f) continue
                 drawText(
                     textMeasurer, text.text,
                     topLeft = Offset(x, chartH + 6f),
                     style = labelStyle
                 )
+                prevRight = x + w
+                prevLabel = labelText
             }
         }
 
@@ -302,10 +321,18 @@ fun ZoomablePriceChart(
 
             val whenText =
                 if (i < ts.size) {
-                    // Sub-daily bars deserve a time, daily bars just a date.
+                    // Sub-daily bars deserve a time, daily bars a date — and a
+                    // window spanning years names the year, or the crosshair
+                    // answers "which August?" with a shrug.
                     val barSpan = (ts.last() - ts.first()) / (ts.size - 1).coerceAtLeast(1)
                     val subDaily = barSpan < 20L * 3_600_000L
-                    "  ·  " + if (subDaily) Fmt.dateTime(ts[i]) else Fmt.dateShort(ts[i])
+                    val longWindow = ts.last() - ts.first() >= 300L * 86_400_000L ||
+                        yearOf(ts.first()) != yearOf(ts.last())
+                    "  ·  " + when {
+                        subDaily -> Fmt.dateTime(ts[i])
+                        longWindow -> Fmt.dateFull(ts[i])
+                        else -> Fmt.dateShort(ts[i])
+                    }
                 } else ""
             val bubble = AnnotatedString(Fmt.money(win[i]) + whenText)
             val bSize = textMeasurer.measure(bubble, bubbleStyle).size
@@ -330,4 +357,11 @@ fun ZoomablePriceChart(
             )
         }
     }
+}
+
+/** The calendar year of an epoch-millis stamp, for axis-label decisions. */
+private fun yearOf(ts: Long): Int {
+    val cal = java.util.Calendar.getInstance()
+    cal.timeInMillis = ts
+    return cal.get(java.util.Calendar.YEAR)
 }

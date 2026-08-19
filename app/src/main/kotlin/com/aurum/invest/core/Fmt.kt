@@ -74,6 +74,14 @@ object Fmt {
     fun dateWithYear(ts: Long): String =
         SimpleDateFormat("MMM yyyy", Locale.US).format(Date(ts))
 
+    /** "Aug 19, 2025" — the full point-in-time read for long-range crosshairs. */
+    fun dateFull(ts: Long): String =
+        SimpleDateFormat("MMM d, yyyy", Locale.US).format(Date(ts))
+
+    /** "Aug 19 '25" — a dated axis label that still carries its year. */
+    fun dateShortYear(ts: Long): String =
+        SimpleDateFormat("MMM d ''yy", Locale.US).format(Date(ts))
+
     fun dateTime(ts: Long): String =
         SimpleDateFormat("MMM d, HH:mm", Locale.US).format(Date(ts))
 

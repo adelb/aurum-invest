@@ -3,6 +3,7 @@ package com.aurum.invest.ui.screens
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -62,6 +63,8 @@ import com.aurum.invest.analytics.DeploymentPlan
 import com.aurum.invest.analytics.HoldingEvaluation
 import com.aurum.invest.analytics.HoldingMove
 import com.aurum.invest.analytics.ManagementAction
+import com.aurum.invest.analytics.NextSessionPick
+import com.aurum.invest.analytics.NextSessionReport
 import com.aurum.invest.analytics.RiskStats
 import com.aurum.invest.analytics.TechniqueVerdict
 import com.aurum.invest.analytics.WealthDiscipline
@@ -76,7 +79,6 @@ import com.aurum.invest.analytics.MarketRating
 import com.aurum.invest.analytics.NoteKind
 import com.aurum.invest.analytics.PickNote
 import com.aurum.invest.analytics.PortfolioLens
-import com.aurum.invest.analytics.TomorrowPick
 import com.aurum.invest.analytics.WeeklyStrategy
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.ui.components.ActionBadge
@@ -91,6 +93,7 @@ import com.aurum.invest.ui.components.ScoreBar
 import com.aurum.invest.ui.components.SentimentDot
 import com.aurum.invest.ui.components.StatTile
 import com.aurum.invest.ui.theme.AurumColors
+import java.util.Locale
 
 @Composable
 fun WealthScreen(onOpenAnalysis: (String) -> Unit, onOpenDetail: (String) -> Unit) {
@@ -346,6 +349,58 @@ private fun WealthContent(
             }
         }
 
+        // 9 — the next-session engine: measured picks, analog follow-through.
+        item {
+            WealthSectionHeader(
+                title = "Positioned for the next session",
+                expanded = open("nextsession"),
+                trailing = state.nextSession?.let { ns ->
+                    if (ns.alerts.isNotEmpty()) "${ns.alerts.size} extreme"
+                    else "${ns.picks.size} picks"
+                }
+            ) { toggle("nextsession") }
+        }
+        if (open("nextsession")) {
+            val ns = state.nextSession
+            when {
+                ns == null && state.nextSessionLoading -> {
+                    item {
+                        AurumCard {
+                            Text(
+                                text = "Scanning the screener universe and replaying every " +
+                                    "analog day…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AurumColors.textDim
+                            )
+                        }
+                    }
+                }
+                ns == null -> {
+                    item {
+                        AurumCard {
+                            Text(
+                                text = "The next-session scan needs market data. Pull down to retry.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AurumColors.textDim
+                            )
+                        }
+                    }
+                }
+                else -> {
+                    item { NextSessionHeaderCard(ns) }
+                    items(ns.picks.size) { i ->
+                        NextSessionCard(
+                            rank = i + 1,
+                            pick = ns.picks[i],
+                            onOpenAnalysis = onOpenAnalysis,
+                            onOpenDetail = onOpenDetail
+                        )
+                    }
+                    item { NextSessionFooterCard(ns) }
+                }
+            }
+        }
+
         // 9 — session extras from the pulse.
         val pulse = state.pulse
         if (pulse != null && pulse.call != MarketCall.DEFENSIVE) {
@@ -366,27 +421,6 @@ private fun WealthContent(
                                 mover.symbol, state.pulseSectors[mover.symbol], state.book
                             ),
                             onOpen = { onOpenDetail(mover.symbol) }
-                        )
-                    }
-                }
-            }
-            if (pulse.nextDay.isNotEmpty()) {
-                item {
-                    WealthSectionHeader(
-                        title = "Positioned for the next session",
-                        expanded = open("tomorrow")
-                    ) { toggle("tomorrow") }
-                }
-                if (open("tomorrow")) {
-                    items(pulse.nextDay.size) { i ->
-                        val pick = pulse.nextDay[i]
-                        TomorrowRow(
-                            pick = pick,
-                            note = PortfolioLens.pickNote(
-                                pick.symbol, state.pulseSectors[pick.symbol], state.book
-                            ),
-                            onOpen = { onOpenDetail(pick.symbol) },
-                            onAnalyze = { onOpenAnalysis(pick.symbol) }
                         )
                     }
                 }
@@ -1011,91 +1045,6 @@ private fun MoverRow(
     }
 }
 
-@Composable
-private fun TomorrowRow(
-    pick: TomorrowPick,
-    note: PickNote? = null,
-    onOpen: () -> Unit,
-    onAnalyze: () -> Unit
-) {
-    AurumCard(onClick = onOpen) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = pick.symbol,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
-                )
-                Text(
-                    text = pick.name,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = Fmt.money(pick.price),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
-                )
-                DeltaPct(
-                    value = pick.dayChangePct,
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
-            IconButton(onClick = onAnalyze, modifier = Modifier.size(40.dp)) {
-                Icon(
-                    Icons.Rounded.QueryStats,
-                    contentDescription = "Open ${pick.symbol} analysis",
-                    tint = AurumColors.gold
-                )
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = pick.reason,
-            style = MaterialTheme.typography.bodySmall,
-            color = AurumColors.textDim
-        )
-        Spacer(Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "Entry ${Fmt.money(pick.entry)}",
-                style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.gold
-            )
-            Text(
-                text = "  ·  next session ",
-                style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.textDim
-            )
-            Text(
-                text = Fmt.signedPct(pick.expectedLowPct),
-                style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.loss
-            )
-            Text(
-                text = " … ",
-                style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.textDim
-            )
-            Text(
-                text = Fmt.signedPct(pick.expectedHighPct),
-                style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.gain
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                text = "Score ${pick.score}",
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.textDim
-            )
-        }
-        WealthNoteTag(note)
-    }
-}
 
 // ---------------------------------------------------------------- v10 additions
 
@@ -1771,3 +1720,275 @@ private fun RiskStatsCard(risk: RiskStats) {
         )
     }
 }
+
+// ------------------------------------------------------- next session cards
+
+@Composable
+private fun NextSessionHeaderCard(ns: NextSessionReport) {
+    AurumCard {
+        Text(
+            text = ns.headline,
+            style = MaterialTheme.typography.titleMedium,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "${ns.sessionNote} Updated ${Fmt.timeAgo(ns.computedAt)}.",
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+    }
+}
+
+@Composable
+private fun NextSessionCard(
+    rank: Int,
+    pick: NextSessionPick,
+    onOpenAnalysis: (String) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
+    val cardModifier =
+        if (pick.alert) Modifier.border(1.5.dp, AurumColors.gold, RoundedCornerShape(16.dp))
+        else Modifier
+    AurumCard(modifier = cardModifier, onClick = { onOpenDetail(pick.symbol) }) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "%02d".format(rank),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = AurumColors.gold
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = pick.symbol,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AurumColors.text
+                    )
+                    if (pick.alert) {
+                        Spacer(Modifier.width(8.dp))
+                        PillTag(text = "Every gate cleared", color = AurumColors.gold)
+                    }
+                }
+                Text(
+                    text = pick.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = Fmt.money(pick.price),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text
+                )
+                DeltaPct(value = pick.dayChangePct, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ScoreBar(score = pick.score.toDouble(), modifier = Modifier.weight(1f))
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = "${pick.score}/100",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.textDim
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            StatTile(
+                label = "Entry",
+                value = Fmt.money(pick.entry),
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                label = "Target",
+                value = Fmt.money(pick.target),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.gain
+            )
+            StatTile(
+                label = "Stop",
+                value = Fmt.money(pick.stop),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.loss
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (pick.probUpPct >= 0) {
+                PillTag(
+                    text = "${pick.probUpPct}% follow-through · ${pick.analogDays} analogs",
+                    color = if (pick.probUpPct >= 65) AurumColors.gain else AurumColors.textDim
+                )
+            } else {
+                PillTag(text = "Follow-through not measurable", color = AurumColors.textDim)
+            }
+            Spacer(Modifier.width(8.dp))
+            if (pick.techTotal > 0) {
+                PillTag(
+                    text = "${pick.techBullish}/${pick.techTotal} bullish",
+                    color = AurumColors.gain
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        // The v2 measured context: risk/reward on the capped target, the
+        // sector's money flow, and the session VWAP read. Each is measured or
+        // absent — an unmeasured input never renders a confident-looking pill.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            pick.riskReward?.let { rr ->
+                PillTag(
+                    text = String.format(Locale.US, "R/R %.1f", rr),
+                    color = if (rr >= 1.5) AurumColors.gain
+                    else if (rr < 1.0) AurumColors.loss else AurumColors.textDim
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            when (pick.flowVerdict) {
+                "INFLOW" -> {
+                    PillTag(text = "Sector inflow", color = AurumColors.gain)
+                    Spacer(Modifier.width(8.dp))
+                }
+                "OUTFLOW" -> {
+                    PillTag(text = "Sector outflow", color = AurumColors.loss)
+                    Spacer(Modifier.width(8.dp))
+                }
+            }
+            when (pick.aboveVwap) {
+                true -> PillTag(text = "Above VWAP", color = AurumColors.gain)
+                false -> PillTag(text = "Below VWAP", color = AurumColors.loss)
+                null -> {}
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Next session (ATR-projected) ",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.textDim
+            )
+            Text(
+                text = Fmt.signedPct(pick.expectedLowPct),
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.loss
+            )
+            Text(
+                text = " … ",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.textDim
+            )
+            Text(
+                text = Fmt.signedPct(pick.expectedHighPct),
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.gain
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = String.format(Locale.US, "RSI %.0f", pick.rsi),
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = pick.reason,
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+        if (pick.scanNote.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = pick.scanNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.info
+            )
+        }
+        if (pick.newsMeasured && pick.newsNote.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "News: ${pick.newsNote}",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (pick.flowNote.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = pick.flowNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
+        if (pick.extNote.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = pick.extNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.info
+            )
+        }
+        if (pick.heldNote.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = pick.heldNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.gold
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .heightIn(min = 40.dp)
+                .clickable { onOpenAnalysis(pick.symbol) }
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.QueryStats,
+                contentDescription = null,
+                tint = AurumColors.gold,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "Full analysis",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.gold
+            )
+        }
+    }
+}
+
+@Composable
+private fun NextSessionFooterCard(ns: NextSessionReport) {
+    AurumCard {
+        ns.notes.forEach { note ->
+            Row(modifier = Modifier.padding(vertical = 2.dp)) {
+                Text(
+                    text = "•  ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.gold
+                )
+                Text(
+                    text = note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "When a name clears every gate, Aurum pushes a notification — once per " +
+                "name per day, after the close or pre-open.",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.gold
+        )
+    }
+}
+

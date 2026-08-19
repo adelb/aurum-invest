@@ -284,7 +284,10 @@ class MarketPulse(private val market: MarketRepository) {
 
             val reasons = buildReasons(indexes, breadth, advancers, measurable.size, vix)
             val best = bestYesterday(pool)
-            val next = tomorrowPicks(pool)
+            // Next-session positioning is owned by the standalone
+            // NextSessionEngine — the pulse measures the market and stopped
+            // spending a technique-board scan on picks nobody reads from it.
+            val next = emptyList<TomorrowPick>()
 
             MarketRating(
                 date = dateIso,
@@ -491,45 +494,6 @@ class MarketPulse(private val market: MarketRepository) {
             }
             .toList()
 
-    /**
-     * Names positioned for the next session: strong-but-not-blow-off day,
-     * closing near the high, above the 50-day, volume running hot — then the
-     * ~18 best are confirmed against RSI, ATR and the 35-technique board.
-     */
-    private suspend fun tomorrowPicks(pool: List<ScreenerQuote>): List<TomorrowPick> {
-        val shortlist = pool.asSequence()
-            .filter {
-                it.price in 2.0..2500.0 &&
-                    it.avgVolume3M >= 1_000_000L &&
-                    it.price * it.avgVolume3M >= 20_000_000.0 &&
-                    it.marketCap >= 500_000_000.0 &&
-                    it.fiftyDayAvg > 0.0 &&
-                    it.symbol.all { ch -> ch.isLetterOrDigit() }
-            }
-            .mapNotNull { q -> preScore(q)?.let { q to it } }
-            .sortedByDescending { it.second }
-            .take(SHORTLIST)
-            .toList()
-        if (shortlist.isEmpty()) return emptyList()
-
-        val deep = ArrayList<TomorrowPick>()
-        for (chunk in shortlist.chunked(CANDLE_CHUNK)) {
-            val results = coroutineScope {
-                chunk.map { (q, pre) -> async { deepRead(q, pre) } }.awaitAll()
-            }
-            results.filterNotNull().forEach { deep.add(it) }
-        }
-        if (deep.isEmpty()) return emptyList()
-
-        val ranked = deep.sortedByDescending { it.score }.take(5)
-        val minS = ranked.minOf { it.score }
-        val maxS = ranked.maxOf { it.score }
-        val span = maxS - minS
-        return ranked.map { p ->
-            val scaled = if (span > 0.0) 55.0 + (p.score - minS) / span * 45.0 else 70.0
-            p.copy(score = round1(scaled))
-        }
-    }
 
     /** Cheap next-session case from screener fields alone; null = no case. */
     private fun preScore(q: ScreenerQuote): Double? {

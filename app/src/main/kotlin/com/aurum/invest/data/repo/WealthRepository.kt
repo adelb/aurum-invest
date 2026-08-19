@@ -23,12 +23,15 @@ class WealthRepository(
     private val cacheDao: CacheDao,
     private val market: MarketRepository,
     private val news: NewsRepository,
-    private val settings: SettingsRepository
+    private val settings: SettingsRepository,
+    /** Today's entry/power boards — optional context for the next-session scan. */
+    private val picks: PicksRepository? = null
 ) {
 
     companion object {
         // v2: the VIX read gained its 5-session drift.
         private const val PULSE_KEY = "marketpulse:v2"
+        private const val NEXT_SESSION_KEY = "nextsession:v4"
     }
 
     // ---- market pulse -------------------------------------------------------
@@ -116,6 +119,67 @@ class WealthRepository(
         } catch (_: Exception) {
             null
         }
+
+    // ---- next session -------------------------------------------------------
+
+    /**
+     * The next-session report: measured picks with analog-history follow-
+     * through, replayed against each name's own past days. Cached 20 minutes;
+     * the stored copy serves as fallback when the market is unreachable.
+     * Held-position tags come from the ledger at compute time.
+     */
+    suspend fun getNextSession(
+        portfolio: PortfolioRepository,
+        maxAgeMs: Long = 1_200_000L
+    ): com.aurum.invest.analytics.NextSessionReport? {
+        val cached = try {
+            cacheDao.get(NEXT_SESSION_KEY)
+        } catch (_: Exception) {
+            null
+        }
+        val now = System.currentTimeMillis()
+        if (cached != null && now - cached.updatedAt <= maxAgeMs) {
+            com.aurum.invest.analytics.NextSessionReport.fromJson(cached.json)?.let { return it }
+        }
+        return recomputeNextSession(portfolio)
+            ?: cached?.let { com.aurum.invest.analytics.NextSessionReport.fromJson(it.json) }
+    }
+
+    /** Re-runs the full scan: screens, analog replays, board reads. */
+    suspend fun recomputeNextSession(
+        portfolio: PortfolioRepository
+    ): com.aurum.invest.analytics.NextSessionReport? {
+        return try {
+            val held = runCatching {
+                portfolio.positionsNow()
+                    .filter { PortfolioRepository.isOpen(it) }
+                    .associate { it.symbol to it.investedCost }
+            }.getOrDefault(emptyMap())
+            // STORED day boards only — reading them must never trigger the
+            // market-wide scans from the Wealth tab; absent context is
+            // reported by the engine, not silently faked.
+            val dayScans = com.aurum.invest.analytics.DayScanContext.of(
+                entries = runCatching { picks?.getEntries() ?: emptyList() }
+                    .getOrDefault(emptyList()),
+                power = runCatching { picks?.getPower() ?: emptyList() }
+                    .getOrDefault(emptyList())
+            )
+            val report = com.aurum.invest.analytics.NextSessionEngine(market, news)
+                .compute(held = held, dayScans = dayScans)
+            if (report != null) {
+                cacheDao.put(
+                    CacheEntity(
+                        key = NEXT_SESSION_KEY,
+                        json = com.aurum.invest.analytics.NextSessionReport.toJson(report),
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+            }
+            report
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     // ---- the wealth engine --------------------------------------------------
 

@@ -156,4 +156,15 @@ object Dates {
         return now.toLocalTime().isBefore(java.time.LocalTime.of(16, 0))
     }
 
+    /**
+     * Same calendar day in US-market time. Device-local day comparison lies
+     * across midnight while the US session is still running.
+     */
+    fun sameEtDay(ts1: Long, ts2: Long): Boolean {
+        val zone = ZoneId.of("America/New_York")
+        val d1 = Instant.ofEpochMilli(ts1).atZone(zone).toLocalDate()
+        val d2 = Instant.ofEpochMilli(ts2).atZone(zone).toLocalDate()
+        return d1 == d2
+    }
+
 }
