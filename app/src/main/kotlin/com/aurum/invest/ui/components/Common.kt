@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -193,7 +194,9 @@ fun SectionHeader(
 
 /**
  * Label over value. [maxLines] caps both lines so a row of tiles keeps its
- * baselines aligned when one label is longer than its neighbours.
+ * baselines aligned when one label is longer than its neighbours. [info],
+ * when given (dialog title to explanation), hangs the explain dot off the
+ * label — every figure in the app clarifies itself the same way.
  */
 @Composable
 fun StatTile(
@@ -201,16 +204,32 @@ fun StatTile(
     value: String,
     modifier: Modifier = Modifier,
     valueColor: Color = AurumColors.text,
-    maxLines: Int = Int.MAX_VALUE
+    maxLines: Int = Int.MAX_VALUE,
+    info: Pair<String, String>? = null
 ) {
     Column(modifier = modifier) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = AurumColors.textDim,
-            maxLines = maxLines,
-            overflow = TextOverflow.Ellipsis
-        )
+        if (info != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = AurumColors.textDim,
+                    maxLines = maxLines,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Spacer(Modifier.width(4.dp))
+                InfoDot(title = info.first, explanation = info.second)
+            }
+        } else {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.textDim,
+                maxLines = maxLines,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
         Text(
             text = value,
             style = MaterialTheme.typography.titleMedium,

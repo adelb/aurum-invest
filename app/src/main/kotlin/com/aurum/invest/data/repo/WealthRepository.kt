@@ -3,6 +3,7 @@ package com.aurum.invest.data.repo
 import com.aurum.invest.analytics.BookContext
 import com.aurum.invest.analytics.EquityContext
 import com.aurum.invest.analytics.FlowVerdict
+import com.aurum.invest.analytics.GapStatus
 import com.aurum.invest.analytics.Indicators
 import com.aurum.invest.analytics.LiquidityAllocationEngine
 import com.aurum.invest.analytics.LiquidityAllocationLine
@@ -20,6 +21,8 @@ import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.analytics.PortfolioPerformanceEngine
 import com.aurum.invest.analytics.PortfolioReview
 import com.aurum.invest.analytics.SectorAllocationTarget
+import com.aurum.invest.analytics.SectorGap
+import com.aurum.invest.analytics.SectorPick
 import com.aurum.invest.analytics.SectorStrategy
 import com.aurum.invest.analytics.SectorTrend
 import com.aurum.invest.analytics.SectorTrends
@@ -74,7 +77,8 @@ class WealthRepository(
 ) {
 
     companion object {
-        private const val PULSE_KEY = "marketpulse:v2"
+        // v3: the VIX read gained its 5-session drift and TomorrowPick left.
+        private const val PULSE_KEY = "marketpulse:v3"
         private const val TRENDS_KEY = "sectortrends:v3"
         private const val FLOW_KEY = "moneyflow:v2"
         // v7: standalone verdict + allocation engines, new grade scales — a v6
@@ -322,11 +326,12 @@ class WealthRepository(
             val pulse = getMarketPulse()
             val book = com.aurum.invest.analytics.PortfolioLens.build(views, sectors)
             // The strategy provides the board-approved buy candidates that the
-            // rebalance AND the grade engine's improvement actions draw from.
+            // rebalance AND the grade engine's improvement actions draw from —
+            // the same cached build the strategy card and the liquidity plan use.
             val strategy =
                 if (flow == null) null
                 else try {
-                    SectorStrategy(market, news).build(sectorTrendsCached(), book, 0.0, flow)
+                    getStrategy(book)
                 } catch (_: Exception) {
                     null
                 }
@@ -353,7 +358,7 @@ class WealthRepository(
             val priorStops = priorStops(entryTs)
             // The market scan the allocation plan deploys freed capital into —
             // the same candidate universe the liquidity card uses.
-            val candidates = runCatching { gatherLiquidityCandidates() }
+            val candidates = runCatching { gatherLiquidityCandidates(book) }
                 .getOrDefault(emptyList())
             val review = PortfolioAdvisor(market, news, profile).review(
                 views = views,
@@ -523,18 +528,35 @@ class WealthRepository(
 
     // ---- weekly sector strategy --------------------------------------------
 
+    /** One strategy build serves the card, the review, and the liquidity plan for this long. */
+    private val strategyTtlMs = 600_000L
+
+    @Volatile
+    private var strategyCache: Triple<String, Long, WeeklyStrategy>? = null
+
     /**
      * The week's sector answer for THIS book: which themes the money is
      * entering, which the portfolio is missing, and the strongest stock from
-     * each theme's full shelf. The split is expressed in percentages — the
-     * user decides the dollars. Returns null only when the market is
-     * unreachable.
+     * each theme's full shelf. v9: the split is sized in the wallet's real
+     * uninvested dollars — the same liquidity identity every other card
+     * reads — instead of bare percentages. Returns null only when the market
+     * is unreachable.
      */
     suspend fun getStrategy(book: BookContext): WeeklyStrategy? =
         try {
+            // Null wallet = unknown cash: the strategy then quotes percentages
+            // only (investable 0), never a pretended dollar figure.
+            val investable = wallet?.let { runCatching { it.liquidityNow() }.getOrNull() } ?: 0.0
+            val fp = liquidityFingerprint(investable, book)
+            val now = System.currentTimeMillis()
+            strategyCache?.let { (cachedFp, at, cached) ->
+                if (cachedFp == fp && now - at <= strategyTtlMs) return cached
+            }
             val trends = sectorTrendsCached()
             val flow = getMoneyFlow() ?: return null
-            SectorStrategy(market, news).build(trends, book, 0.0, flow)
+            val built = SectorStrategy(market, news).build(trends, book, investable, flow)
+            if (built != null) strategyCache = Triple(fp, now, built)
+            built
         } catch (_: Exception) {
             null
         }
@@ -571,7 +593,7 @@ class WealthRepository(
 
     suspend fun recomputeLiquidityPlan(liquidity: Double, book: BookContext): LiquidityPlan? {
         return try {
-            val candidates = gatherLiquidityCandidates()
+            val candidates = gatherLiquidityCandidates(book)
             val flow = getMoneyFlow()
             val trends = sectorTrendsCached()
             val profile = settings?.let {
@@ -603,11 +625,17 @@ class WealthRepository(
     /**
      * The candidate universe for liquidity deployment: today's entry and
      * power-hour picks, deduplicated by symbol (entry picks preferred — they
-     * carry the analyst rating field). Every per-symbol enrichment (candles,
-     * quote, sector, fundamentals) is wrapped so one bad symbol never aborts
-     * the whole gather.
+     * carry the analyst rating field), PLUS — v9 — the board-passed picks
+     * from the sector shelves the money is measurably flowing into. The
+     * strategy scan already read those names through the technique board, so
+     * a trendy theme the day's entry board missed can still receive a ticket,
+     * and the plan's per-sector answer covers every inflow theme.
+     * Every per-symbol enrichment (candles, quote, sector, fundamentals) is
+     * wrapped so one bad symbol never aborts the whole gather.
      */
-    private suspend fun gatherLiquidityCandidates(): List<LiquidityCandidate> {
+    private suspend fun gatherLiquidityCandidates(
+        book: BookContext = BookContext.EMPTY
+    ): List<LiquidityCandidate> {
         val entries = try {
             picks?.ensureEntries() ?: emptyList()
         } catch (_: Exception) {
@@ -618,7 +646,19 @@ class WealthRepository(
         } catch (_: Exception) {
             emptyList()
         }
-        if (entries.isEmpty() && power.isEmpty()) return emptyList()
+        // The trendy sectors' own shelves: themes the flow engine backs or the
+        // book is thin in, each pick already vetted by the strategy's board gate.
+        val shelfPicks: List<Pair<SectorGap, SectorPick>> = try {
+            getStrategy(book)?.gaps.orEmpty()
+                .filter {
+                    it.flowVerdict == FlowVerdict.INFLOW ||
+                        it.status == GapStatus.MISSING || it.status == GapStatus.UNDER
+                }
+                .flatMap { gap -> gap.picks.take(3).map { gap to it } }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        if (entries.isEmpty() && power.isEmpty() && shelfPicks.isEmpty()) return emptyList()
 
         val bySymbol = LinkedHashMap<String, Pair<EntryPick?, PowerPick?>>()
         entries.forEach { e ->
@@ -630,8 +670,15 @@ class WealthRepository(
             val existing = bySymbol[sym]
             bySymbol[sym] = existing?.first to p
         }
+        // Shelf picks join only for symbols the day's boards did not already
+        // surface — the entry/power read carries more measured fields and wins.
+        val shelfBySymbol = LinkedHashMap<String, Pair<SectorGap, SectorPick>>()
+        shelfPicks.forEach { (gap, pick) ->
+            val sym = pick.symbol.trim().uppercase()
+            if (sym !in bySymbol && sym !in shelfBySymbol) shelfBySymbol[sym] = gap to pick
+        }
 
-        val symbols = bySymbol.keys.toList()
+        val symbols = bySymbol.keys.toList() + shelfBySymbol.keys.toList()
         val sectors = try {
             market.getSectors(symbols)
         } catch (_: Exception) {
@@ -643,13 +690,97 @@ class WealthRepository(
             emptyMap()
         }
         return coroutineScope {
-            symbols.map { sym ->
+            bySymbol.keys.map { sym ->
                 async {
                     runCatching { buildLiquidityCandidate(sym, bySymbol.getValue(sym), sectors, quotes) }
                         .getOrNull()
                 }
-            }.awaitAll()
+            }.plus(
+                shelfBySymbol.keys.map { sym ->
+                    async {
+                        runCatching {
+                            val (gap, pick) = shelfBySymbol.getValue(sym)
+                            buildShelfCandidate(sym, gap, pick, sectors, quotes)
+                        }.getOrNull()
+                    }
+                }
+            ).awaitAll()
         }.filterNotNull()
+    }
+
+    /**
+     * A [LiquidityCandidate] from a strategy-shelf pick. Uses the SAME 180-day
+     * range the strategy scan cached, so this costs no extra candle requests;
+     * the 200-day average is honestly 0 (unmeasured at that depth) rather than
+     * fetched deeper for every shelf name.
+     */
+    private suspend fun buildShelfCandidate(
+        symbol: String,
+        gap: SectorGap,
+        pick: SectorPick,
+        sectors: Map<String, String>,
+        quotes: Map<String, Quote>
+    ): LiquidityCandidate? {
+        if (pick.price <= 0.0) return null
+        val quote = quotes[symbol]
+        val closes = try {
+            market.getDailyCandles(symbol, 180).map { it.close }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val fiftyDayAvg = Indicators.sma(closes, 50) ?: 0.0
+        val price = quote?.price?.takeIf { it > 0.0 } ?: pick.price
+        val agreement =
+            if (pick.techTotal > 0) (pick.techBullish * 100.0 / pick.techTotal) else 0.0
+
+        var analystRating: Double? = null
+        var marketCap = 0.0
+        runCatching {
+            fundamentals?.getFundamentals(symbol)?.data?.let { f ->
+                marketCap = f.marketCap ?: 0.0
+                analystRating = f.recommendationMean
+            }
+        }
+
+        val historyNote = if (fiftyDayAvg > 0.0 && price > 0.0) {
+            val vs50 = (price - fiftyDayAvg) / fiftyDayAvg * 100.0
+            "%s is %.1f%% %s its 50-day average".format(
+                symbol, abs(vs50), if (vs50 >= 0) "above" else "below"
+            )
+        } else {
+            ""
+        }
+
+        return LiquidityCandidate(
+            symbol = symbol,
+            name = pick.name.ifBlank { symbol },
+            sector = sectors[symbol] ?: PortfolioLens.UNCLASSIFIED,
+            price = price,
+            // The shelf pick's entry quality is its board agreement — measured
+            // by the strategy scan, not inherited from an entry-board score it
+            // never earned.
+            entryScore = agreement,
+            volumeRatio = pick.volumeRatio,
+            dayChangePct = quote?.dayChangePct ?: 0.0,
+            rsi = pick.rsi,
+            techDirection =
+                if (pick.techTotal > 0 && pick.techBullish * 2 > pick.techTotal) {
+                    TechniqueVerdict.BULLISH
+                } else {
+                    TechniqueVerdict.NEUTRAL
+                },
+            techConfidence = agreement.toInt(),
+            newsScore = pick.newsScore,
+            newsHeadline = pick.newsNote,
+            analystRating = analystRating,
+            fiftyDayAvg = fiftyDayAvg,
+            twoHundredDayAvg = 0.0,
+            marketCap = marketCap,
+            historyNote = historyNote,
+            reason = pick.reason.ifBlank {
+                "Strongest board-passed name on the ${gap.label} shelf the flow engine backs"
+            }
+        )
     }
 
     /** One symbol's [LiquidityCandidate], best-effort — never throws, may return null. */

@@ -59,6 +59,7 @@ import com.aurum.invest.analytics.LiquidityAllocationLine
 import com.aurum.invest.analytics.LiquidityPlan
 import com.aurum.invest.analytics.MarketCall
 import com.aurum.invest.analytics.MarketMover
+import com.aurum.invest.analytics.MarketPulse
 import com.aurum.invest.analytics.MarketRating
 import com.aurum.invest.analytics.MoneyFlowReport
 import com.aurum.invest.analytics.NextSessionPick
@@ -82,6 +83,9 @@ import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.AlertPermissionCard
 import com.aurum.invest.ui.components.DeltaPct
+import com.aurum.invest.ui.components.ExplainedLabel
+import com.aurum.invest.ui.components.InfoDot
+import com.aurum.invest.ui.components.Meanings
 import com.aurum.invest.ui.components.PillTag
 import com.aurum.invest.ui.components.ScoreBar
 import com.aurum.invest.ui.components.SentimentDot
@@ -377,8 +381,10 @@ private fun WealthContent(
                 if (open("weekmoney")) {
                     item {
                         Text(
-                            text = "How new money would split across the themes the flow engine " +
-                                "backs, as percentages — you decide the dollars.",
+                            text = "How this week's new money splits across the themes the flow " +
+                                "engine backs — sized in your wallet's real uninvested dollars " +
+                                "when it is set, percentages otherwise. Each theme names its " +
+                                "strongest board-passed stock and the alternates.",
                             style = MaterialTheme.typography.bodySmall,
                             color = AurumColors.textDim,
                             modifier = Modifier.padding(horizontal = 4.dp)
@@ -620,11 +626,15 @@ private fun PortfolioGradeCard(grade: PortfolioGrade, onOpenDetail: (String) -> 
     AurumCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Portfolio grade",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Portfolio grade",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = AurumColors.text
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    InfoDot(title = "Portfolio grade", explanation = Meanings.GRADE)
+                }
                 Text(
                     text = "Your book against the published rules of elite investors — " +
                         "Buffett, O'Neil, Livermore, Weinstein, Minervini.",
@@ -1652,11 +1662,16 @@ private fun MoneyFlowCard(flow: MoneyFlowReport?, loading: Boolean) {
             )
             return@AurumCard
         }
-        Text(
-            text = flow.headline,
-            style = MaterialTheme.typography.titleSmall,
-            color = AurumColors.text
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = flow.headline,
+                style = MaterialTheme.typography.titleSmall,
+                color = AurumColors.text,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(8.dp))
+            InfoDot(title = "Money-flow score", explanation = Meanings.FLOW_SCORE)
+        }
         Spacer(Modifier.height(4.dp))
         Text(
             text = "Updated ${Fmt.timeAgo(flow.computedAt)} · S&P 500 ${Fmt.signedPct(flow.spyR20Pct)} over 20 days",
@@ -1771,19 +1786,62 @@ private fun LiquidityPlanCard(
             style = MaterialTheme.typography.labelSmall,
             color = AurumColors.textDim
         )
-        if (plan.sectorTargets.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
-            plan.sectorTargets.forEach { t ->
-                LiquiditySectorRow(t)
-                Spacer(Modifier.height(6.dp))
-            }
-        }
         if (plan.lines.isNotEmpty()) {
-            Spacer(Modifier.height(6.dp))
-            HorizontalDivider(color = AurumColors.hairline, modifier = Modifier.padding(vertical = 6.dp))
-            plan.lines.forEach { line ->
-                LiquidityLineRow(line, onOpenAnalysis, onOpenDetail)
+            // The answer, grouped by sector: which sectors get money, how much
+            // each gets, and how many stocks — named — carry it.
+            val targetsBySector = plan.sectorTargets.associateBy { it.sector }
+            val groups = plan.lines.groupBy { it.sector }
+                .entries.sortedByDescending { (_, lines) -> lines.sumOf { it.amount } }
+            Spacer(Modifier.height(12.dp))
+            ExplainedLabel(
+                text = "Deployment by sector",
+                dialogTitle = "Sector targets",
+                explanation = Meanings.SECTOR_TARGET,
+                style = MaterialTheme.typography.labelMedium
+            )
+            groups.forEach { (sector, lines) ->
                 Spacer(Modifier.height(10.dp))
+                SectorDeploymentGroup(
+                    sector = sector,
+                    target = targetsBySector[sector],
+                    lines = lines,
+                    onOpenAnalysis = onOpenAnalysis,
+                    onOpenDetail = onOpenDetail
+                )
+            }
+            // A theme the money is entering but nothing cleared the bar in —
+            // said out loud rather than silently absent.
+            val unfilled = plan.sectorTargets.filter { t ->
+                t.flow == FlowVerdict.INFLOW && plan.lines.none { it.sector == t.sector }
+            }
+            if (unfilled.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = unfilled.joinToString(" ") { t ->
+                        "Money is flowing into ${t.sector}, but no name there cleared the " +
+                            "conviction bar this run — no ticket was forced."
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+            val otherTargets = plan.sectorTargets.filter { t ->
+                plan.lines.none { it.sector == t.sector } && t !in unfilled
+            }
+            if (otherTargets.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                HorizontalDivider(color = AurumColors.hairline)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "Other sector targets",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = AurumColors.textDim
+                )
+                Spacer(Modifier.height(6.dp))
+                otherTargets.forEach { t ->
+                    LiquiditySectorRow(t)
+                    Spacer(Modifier.height(6.dp))
+                }
             }
         } else {
             Spacer(Modifier.height(8.dp))
@@ -1792,10 +1850,21 @@ private fun LiquidityPlanCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = AurumColors.textDim
             )
+            if (plan.sectorTargets.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                plan.sectorTargets.forEach { t ->
+                    LiquiditySectorRow(t)
+                    Spacer(Modifier.height(6.dp))
+                }
+            }
         }
         if (plan.reserveCash > 0.0) {
             Spacer(Modifier.height(10.dp))
-            StatTile(label = "Reserve cash", value = Fmt.money(plan.reserveCash))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StatTile(label = "Reserve cash", value = Fmt.money(plan.reserveCash))
+                Spacer(Modifier.width(8.dp))
+                InfoDot(title = "Reserve cash", explanation = Meanings.RESERVE_CASH)
+            }
             Spacer(Modifier.height(2.dp))
             Text(
                 text = plan.reserveReason,
@@ -1815,6 +1884,60 @@ private fun LiquidityPlanCard(
             style = MaterialTheme.typography.labelSmall,
             color = AurumColors.textDim
         )
+    }
+}
+
+/**
+ * One sector's slice of the deployment: the sector, its flow verdict, its
+ * current → target share of the account, the dollars it receives, and the
+ * named stocks — the count said out loud — that carry them.
+ */
+@Composable
+private fun SectorDeploymentGroup(
+    sector: String,
+    target: SectorAllocationTarget?,
+    lines: List<LiquidityAllocationLine>,
+    onOpenAnalysis: (String) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
+    val total = lines.sumOf { it.amount }
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = sector,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = buildString {
+                        append("${lines.size} stock${if (lines.size == 1) "" else "s"} · ")
+                        append(Fmt.money(total))
+                        if (target != null) {
+                            append(" · ${Fmt.pct(target.currentPct)} → ${Fmt.pct(target.targetPct)} of account")
+                        }
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.gold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            when (target?.flow) {
+                FlowVerdict.INFLOW -> PillTag(text = "Money in", color = AurumColors.gain)
+                FlowVerdict.OUTFLOW -> PillTag(text = "Money out", color = AurumColors.loss)
+                FlowVerdict.NEUTRAL -> PillTag(text = "Balanced", color = AurumColors.textDim)
+                null -> Unit
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        lines.forEach { line ->
+            LiquidityLineRow(line, onOpenAnalysis, onOpenDetail)
+            Spacer(Modifier.height(10.dp))
+        }
     }
 }
 
@@ -1874,11 +1997,15 @@ private fun LiquidityLineRow(
                     style = MaterialTheme.typography.titleSmall,
                     color = AurumColors.gold
                 )
-                Text(
-                    text = "${line.confidence}% conf",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "${line.confidence}% conviction",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    InfoDot(title = "Conviction", explanation = Meanings.CONVICTION)
+                }
             }
         }
         line.rationale.take(2).forEach { r ->
@@ -2001,27 +2128,31 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
                     strokeWidth = 2.dp
                 )
             } else if (pulse != null) {
-                Row(verticalAlignment = Alignment.Bottom) {
-                    // An INCOMPLETE pulse carries no score — a number next to
-                    // "No call" would read as a measurement.
-                    Text(
-                        text = pulse.score?.toString() ?: "—",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = when (pulse.call) {
-                            MarketCall.INVEST -> AurumColors.gain
-                            MarketCall.SELECTIVE -> AurumColors.gold
-                            MarketCall.DEFENSIVE -> AurumColors.loss
-                            MarketCall.INCOMPLETE -> AurumColors.textDim
-                        }
-                    )
-                    if (pulse.score != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        // An INCOMPLETE pulse carries no score — a number next to
+                        // "No call" would read as a measurement.
                         Text(
-                            text = " /100",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = AurumColors.textDim
+                            text = pulse.score?.toString() ?: "—",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = when (pulse.call) {
+                                MarketCall.INVEST -> AurumColors.gain
+                                MarketCall.SELECTIVE -> AurumColors.gold
+                                MarketCall.DEFENSIVE -> AurumColors.loss
+                                MarketCall.INCOMPLETE -> AurumColors.textDim
+                            }
                         )
+                        if (pulse.score != null) {
+                            Text(
+                                text = " /100",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = AurumColors.textDim
+                            )
+                        }
                     }
+                    Spacer(Modifier.width(8.dp))
+                    InfoDot(title = "Market pulse score", explanation = Meanings.PULSE_SCORE)
                 }
             }
         }
@@ -2063,6 +2194,11 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
             style = MaterialTheme.typography.bodyMedium,
             color = AurumColors.textDim
         )
+
+        // The VIX read — the market's own 30-day swing forecast, first-class
+        // rather than buried in the reasons list.
+        Spacer(Modifier.height(12.dp))
+        VixBlock(vix = pulse.vix, change5d = pulse.vixChange5d)
 
         if (pulse.reasons.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
@@ -2113,6 +2249,72 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
             style = MaterialTheme.typography.labelSmall,
             color = AurumColors.textDim
         )
+    }
+}
+
+/**
+ * The VIX index row of the market pulse: level, volatility regime, 5-session
+ * drift, and the explain dot. An unreachable read says so — no level is ever
+ * invented for it.
+ */
+@Composable
+private fun VixBlock(vix: Double?, change5d: Double?) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            ExplainedLabel(
+                text = "VIX — expected 30-day swings",
+                dialogTitle = "The VIX index",
+                explanation = Meanings.VIX
+            )
+            Spacer(Modifier.height(2.dp))
+            if (vix == null) {
+                Text(
+                    text = "Unavailable this run — the volatility read could not be measured.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            } else {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        text = String.format(Locale.US, "%.1f", vix),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = when {
+                            vix < 20.0 -> AurumColors.gain
+                            vix < 25.0 -> AurumColors.gold
+                            else -> AurumColors.loss
+                        }
+                    )
+                    if (change5d != null) {
+                        Text(
+                            text = String.format(
+                                Locale.US, "  %s%.1f pts · 5 days",
+                                if (change5d >= 0) "+" else "", change5d
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            // A RISING vix is the adverse direction — color by
+                            // meaning, not by sign.
+                            color = when {
+                                change5d <= -0.05 -> AurumColors.gain
+                                change5d >= 0.05 -> AurumColors.loss
+                                else -> AurumColors.textDim
+                            },
+                            modifier = Modifier.padding(bottom = 3.dp)
+                        )
+                    }
+                }
+            }
+        }
+        if (vix != null) {
+            PillTag(
+                text = MarketPulse.vixRegime(vix),
+                color = when {
+                    vix < 20.0 -> AurumColors.gain
+                    vix < 25.0 -> AurumColors.gold
+                    else -> AurumColors.loss
+                }
+            )
+        }
     }
 }
 
@@ -2242,16 +2444,27 @@ private fun AllocationRow(
                 )
             }
             Column(horizontalAlignment = Alignment.End) {
+                // With a stated wallet the theme is sized in real dollars; an
+                // unknown wallet honestly falls back to percentages only.
                 Text(
-                    text = Fmt.pct(slice.sharePct),
+                    text = if (slice.amount > 0.0) Fmt.money(slice.amount)
+                    else Fmt.pct(slice.sharePct),
                     style = MaterialTheme.typography.titleMedium,
                     color = AurumColors.gold
                 )
-                Text(
-                    text = "of new money",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (slice.amount > 0.0) {
+                            "${Fmt.pct(slice.sharePct)} of new money"
+                        } else {
+                            "of new money"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    InfoDot(title = "Theme sizing", explanation = Meanings.THEME_AMOUNT)
+                }
             }
         }
         if (lead != null) {
@@ -2492,7 +2705,8 @@ private fun PerformanceCard(perf: PortfolioPerformance?, loading: Boolean) {
                 label = "Your return (TWR)",
                 value = Fmt.signedPct(perf.twrPct),
                 modifier = Modifier.weight(1f),
-                valueColor = AurumColors.deltaColor(perf.twrPct)
+                valueColor = AurumColors.deltaColor(perf.twrPct),
+                info = "Time-weighted return" to Meanings.TWR
             )
             StatTile(
                 label = "SPY same days",
@@ -2504,7 +2718,8 @@ private fun PerformanceCard(perf: PortfolioPerformance?, loading: Boolean) {
                 label = "Max drawdown",
                 value = Fmt.pct(perf.maxDrawdownPct),
                 modifier = Modifier.weight(1f),
-                valueColor = AurumColors.loss
+                valueColor = AurumColors.loss,
+                info = "Max drawdown" to Meanings.MAX_DRAWDOWN
             )
         }
         Spacer(Modifier.height(10.dp))
@@ -2517,12 +2732,14 @@ private fun PerformanceCard(perf: PortfolioPerformance?, loading: Boolean) {
             StatTile(
                 label = "Beta vs SPY",
                 value = perf.beta?.let { String.format(Locale.US, "%.2f", it) } ?: "—",
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                info = "Beta" to Meanings.BETA
             )
             StatTile(
                 label = "Sharpe (rf 0)",
                 value = perf.sharpe?.let { String.format(Locale.US, "%.2f", it) } ?: "—",
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                info = "Sharpe ratio" to Meanings.SHARPE
             )
         }
         if (perf.equityCurve.size >= 2) {
