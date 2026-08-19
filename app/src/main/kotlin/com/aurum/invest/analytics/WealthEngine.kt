@@ -39,7 +39,7 @@ data class HoldingEvaluation(
      */
     val trailStop: Double?,
     val stopDistancePct: Double?,     // how far the stop sits below the price
-    /** Next earnings report, when one is known and near; null otherwise. */
+    /** Next earnings report whenever one is known; null = none known (ETFs) or unmeasured. */
     val nextEarningsTs: Long? = null,
     val earningsEstimate: Boolean = false,
     val move: HoldingMove,
@@ -165,9 +165,6 @@ object WealthEngine {
      * absence of data is unmeasured, not "no earnings soon".
      */
     const val EARNINGS_BLACKOUT_DAYS = 7
-
-    /** A known report inside this window is worth a line on the holding. */
-    const val EARNINGS_SHOW_DAYS = 14
 
     fun evaluate(inputs: WealthInputs): WealthReport {
         val now = System.currentTimeMillis()
@@ -304,20 +301,13 @@ object WealthEngine {
         }
 
         // ---- earnings proximity, when the date is known -----------------
+        // The date itself is surfaced on the evaluation whenever Yahoo knows
+        // it, however far out; the blackout only gates inside its window.
         val now = System.currentTimeMillis()
         val earnings = inputs.earnings[symbol]
         val nextEarnings = earnings?.nextTs
         val earningsSoon = nextEarnings != null &&
             nextEarnings <= now + EARNINGS_BLACKOUT_DAYS * 86_400_000L
-        val earningsNear = nextEarnings != null &&
-            nextEarnings <= now + EARNINGS_SHOW_DAYS * 86_400_000L
-        if (nextEarnings != null && earningsNear) {
-            reasons += String.format(
-                Locale.US, "Earnings %s%s.",
-                earningsDate(nextEarnings),
-                if (earnings.estimate) " (est.)" else ""
-            )
-        }
 
         // ---- the move, from measured evidence only ----------------------
         val maxPos = inputs.profile.maxPositionPct
@@ -408,8 +398,8 @@ object WealthEngine {
             above200 = above200,
             trailStop = trailStop?.let { round2(it) },
             stopDistancePct = stopDistance?.let { round1(it) },
-            nextEarningsTs = nextEarnings.takeIf { earningsNear },
-            earningsEstimate = earnings?.estimate == true && earningsNear,
+            nextEarningsTs = nextEarnings,
+            earningsEstimate = nextEarnings != null && earnings?.estimate == true,
             move = move,
             conviction = conviction,
             reasons = reasons

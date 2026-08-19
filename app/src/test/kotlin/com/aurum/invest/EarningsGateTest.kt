@@ -117,24 +117,28 @@ class EarningsGateTest {
             addSetupInputs(mapOf("S01" to earnings("S01", inDays = 30)))
         ).holdings.first { it.symbol == "S01" }
         assertEquals(HoldingMove.ADD, distant.move)
-        // 30 days out is beyond the show window too — nothing surfaced.
-        assertNull(distant.nextEarningsTs)
+        // 30 days out never gates — but the date is still surfaced.
+        assertNotNull(distant.nextEarningsTs)
 
         val unknown = WealthEngine.evaluate(
             addSetupInputs(mapOf("S01" to earnings("S01", inDays = null)))
         ).holdings.first { it.symbol == "S01" }
         assertEquals(HoldingMove.ADD, unknown.move)
+        // "Checked, none known" surfaces nothing — never a guessed date.
+        assertNull(unknown.nextEarningsTs)
     }
 
     @Test
-    fun aNearDateIsSurfacedEvenWhenNoAddIsInPlay() {
+    fun aKnownDateIsAlwaysSurfacedWithItsEstimateFlag() {
         val report = WealthEngine.evaluate(
-            addSetupInputs(mapOf("S02" to earnings("S02", inDays = 10, estimate = true)))
+            addSetupInputs(mapOf("S02" to earnings("S02", inDays = 45, estimate = true)))
         )
         val holding = report.holdings.first { it.symbol == "S02" }
         assertNotNull(holding.nextEarningsTs)
         assertTrue(holding.earningsEstimate)
-        assertTrue(holding.reasons.any { it.contains("Earnings") && it.contains("est.") })
+        // A holding with no earnings data carries none — absent, not faked.
+        val other = report.holdings.first { it.symbol == "S03" }
+        assertNull(other.nextEarningsTs)
     }
 
     // ---- the liquidity planner's deployment gate ----------------------------

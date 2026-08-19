@@ -76,6 +76,7 @@ import com.aurum.invest.analytics.RecordBucket
 import com.aurum.invest.analytics.RiskStats
 import com.aurum.invest.analytics.TechniqueVerdict
 import com.aurum.invest.analytics.WealthDiscipline
+import com.aurum.invest.analytics.WealthEngine
 import com.aurum.invest.analytics.WealthReport
 import com.aurum.invest.analytics.LiquidityPlanner
 import com.aurum.invest.analytics.MarketPulse
@@ -1612,6 +1613,24 @@ private fun HoldingEvalRow(
                     } ?: ""),
                 style = MaterialTheme.typography.labelSmall,
                 color = AurumColors.gold
+            )
+        }
+        // The next report, always visible when Yahoo knows it. Gold inside
+        // the blackout window — that's when it changes what the engine does.
+        eval.nextEarningsTs?.let { ts ->
+            val days = ((ts - System.currentTimeMillis()) / 86_400_000L).toInt()
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Earnings ${Fmt.dateShort(ts)}" +
+                    (if (eval.earningsEstimate) " (est.)" else "") +
+                    when {
+                        days <= 0 -> " — today"
+                        days == 1 -> " — tomorrow"
+                        else -> " — in $days days"
+                    },
+                style = MaterialTheme.typography.labelSmall,
+                color = if (days <= WealthEngine.EARNINGS_BLACKOUT_DAYS) AurumColors.gold
+                else AurumColors.textDim
             )
         }
         Spacer(Modifier.height(8.dp))
