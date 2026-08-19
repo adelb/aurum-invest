@@ -63,6 +63,7 @@ import com.aurum.invest.analytics.RotationState
 import com.aurum.invest.analytics.StockCatalog
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.ui.components.ActionBadge
+import com.aurum.invest.ui.components.AnimatedMoney
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.DeltaPct
@@ -640,12 +641,10 @@ private fun BrowseRowCard(
             Column(horizontalAlignment = Alignment.End) {
                 val quote = row.quote
                 if (quote != null) {
-                    Text(
-                        text = Fmt.money(quote.price),
+                    AnimatedMoney(
+                        value = quote.price,
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        baseColor = AurumColors.text,
                         modifier = Modifier.widthIn(max = 110.dp)
                     )
                     DeltaPct(
@@ -818,12 +817,10 @@ private fun WatchRowCard(
             Column(horizontalAlignment = Alignment.End) {
                 val quote = row.quote
                 if (quote != null) {
-                    Text(
-                        text = Fmt.money(quote.price),
+                    AnimatedMoney(
+                        value = quote.price,
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        baseColor = AurumColors.text,
                         modifier = Modifier.widthIn(max = 110.dp)
                     )
                     DeltaPct(

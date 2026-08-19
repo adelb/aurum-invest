@@ -62,6 +62,7 @@ import com.aurum.invest.data.model.FeedStatus
 import com.aurum.invest.data.model.NewsItem
 import com.aurum.invest.data.model.Quote
 import com.aurum.invest.ui.components.ActionBadge
+import com.aurum.invest.ui.components.AnimatedMoney
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.DeltaMoney
@@ -185,14 +186,15 @@ fun PositionDetailScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp)
             ) {
-                // price hero
+                // price hero — rolls per digit as the live ticker re-prices it,
+                // so the mover is the digit that turned, not a hunt.
                 item {
                     val quote = state.quote
                     Column {
-                        Text(
-                            text = Fmt.money(quote?.price ?: state.chart3M.closes.lastOrNull() ?: 0.0),
+                        AnimatedMoney(
+                            value = quote?.price ?: state.chart3M.closes.lastOrNull() ?: 0.0,
                             style = MaterialTheme.typography.displayLarge,
-                            color = AurumColors.text
+                            baseColor = AurumColors.text
                         )
                         if (quote != null) {
                             Spacer(Modifier.height(2.dp))

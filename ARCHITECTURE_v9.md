@@ -355,7 +355,47 @@ the Market-data card.
 
 ---
 
-## 6. Where this is a judgment call, not a fact
+## 6. Delivery status — v9.0 (2026-08-19)
+
+The v9 branch was cut from v3.8 (`84bdd50`) and shipped as versionName 9.0
+(versionCode 53). What the user confirmed from this document, delivered:
+
+**Re-added from the KEEP list, substantially as-is:** wallet cash identity +
+cash ledger + oversell/edit guards + broker-ref uniqueness + FX + splits +
+exact cents · nested Reports (year→months→weeks→days) · the 35-technique
+board + TechniqueEvaluator + Trusted gate · sector flow + MarketPulse + the
+honest-numbers layer · the v8.0 portfolio engines (verdict / allocation /
+grade) + performance · per-digit rolling figures (now also on the detail-hero
+price and the Stocks rows) · feed discipline · the full test suite.
+
+**Cut, as prescribed:** NextWeekPlanner (and the Wealth preview section),
+RelationPicker (and the Relations tab), GoldCorrelation (and its cards),
+TomorrowPick inside MarketPulse, DailyPicker / WealthPlanner / Watchlist
+screens. Deferred fold-ins, kept as-is for now: PowerPicker → EntryPicker,
+IntradayPicker → PreMarketPicker (§1.2's session-parameter rewrite).
+
+**L1, first slice:** the superset-range candle store — one canonical daily
+series per symbol under `candles:$symbol` at the deepest range any caller
+asked for; shallow callers are served a slice reproducing the exact Yahoo
+bucket a direct fetch returned (locked by `CandleRangeStoreTest`). Range
+fragmentation (F2) is closed for the OHLCV path; grain routing and the
+declared-budget resolver remain future work.
+
+**New in v9.0:** the VIX index as a first-class Wealth figure (level,
+5-session drift, regime label on the score's own bands) · the explain layer —
+an ⓘ dot beside every load-bearing Wealth figure, fed by one `Meanings`
+glossary · the portfolio-aware deployment answer: liquidity evaluated and
+deployed sector by sector with named, counted stocks and dollar tickets,
+candidates drawn from the entry boards AND the trendy sectors' shelves
+(riding the strategy scan's own cache), the weekly theme split sized in real
+wallet dollars, and one cached strategy build serving the card, the review,
+and the plan.
+
+Tests: 159 → 168, all green.
+
+---
+
+## 7. Where this is a judgment call, not a fact
 
 Three of the cuts are product decisions and should be confirmed rather than
 assumed:
