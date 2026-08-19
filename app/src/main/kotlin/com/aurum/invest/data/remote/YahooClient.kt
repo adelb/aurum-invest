@@ -118,7 +118,9 @@ class YahooClient {
                     rangeDays <= 400 -> "1y"
                     // The technique-trust replay needs a year of graded days
                     // PLUS indicator warm-up before each one.
-                    else -> "2y"
+                    rangeDays <= 730 -> "2y"
+                    // The study engine's 6-month and 1-year analog horizons.
+                    else -> "5y"
                 }
                 val root = getJson(chartUrl(symbol, range = range, interval = "1d"))
                     ?: return@withContext emptyList()
@@ -461,8 +463,12 @@ class YahooClient {
                 val out = ArrayList<Pair<String, String>>()
                 for (i in 0 until quotes.length()) {
                     val q = quotes.optJSONObject(i) ?: continue
+                    // Equities AND funds: names like SKYY or SMH are ETFs, and
+                    // filtering them out made them unfindable app-wide.
                     val quoteType = q.optString("quoteType", "")
-                    if (!quoteType.equals("EQUITY", ignoreCase = true)) continue
+                    val tradable = quoteType.equals("EQUITY", ignoreCase = true) ||
+                        quoteType.equals("ETF", ignoreCase = true)
+                    if (!tradable) continue
                     val market = q.optString("market", "")
                     val exchange = q.optString("exchange", "")
                     val isUs = market.equals("us_market", ignoreCase = true) ||

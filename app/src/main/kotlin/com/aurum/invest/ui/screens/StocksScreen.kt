@@ -60,11 +60,15 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
+import com.aurum.invest.analytics.HeldPosition
 import com.aurum.invest.analytics.PriceProjection
 import com.aurum.invest.analytics.RotationState
 import com.aurum.invest.analytics.StockCatalog
@@ -1047,8 +1051,11 @@ private fun StudyMode(
                     }
                 }
                 item { StudyHeaderCard(s, onOpen = { onOpenDetail(s.symbol) }) }
-                s.projection?.let { p ->
-                    item { StudyProjectionCard(p, s.price) }
+                s.held?.let { h ->
+                    item { StudyHeldCard(h, s.projections, s.symbol) }
+                }
+                if (s.projections.isNotEmpty()) {
+                    item { StudyProjectionCard(s.projections, s.price) }
                 }
                 item { StudyFactorsCard(s) }
                 item { StudyPerformanceCard(s) }
@@ -1158,16 +1165,43 @@ private fun StudyHeaderCard(s: StockStudy, onOpen: () -> Unit) {
 }
 
 @Composable
-private fun StudyProjectionCard(p: PriceProjection, price: Double) {
+private fun StudyProjectionCard(projections: List<PriceProjection>, price: Double) {
+    // The chosen horizon survives new studies by label, not by index.
+    var selLabel by rememberSaveable { mutableStateOf("1 month") }
+    val p = projections.firstOrNull { it.label == selLabel } ?: projections.first()
     AurumCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "One month out — the measured range",
+                text = "The road ahead — measured ranges",
                 style = MaterialTheme.typography.titleSmall,
                 color = AurumColors.text,
                 modifier = Modifier.weight(1f)
             )
             InfoDot(title = "The projection", explanation = Meanings.PROJECTION)
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            projections.forEach { proj ->
+                val selected = proj.label == p.label
+                Text(
+                    text = proj.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (selected) AurumColors.gold else AurumColors.textDim,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(
+                            if (selected) AurumColors.goldSoft else AurumColors.surfaceHigh
+                        )
+                        .clickable { selLabel = proj.label }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                )
+            }
         }
         Spacer(modifier = Modifier.height(14.dp))
         ProjectionRangeBar(p, price)
@@ -1185,17 +1219,25 @@ private fun StudyProjectionCard(p: PriceProjection, price: Double) {
                 modifier = Modifier.weight(1.4f)
             )
             StatTile(
-                label = "Closed higher",
-                value = Fmt.pct(p.upSharePct),
+                label = "Ended higher",
+                value = if (p.volImplied) "—" else Fmt.pct(p.upSharePct),
                 modifier = Modifier.weight(1f),
-                valueColor = if (p.upSharePct >= 50.0) AurumColors.gain else AurumColors.loss
+                valueColor = when {
+                    p.volImplied -> AurumColors.textDim
+                    p.upSharePct >= 50.0 -> AurumColors.gain
+                    else -> AurumColors.loss
+                }
             )
         }
         Spacer(modifier = Modifier.height(10.dp))
         Text(
             text = String.format(
                 Locale.US,
-                "9 in 10 of those months landed between %s (%+.1f%%) and %s (%+.1f%%).",
+                if (p.volImplied) {
+                    "The 9-in-10 band spans %s (%+.1f%%) to %s (%+.1f%%)."
+                } else {
+                    "9 in 10 of those windows landed between %s (%+.1f%%) and %s (%+.1f%%)."
+                },
                 Fmt.money(p.p10Price), p.p10Pct, Fmt.money(p.p90Price), p.p90Pct
             ),
             style = MaterialTheme.typography.labelSmall,
@@ -1203,18 +1245,125 @@ private fun StudyProjectionCard(p: PriceProjection, price: Double) {
         )
         Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = "Basis: ${p.analogCount} of this stock's own past months — " +
-                p.basis + "." +
-                (p.monthlyVolPct?.let {
+            text = (if (p.volImplied) "Basis: " + p.basis + "."
+                else "Basis: ${p.analogCount} of this stock's own past ${p.label} " +
+                    "windows — " + p.basis + ".") +
+                (p.volSwingPct?.takeIf { !p.volImplied }?.let {
                     String.format(
                         Locale.US,
-                        " Its recent volatility implies a typical monthly swing of ±%.1f%%.",
+                        " Its recent volatility implies a typical ${p.label} swing of ±%.1f%%.",
                         it
                     )
                 } ?: ""),
             style = MaterialTheme.typography.labelSmall,
             color = AurumColors.textDim
         )
+        Spacer(modifier = Modifier.height(10.dp))
+        // Every horizon's median at a glance, the selected one highlighted.
+        projections.forEach { proj ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(top = 2.dp)
+            ) {
+                Text(
+                    text = proj.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (proj.label == p.label) AurumColors.gold else AurumColors.textDim,
+                    modifier = Modifier.widthIn(min = 64.dp)
+                )
+                Text(
+                    text = "median ${Fmt.money(proj.medianPrice)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.deltaColor(proj.medianPct)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (proj.volImplied) {
+                        "±${proj.volSwingPct ?: 0.0}% vol band"
+                    } else {
+                        "${Fmt.signedPct(proj.medianPct)} · ${Fmt.pct(proj.upSharePct)} higher"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StudyHeldCard(h: HeldPosition, projections: List<PriceProjection>, symbol: String) {
+    AurumCard {
+        Text(
+            text = "Your position — $symbol",
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            StatTile(
+                label = "Shares",
+                value = Fmt.qty(h.shares),
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                label = "Avg cost",
+                value = Fmt.money(h.avgCost),
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                label = "Value now",
+                value = Fmt.money(h.marketValue),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.gold
+            )
+            StatTile(
+                label = "Open P/L",
+                value = Fmt.signedMoney(h.unrealizedPl),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.deltaColor(h.unrealizedPl)
+            )
+        }
+        if (projections.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "Your ${Fmt.qty(h.shares)} shares at the measured medians:",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+            projections.forEach { p ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 4.dp)
+                ) {
+                    Text(
+                        text = p.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim,
+                        modifier = Modifier.widthIn(min = 64.dp)
+                    )
+                    Text(
+                        text = Fmt.money(h.shares * p.medianPrice),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AurumColors.deltaColor(p.medianPct)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "middle half ${Fmt.money(h.shares * p.q1Price)}–" +
+                            Fmt.money(h.shares * p.q3Price),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "The ranges are the projection's own — your shares just ride them.",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+        }
     }
 }
 

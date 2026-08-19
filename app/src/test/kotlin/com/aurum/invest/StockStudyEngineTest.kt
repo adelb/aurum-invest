@@ -36,36 +36,43 @@ class StockStudyEngineTest {
     private fun inputs(
         candles: List<Candle>,
         spy: List<Candle> = this.candles(compound(candles.size, 1.0005)),
-        fundamentals: Fundamentals? = null
+        fundamentals: Fundamentals? = null,
+        heldShares: Double? = null,
+        heldAvgCost: Double? = null
     ) = StudyInputs(
         symbol = "TST", name = "Test Corp", quote = null,
         candles = candles, spy = spy,
-        fundamentals = fundamentals, news = emptyList(), vix = 18.0
+        fundamentals = fundamentals, news = emptyList(), vix = 18.0,
+        heldShares = heldShares, heldAvgCost = heldAvgCost
     )
 
     // ---- the projection -----------------------------------------------------
 
     @Test
-    fun steadyGrowthProjectsItsOwnMeasuredForwardReturn() {
+    fun steadyGrowthProjectsItsOwnMeasuredForwardReturnAtEveryHorizon() {
         val closes = compound(400)
-        val p = StockStudyEngine.project(candles(closes), closes.last())!!
-        val expected = (1.002.pow(21) - 1.0) * 100.0   // ≈ +4.3%
-        // Every analog month did the same thing — the whole band collapses
-        // onto the one measured outcome.
-        assertEquals(expected, p.medianPct, 0.3)
-        assertEquals(p.medianPct, p.q1Pct, 0.5)
-        assertEquals(p.medianPct, p.p90Pct, 0.5)
-        assertEquals(100.0, p.upSharePct, 1e-6)
-        assertEquals(closes.last() * (1.0 + expected / 100.0), p.medianPrice, 2.0)
-        assertTrue(p.analogCount >= StockStudyEngine.MIN_ANALOGS)
+        val ps = StockStudyEngine.projectAll(candles(closes), closes.last())
+        // 400 bars leave forward room for all five horizons.
+        assertEquals(StockStudyEngine.HORIZONS.size, ps.size)
+        for (p in ps) {
+            // Every analog window did the same thing — the whole band
+            // collapses onto the one measured outcome of that horizon.
+            val expected = (1.002.pow(p.horizonSessions) - 1.0) * 100.0
+            assertEquals(p.label, expected, p.medianPct, expected * 0.05 + 0.3)
+            assertEquals(p.medianPct, p.q1Pct, expected * 0.05 + 0.5)
+            assertEquals(p.medianPct, p.p90Pct, expected * 0.05 + 0.5)
+            assertEquals(100.0, p.upSharePct, 1e-6)
+        }
+        // Longer horizons compound further out.
+        assertTrue(ps.last().medianPct > ps.first().medianPct)
     }
 
     @Test
     fun thinHistoryRefusesToProject() {
         val closes = compound(100)   // under MIN_HISTORY_BARS
-        assertNull(StockStudyEngine.project(candles(closes), closes.last()))
+        assertTrue(StockStudyEngine.projectAll(candles(closes), closes.last()).isEmpty())
         val study = StockStudyEngine.study(inputs(candles(closes)))
-        assertNull(study.projection)
+        assertTrue(study.projections.isEmpty())
         assertTrue(study.notes.any { it.contains("projection", ignoreCase = true) })
     }
 
@@ -73,18 +80,76 @@ class StockStudyEngineTest {
     fun mediumHistoryProjectsUnconditionedAndSaysSo() {
         // Enough to measure, not enough to condition on regimes.
         val closes = compound(200)
-        val p = StockStudyEngine.project(candles(closes), closes.last())!!
-        assertFalse(p.conditioned)
-        assertTrue(p.basis.contains("every month"))
+        val ps = StockStudyEngine.projectAll(candles(closes), closes.last())
+        assertTrue(ps.isNotEmpty())
+        for (p in ps) {
+            assertFalse(p.conditioned)
+            assertTrue(p.basis.contains("every window"))
+        }
+    }
+
+    @Test
+    fun youngListingSkipsTheLongHorizonsAndSaysSo() {
+        // 300 bars: 1 week through 6 months measurable; a 1-year forward
+        // window has no room at all.
+        val closes = compound(300)
+        val study = StockStudyEngine.study(inputs(candles(closes)))
+        val labels = study.projections.map { it.label }
+        assertTrue("1 week" in labels)
+        assertTrue("1 month" in labels)
+        assertTrue("1 year" !in labels)
+        assertTrue(study.notes.any { it.contains("1 year") && it.contains("not claimed") })
+    }
+
+    @Test
+    fun veryYoungListingGetsAVolImpliedBandNotSilence() {
+        // ~23 sessions, like a fresh NASDAQ listing (SKHY the day it moved).
+        // The closes wobble so the daily σ is real.
+        val closes = (0 until 23).map { 150.0 + (it % 5) }
+        val ps = StockStudyEngine.projectAll(candles(closes), closes.last())
+        assertTrue(ps.isNotEmpty())
+        // Only horizons the history can back: 1 week and 1 month, no more.
+        assertTrue(ps.all { it.horizonSessions <= 22 })
+        for (p in ps) {
+            assertTrue(p.volImplied)
+            assertEquals(0, p.analogCount)
+            // Centered on today, symmetric, wider at the longer horizon.
+            assertEquals(0.0, p.medianPct, 1e-9)
+            assertEquals(closes.last(), p.medianPrice, 0.01)
+            assertEquals(-p.q1Pct, p.q3Pct, 0.11)
+            assertTrue(p.basis.contains("too young"))
+        }
+        assertTrue(ps.last().q3Pct > ps.first().q3Pct)
+        // And the study says why, in words.
+        val study = StockStudyEngine.study(inputs(candles(closes)))
+        assertTrue(study.notes.any { it.contains("too young") })
     }
 
     @Test
     fun projectionPricesScaleFromTheGivenPrice() {
         val closes = compound(400)
-        val p1 = StockStudyEngine.project(candles(closes), 100.0)!!
-        val p2 = StockStudyEngine.project(candles(closes), 200.0)!!
+        val p1 = StockStudyEngine.projectAll(candles(closes), 100.0)
+            .first { it.horizonSessions == 21 }
+        val p2 = StockStudyEngine.projectAll(candles(closes), 200.0)
+            .first { it.horizonSessions == 21 }
         assertEquals(p1.medianPct, p2.medianPct, 1e-9)
         assertEquals(p1.medianPrice * 2.0, p2.medianPrice, 0.1)
+    }
+
+    // ---- the portfolio tie-in -----------------------------------------------
+
+    @Test
+    fun heldSharesRideEveryProjectedLevel() {
+        val closes = compound(400)
+        val study = StockStudyEngine.study(
+            inputs(candles(closes), heldShares = 10.0, heldAvgCost = 50.0)
+        )
+        val held = study.held!!
+        assertEquals(10.0, held.shares, 1e-9)
+        assertEquals(10.0 * closes.last(), held.marketValue, 0.5)
+        assertEquals(10.0 * (closes.last() - 50.0), held.unrealizedPl, 0.5)
+        // Not held = no fabricated position.
+        assertNull(StockStudyEngine.study(inputs(candles(closes))).held)
     }
 
     // ---- factors ------------------------------------------------------------

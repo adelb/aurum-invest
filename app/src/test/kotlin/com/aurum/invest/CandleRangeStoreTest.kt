@@ -30,6 +30,8 @@ class CandleRangeStoreTest {
         assertEquals(190, MarketRepository.bucketDays(120))
         assertEquals(400, MarketRepository.bucketDays(365))
         assertEquals(730, MarketRepository.bucketDays(550))
+        // The study engine's long-horizon pool: beyond 2 years maps to 5.
+        assertEquals(1825, MarketRepository.bucketDays(1825))
     }
 
     @Test

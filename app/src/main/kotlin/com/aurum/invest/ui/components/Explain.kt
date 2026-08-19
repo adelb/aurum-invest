@@ -181,13 +181,17 @@ object Meanings {
             "performance card below replays only today's composition."
 
     const val PROJECTION =
-        "Not a prediction — a measured distribution. Every session in this stock's " +
-            "two-year history is classified by regime (trend structure, RSI band, " +
-            "volatility band); the sessions that looked like TODAY are replayed 21 " +
-            "sessions forward, and the outcomes' percentiles become the range: the " +
-            "median, the middle half, and the 9-in-10 band. The basis line names how " +
-            "many analog months stand behind the numbers and how tightly they match. " +
-            "What HAS happened after setups like this one - never a promise of what will."
+        "Not a prediction — a measured distribution, at five horizons (1 week to 1 " +
+            "year). Every session in up to five years of this stock's history is " +
+            "classified by regime (trend structure, RSI band, volatility band); the " +
+            "sessions that looked like TODAY are replayed forward over each horizon, " +
+            "and the outcomes' percentiles become the range: the median, the middle " +
+            "half, and the 9-in-10 band. The basis line names how many analog windows " +
+            "stand behind the numbers and how tightly they match; a horizon the " +
+            "listing's history cannot back is absent, not padded. A listing too young " +
+            "for analogs gets a volatility-implied band instead - its own measured " +
+            "swing centered on today's price, drift unmeasured, labeled as such. What " +
+            "HAS happened after setups like this one - never a promise of what will."
 
     const val ENGINE_RECORD =
         "Every ADD, TRIM, and EXIT the wealth engine issues, and every next-session " +

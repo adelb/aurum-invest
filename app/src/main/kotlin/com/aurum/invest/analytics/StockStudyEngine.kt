@@ -22,11 +22,13 @@ data class StudyFactor(
 )
 
 /**
- * The 21-session price projection: the measured distribution of what THIS
- * stock's own comparable past sessions did over the following month. A range
- * with named percentiles — never a single promised number.
+ * One horizon's price projection: the measured distribution of what THIS
+ * stock's own comparable past sessions did over the following [horizonSessions]
+ * sessions. A range with named percentiles — never a single promised number.
  */
 data class PriceProjection(
+    /** "1 week", "1 month", "3 months", "6 months", "1 year". */
+    val label: String,
     val horizonSessions: Int,
     /** Which analog tier produced it — printed with the numbers. */
     val basis: String,
@@ -43,10 +45,25 @@ data class PriceProjection(
     val q3Price: Double,
     val p10Price: Double,
     val p90Price: Double,
-    /** Share of analog months that ended higher. */
+    /** Share of analog windows that ended higher; meaningless when [volImplied]. */
     val upSharePct: Double,
-    /** σ√21 of recent daily returns — the month's typical swing, for context. */
-    val monthlyVolPct: Double?
+    /** σ√H of recent daily returns — the horizon's typical swing, for context. */
+    val volSwingPct: Double?,
+    /**
+     * True for a listing too young for analog replay: the band is the
+     * listing's own measured volatility centered on today's price, with the
+     * drift explicitly unmeasured — labeled everywhere it appears.
+     */
+    val volImplied: Boolean = false
+)
+
+/** The user's own stake in the studied name, straight from the ledger. */
+data class HeldPosition(
+    val shares: Double,
+    val avgCost: Double,
+    val marketValue: Double,
+    val unrealizedPl: Double,
+    val unrealizedPlPct: Double
 )
 
 /** One return span, stock vs benchmark; null = not enough history. */
@@ -68,7 +85,10 @@ data class StockStudy(
     val gradeBand: String,
     val coveragePct: Double,
     val factors: List<StudyFactor>,
-    val projection: PriceProjection?,
+    /** One entry per measurable horizon; horizons the listing can't back are absent. */
+    val projections: List<PriceProjection>,
+    /** Non-null when the ledger holds this name — the study is portfolio-aware. */
+    val held: HeldPosition?,
     val spans: List<SpanReturn>,
     val volatilityPct: Double?,
     val beta: Double?,
@@ -92,26 +112,33 @@ data class StudyInputs(
     val symbol: String,
     val name: String,
     val quote: Quote?,
-    /** Two years of dailies — the analog pool AND the indicator warm-up. */
+    /** Up to five years of dailies — the analog pool AND the indicator warm-up. */
     val candles: List<Candle>,
     val spy: List<Candle>,
     val fundamentals: Fundamentals?,
     val news: List<NewsItem>,
-    val vix: Double?
+    val vix: Double?,
+    /** The ledger's stake in this name; null when not held. */
+    val heldShares: Double? = null,
+    val heldAvgCost: Double? = null
 )
 
 /**
  * The stock study engine: one name, fully evaluated for a trader who wants
- * the evidence, and a one-month price projection built the only honest way —
- * from the stock's OWN measured history.
+ * the evidence, and price projections for 1 week / 1 month / 3 months /
+ * 6 months / 1 year, built the only honest way — from the stock's OWN
+ * measured history.
  *
- * The projection: every past session in the two-year window is classified by
- * regime (trend structure × RSI band × volatility band); the sessions that
- * looked like TODAY are replayed 21 sessions forward, and the outcomes'
- * percentiles become the projected range. When too few analogs share the full
- * regime the match is relaxed one dimension at a time — and the basis line
- * says exactly which tier the numbers came from. Below [MIN_HISTORY_BARS]
- * bars no projection is claimed at all.
+ * The projection: every past session in the (up to five-year) window is
+ * classified by regime (trend structure × RSI band × volatility band); the
+ * sessions that looked like TODAY are replayed forward over each horizon, and
+ * the outcomes' percentiles become the projected range. When too few analogs
+ * share the full regime the match is relaxed one dimension at a time — and
+ * the basis line says exactly which tier the numbers came from. Below
+ * [MIN_HISTORY_BARS] bars no projection is claimed at all, and a horizon the
+ * listing's history cannot back is absent, not padded. When the ledger holds
+ * the studied name, the held shares ride along so every projected level is
+ * also a projected position value.
  *
  * The grade: seven factors on a fixed 100-point scale — trend structure,
  * momentum against SPY, the 35-technique board, volume behavior, volatility
@@ -130,8 +157,14 @@ object StockStudyEngine {
     /** Below this share of measured factor weight, no grade is claimed. */
     const val MIN_COVERAGE_PCT = 60.0
 
-    /** The projection horizon: one trading month. */
-    const val HORIZON_SESSIONS = 21
+    /** Every projection horizon, in trading sessions. */
+    val HORIZONS = listOf(
+        5 to "1 week",
+        21 to "1 month",
+        63 to "3 months",
+        126 to "6 months",
+        252 to "1 year"
+    )
 
     /** Bars needed before any projection is claimed (analogs + warm-up). */
     const val MIN_HISTORY_BARS = 150
@@ -139,8 +172,11 @@ object StockStudyEngine {
     /** Bars needed for the regime-conditioned tiers. */
     const val MIN_CONDITIONED_BARS = 250
 
-    /** An analog tier must hold at least this many months to be trusted. */
+    /** An analog tier must hold at least this many windows to be trusted. */
     const val MIN_ANALOGS = 40
+
+    /** A horizon with fewer candidate windows than this is not claimed at all. */
+    const val MIN_POOL = 30
 
     private const val WARMUP = 60
 
@@ -186,11 +222,42 @@ object StockStudyEngine {
             if (hi > 0.0 && price > 0.0) (hi - price) / hi * 100.0 else null
         }
 
-        // ---- the projection ----------------------------------------------
-        val projection = project(candles, price)
-        if (projection == null && candles.isNotEmpty()) {
+        // ---- the projections, one per measurable horizon ------------------
+        val projections = projectAll(candles, price)
+        if (projections.isEmpty() && candles.isNotEmpty()) {
             notes += "Under $MIN_HISTORY_BARS sessions of history reached this run — no " +
                 "projection is claimed on a pool that thin."
+        } else if (projections.isNotEmpty() && projections.all { it.volImplied }) {
+            notes += String.format(
+                Locale.US,
+                "%s has only %d listed sessions — too young for analog replay. The bands " +
+                    "shown are its own measured volatility around today's price; the " +
+                    "drift, and every price-history factor below, stays unmeasured.",
+                inputs.symbol, candles.size
+            )
+        }
+        if (projections.isNotEmpty() && projections.size < HORIZONS.size) {
+            val missing = HORIZONS.map { it.second } - projections.map { it.label }.toSet()
+            notes += String.format(
+                Locale.US,
+                "The %s horizon%s would need more listed history than %s carries — " +
+                    "not claimed.",
+                missing.joinToString(" and "),
+                if (missing.size == 1) "" else "s",
+                inputs.symbol
+            )
+        }
+
+        // ---- the ledger's stake in this name ------------------------------
+        val held = inputs.heldShares?.takeIf { it > 1e-9 && price > 0.0 }?.let { sh ->
+            val avg = inputs.heldAvgCost ?: 0.0
+            HeldPosition(
+                shares = sh,
+                avgCost = round2(avg),
+                marketValue = round2(sh * price),
+                unrealizedPl = if (avg > 0.0) round2(sh * (price - avg)) else 0.0,
+                unrealizedPlPct = if (avg > 0.0) round1((price - avg) / avg * 100.0) else 0.0
+            )
         }
 
         // ---- factors ------------------------------------------------------
@@ -240,7 +307,9 @@ object StockStudyEngine {
 
         val newsNote = newsSummary(inputs.news)
 
-        val headline = buildHeadline(inputs.symbol, grade, projection)
+        val monthAhead = projections.firstOrNull { it.horizonSessions == 21 }
+            ?: projections.firstOrNull()
+        val headline = buildHeadline(inputs.symbol, grade, monthAhead)
 
         return StockStudy(
             computedAt = now,
@@ -257,7 +326,8 @@ object StockStudyEngine {
             },
             coveragePct = round1(coverage),
             factors = factors,
-            projection = projection,
+            projections = projections,
+            held = held,
             spans = spans,
             volatilityPct = vol?.let { round1(it) },
             beta = beta?.let { round2(it) },
@@ -278,15 +348,21 @@ object StockStudyEngine {
     // ------------------------------------------------------------ projection
 
     /**
-     * The analog replay. Regime of a session = trend structure (above both
-     * MAs / mixed / below both) × RSI band (<40 / 40–60 / >60) × ATR%
-     * regime (below / above its own median). Tiers relax one dimension at a
-     * time until [MIN_ANALOGS] months qualify, and the basis names the tier.
+     * The analog replay, one projection per measurable horizon. Regime of a
+     * session = trend structure (above both MAs / mixed / below both) × RSI
+     * band (<40 / 40–60 / >60) × ATR% regime (below / above its own median).
+     * Per horizon, tiers relax one dimension at a time until [MIN_ANALOGS]
+     * windows qualify, and the basis names the tier. A horizon whose forward
+     * room leaves fewer than [MIN_POOL] candidate windows is absent — a
+     * 1-year projection for a young listing is not claimed, not padded.
      */
-    fun project(candles: List<Candle>, price: Double): PriceProjection? {
+    fun projectAll(candles: List<Candle>, price: Double): List<PriceProjection> {
         val closes = candles.map { it.close }
         val n = closes.size
-        if (n < MIN_HISTORY_BARS || price <= 0.0) return null
+        if (price <= 0.0) return emptyList()
+        // A listing too young for analogs still gets an honest band: its own
+        // measured volatility, centered on today, drift unmeasured.
+        if (n < MIN_HISTORY_BARS) return volImpliedBands(closes, price)
 
         val sma50 = rollingSma(closes, 50)
         val sma200 = rollingSma(closes, 200)
@@ -325,84 +401,136 @@ object StockStudyEngine {
         val curTrend = trendReg(last)
         val curRsi = rsiBand(last)
         val curVol = volReg(last)
-
-        val candidates = (WARMUP until n - HORIZON_SESSIONS).filter { closes[it] > 0.0 }
-        if (candidates.isEmpty()) return null
-
         val conditionedAllowed = n >= MIN_CONDITIONED_BARS
+
+        // The recent daily σ once; each horizon scales it by √H.
+        val recent = Indicators.dailyReturns(closes.takeLast(121))
+        val dailySd = if (recent.size >= 40) {
+            val m = recent.average()
+            sqrt(recent.sumOf { (it - m) * (it - m) } / (recent.size - 1))
+        } else null
+
         data class Tier(val basis: String, val match: (Int) -> Boolean, val conditioned: Boolean)
         val tiers = listOf(
             Tier(
-                "months that shared today's trend structure, RSI band, and volatility regime",
+                "windows that shared today's trend structure, RSI band, and volatility regime",
                 { i -> trendReg(i) == curTrend && rsiBand(i) == curRsi && volReg(i) == curVol },
                 true
             ),
             Tier(
-                "months that shared today's trend structure and RSI band",
+                "windows that shared today's trend structure and RSI band",
                 { i -> trendReg(i) == curTrend && rsiBand(i) == curRsi },
                 true
             ),
             Tier(
-                "months that shared today's trend structure",
+                "windows that shared today's trend structure",
                 { i -> trendReg(i) == curTrend },
                 true
             ),
-            Tier("every month in the window — too few regime matches to condition on",
+            Tier("every window in the history — too few regime matches to condition on",
                 { true }, false)
         )
-        var analogIdx: List<Int> = emptyList()
-        var basis = ""
-        var conditioned = false
-        for (tier in tiers) {
-            if (tier.conditioned && !conditionedAllowed) continue
-            val matched = candidates.filter(tier.match)
-            if (matched.size >= MIN_ANALOGS || tier === tiers.last()) {
-                analogIdx = matched
-                basis = tier.basis
-                conditioned = tier.conditioned && matched.size >= MIN_ANALOGS
-                break
+
+        val out = ArrayList<PriceProjection>(HORIZONS.size)
+        for ((horizon, label) in HORIZONS) {
+            val candidates = (WARMUP until n - horizon).filter { closes[it] > 0.0 }
+            if (candidates.size < MIN_POOL) continue
+
+            var analogIdx: List<Int> = emptyList()
+            var basis = ""
+            var conditioned = false
+            for (tier in tiers) {
+                if (tier.conditioned && !conditionedAllowed) continue
+                val matched = candidates.filter(tier.match)
+                if (matched.size >= MIN_ANALOGS || tier === tiers.last()) {
+                    analogIdx = matched
+                    basis = tier.basis
+                    conditioned = tier.conditioned && matched.size >= MIN_ANALOGS
+                    break
+                }
             }
+            if (analogIdx.size < 10) continue
+
+            val forwards = analogIdx.map { i -> closes[i + horizon] / closes[i] - 1.0 }
+                .sorted()
+            fun pct(p: Double): Double {
+                val pos = p * (forwards.size - 1)
+                val lo = pos.toInt()
+                val hi = (lo + 1).coerceAtMost(forwards.size - 1)
+                val frac = pos - lo
+                return forwards[lo] * (1 - frac) + forwards[hi] * frac
+            }
+            val p10 = pct(0.10); val q1 = pct(0.25); val med = pct(0.50)
+            val q3 = pct(0.75); val p90 = pct(0.90)
+            val upShare = forwards.count { it > 0.0 } * 100.0 / forwards.size
+
+            out += PriceProjection(
+                label = label,
+                horizonSessions = horizon,
+                basis = basis,
+                analogCount = forwards.size,
+                conditioned = conditioned,
+                medianPct = round1(med * 100.0),
+                q1Pct = round1(q1 * 100.0),
+                q3Pct = round1(q3 * 100.0),
+                p10Pct = round1(p10 * 100.0),
+                p90Pct = round1(p90 * 100.0),
+                medianPrice = round2(price * (1.0 + med)),
+                q1Price = round2(price * (1.0 + q1)),
+                q3Price = round2(price * (1.0 + q3)),
+                p10Price = round2(price * (1.0 + p10)),
+                p90Price = round2(price * (1.0 + p90)),
+                upSharePct = round1(upShare),
+                volSwingPct = dailySd?.let { round1(it * sqrt(horizon.toDouble()) * 100.0) }
+            )
         }
-        if (analogIdx.size < 10) return null
+        return out
+    }
 
-        val forwards = analogIdx.map { i -> closes[i + HORIZON_SESSIONS] / closes[i] - 1.0 }
-            .sorted()
-        fun pct(p: Double): Double {
-            val pos = p * (forwards.size - 1)
-            val lo = pos.toInt()
-            val hi = (lo + 1).coerceAtMost(forwards.size - 1)
-            val frac = pos - lo
-            return forwards[lo] * (1 - frac) + forwards[hi] * frac
+    /**
+     * The young-listing fallback: quartile and 9-in-10 bands from the normal
+     * approximation of the listing's own daily returns (±0.674σ√H and
+     * ±1.282σ√H), centered on today's price. Only horizons no longer than
+     * the observed history are offered — scaling 23 days of data to a year
+     * would be a costume, not a measurement.
+     */
+    private fun volImpliedBands(closes: List<Double>, price: Double): List<PriceProjection> {
+        val returns = Indicators.dailyReturns(closes)
+        if (returns.size < 15) return emptyList()
+        val mean = returns.average()
+        val sd = sqrt(returns.sumOf { (it - mean) * (it - mean) } / (returns.size - 1))
+        if (sd <= 1e-12) return emptyList()
+        val basis = "the listing is too young for analog replay; this band is its own " +
+            "measured daily volatility scaled to the horizon, centered on today's " +
+            "price — the drift is unmeasured, not zero"
+        val out = ArrayList<PriceProjection>()
+        for ((horizon, label) in HORIZONS) {
+            if (horizon > closes.size - 1) continue
+            val s = sd * sqrt(horizon.toDouble())
+            val q = 0.6745 * s
+            val p = 1.2816 * s
+            out += PriceProjection(
+                label = label,
+                horizonSessions = horizon,
+                basis = basis,
+                analogCount = 0,
+                conditioned = false,
+                medianPct = 0.0,
+                q1Pct = round1(-q * 100.0),
+                q3Pct = round1(q * 100.0),
+                p10Pct = round1(-p * 100.0),
+                p90Pct = round1(p * 100.0),
+                medianPrice = round2(price),
+                q1Price = round2(price * (1.0 - q)),
+                q3Price = round2(price * (1.0 + q)),
+                p10Price = round2(price * (1.0 - p)),
+                p90Price = round2(price * (1.0 + p)),
+                upSharePct = 50.0,
+                volSwingPct = round1(s * 100.0),
+                volImplied = true
+            )
         }
-        val p10 = pct(0.10); val q1 = pct(0.25); val med = pct(0.50)
-        val q3 = pct(0.75); val p90 = pct(0.90)
-        val upShare = forwards.count { it > 0.0 } * 100.0 / forwards.size
-
-        val recent = Indicators.dailyReturns(closes.takeLast(121))
-        val monthlyVol = if (recent.size >= 40) {
-            val m = recent.average()
-            sqrt(recent.sumOf { (it - m) * (it - m) } / (recent.size - 1)) *
-                sqrt(HORIZON_SESSIONS.toDouble()) * 100.0
-        } else null
-
-        return PriceProjection(
-            horizonSessions = HORIZON_SESSIONS,
-            basis = basis,
-            analogCount = forwards.size,
-            conditioned = conditioned,
-            medianPct = round1(med * 100.0),
-            q1Pct = round1(q1 * 100.0),
-            q3Pct = round1(q3 * 100.0),
-            p10Pct = round1(p10 * 100.0),
-            p90Pct = round1(p90 * 100.0),
-            medianPrice = round2(price * (1.0 + med)),
-            q1Price = round2(price * (1.0 + q1)),
-            q3Price = round2(price * (1.0 + q3)),
-            p10Price = round2(price * (1.0 + p10)),
-            p90Price = round2(price * (1.0 + p90)),
-            upSharePct = round1(upShare),
-            monthlyVolPct = monthlyVol?.let { round1(it) }
-        )
+        return out
     }
 
     // ------------------------------------------------------------ factors
@@ -621,13 +749,22 @@ object StockStudyEngine {
         val gradePart = grade?.let { "$symbol grades $it/100" }
             ?: "$symbol could not be fully graded this run"
         val projPart = p?.let {
-            String.format(
-                Locale.US,
-                " — months like this one have typically landed between %s and %s " +
-                    "(median %s), %s of them higher.",
-                money(it.q1Price), money(it.q3Price), money(it.medianPrice),
-                Fmt0(it.upSharePct)
-            )
+            if (it.volImplied) {
+                String.format(
+                    Locale.US,
+                    " — too young for analog replay; its measured volatility puts a " +
+                        "typical ${it.label} band at ±%.1f%% around %s.",
+                    it.volSwingPct ?: 0.0, money(it.medianPrice)
+                )
+            } else {
+                String.format(
+                    Locale.US,
+                    " — ${it.label} after setups like today's, it has typically landed " +
+                        "between %s and %s (median %s), %s of the time higher.",
+                    money(it.q1Price), money(it.q3Price), money(it.medianPrice),
+                    Fmt0(it.upSharePct)
+                )
+            }
         } ?: "."
         return gradePart + projPart
     }

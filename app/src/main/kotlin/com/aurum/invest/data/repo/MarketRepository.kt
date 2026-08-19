@@ -693,7 +693,10 @@ class MarketRepository(
             rangeDays <= 95 -> 95
             rangeDays <= 190 -> 190
             rangeDays <= 400 -> 400
-            else -> 730
+            rangeDays <= 730 -> 730
+            // The study engine's long-horizon analog pool: five years of
+            // dailies, fetched only for symbols someone actually studies.
+            else -> 1825
         }
 
         /**

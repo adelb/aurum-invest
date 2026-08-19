@@ -48,6 +48,6 @@ class AppContainer(app: Application) {
     val bankFeed = BankFeedRepository(db.bankEventDao(), portfolio)
     val record = RecordRepository(db.engineCallDao(), market)
     val wealth = WealthRepository(db.cacheDao(), market, news, settings, picks, record)
-    val study = StudyRepository(market, news, wealth)
+    val study = StudyRepository(market, news, wealth, portfolio)
     val targets = TargetsRepository(db.cacheDao())
 }
