@@ -40,6 +40,9 @@ class BreakoutScout(
     companion object {
         /** Qualification bar — every leg is a real measurement. */
         private const val MIN_R5_PCT = 1.0
+
+        /** At most this many names earn a full per-symbol candle read per scan. */
+        private const val MAX_FULL_READS = 10
         private const val MIN_VOLUME_RATIO = 1.15
         private const val MAX_DIST_TO_HIGH_PCT = 3.0
 
@@ -77,14 +80,24 @@ class BreakoutScout(
             // discard. A symbol the batch missed is kept, so a gap in the feed
             // narrows the scan rather than silently dropping a name from it.
             val series = market.getCloseSeries(stocks.map { it.first }, rangeDays = 30)
-            val worthReading = stocks.filter { (symbol, _) ->
-                val closes = series[symbol]?.map { it.close } ?: return@filter true
-                if (closes.size < 21) return@filter true
+            // A symbol the batch could NOT price is dropped, narrowing the
+            // scan honestly. The old rule kept it "to be safe" — so one
+            // throttled batch turned a shelf tap into a per-name request
+            // storm for names nobody had measured as worth reading.
+            val worthReading = stocks.mapNotNull { pair ->
+                val closes = series[pair.first]?.map { it.close } ?: return@mapNotNull null
+                if (closes.size < 21) return@mapNotNull null
                 val last = closes.last()
                 val c5 = closes[closes.size - 6]
-                if (last <= 0.0 || c5 <= 0.0) return@filter true
-                (last / c5 - 1.0) * 100.0 >= MIN_R5_PCT
+                if (last <= 0.0 || c5 <= 0.0) return@mapNotNull null
+                val r5 = (last / c5 - 1.0) * 100.0
+                if (r5 >= MIN_R5_PCT) pair to r5 else null
             }
+                // The strongest movers only — a full-candle read per name is
+                // the expensive step, so it is rationed, not sprayed.
+                .sortedByDescending { it.second }
+                .take(MAX_FULL_READS)
+                .map { it.first }
             if (worthReading.isEmpty()) return emptyList()
 
             val setups = ArrayList<Setup>()

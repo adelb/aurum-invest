@@ -188,7 +188,7 @@ fun PreMarketScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
-                    start = 20.dp, end = 20.dp, top = 16.dp, bottom = 28.dp
+                    start = 20.dp, end = 20.dp, top = 16.dp, bottom = 120.dp
                 ),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {

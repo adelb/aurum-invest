@@ -187,7 +187,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
         ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 28.dp),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             when (tab) {

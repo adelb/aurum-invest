@@ -160,7 +160,7 @@ fun DashboardScreen(
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
-                    start = 20.dp, end = 20.dp, top = 12.dp, bottom = 110.dp
+                    start = 20.dp, end = 20.dp, top = 12.dp, bottom = 200.dp
                 )
             ) {
                 item {
@@ -254,7 +254,7 @@ fun DashboardScreen(
             onClick = onAdd,
             containerColor = AurumColors.gold,
             contentColor = AurumColors.bg,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(24.dp)
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = 116.dp)
         ) {
             Icon(Icons.Rounded.Add, contentDescription = "Add trade")
         }

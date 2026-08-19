@@ -181,7 +181,7 @@ private fun WealthContent(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 28.dp),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 120.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         // 1 — the whole-market context.

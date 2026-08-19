@@ -209,7 +209,7 @@ private fun WatchlistMode(
         ) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 28.dp),
+                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 if (state.loading && state.rows.isEmpty()) {
@@ -324,7 +324,7 @@ private fun TagSearch(
         }
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 28.dp),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             when {
@@ -417,7 +417,7 @@ private fun SectorBrowse(
         }
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 28.dp),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {

@@ -239,8 +239,14 @@ class SectorTrends(
     /** All sectors ranked best first. Empty on total failure. */
     suspend fun compute(): List<SectorTrend> {
         return try {
-            val raw = coroutineScope {
-                SECTORS.map { (key, label, etf) ->
+            // Chunked, not all-at-once: 25 themes firing simultaneously is an
+            // arrival burst, and bursts are what the feed's edge punishes
+            // hardest — it then refuses the browse's own batched reads, which
+            // is how shelves ended up with no sparklines. Six at a time keeps
+            // the whole scan quick while never bursting.
+            val raw = SECTORS.chunked(6).flatMap { chunk ->
+                coroutineScope {
+                    chunk.map { (key, label, etf) ->
                     async {
                         try {
                             val candles = market.getDailyCandles(etf, 60)
@@ -271,7 +277,8 @@ class SectorTrends(
                             null
                         }
                     }
-                }.awaitAll()
+                    }.awaitAll()
+                }
             }.filterNotNull()
             if (raw.isEmpty()) return emptyList()
 
