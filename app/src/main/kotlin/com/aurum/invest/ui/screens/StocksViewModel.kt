@@ -12,6 +12,7 @@ import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.analytics.SectorPulse
 import com.aurum.invest.analytics.SectorRotation
 import com.aurum.invest.analytics.StockCatalog
+import com.aurum.invest.analytics.StockStudy
 import com.aurum.invest.data.db.WatchItemEntity
 import com.aurum.invest.data.repo.PortfolioRepository
 import com.aurum.invest.data.model.Advice
@@ -80,7 +81,14 @@ data class StocksState(
     /** The user's live book, so shelves can say what is already held. */
     val book: BookContext = BookContext.EMPTY,
     // Live watch membership so every row can show/toggle its star.
-    val watchedSymbols: Set<String> = emptySet()
+    val watchedSymbols: Set<String> = emptySet(),
+    // Study mode — one name, fully evaluated, with the 1-month projection.
+    val studyQuery: String = "",
+    val studySuggestions: List<Pair<String, String>> = emptyList(),
+    val studySearching: Boolean = false,
+    val study: StockStudy? = null,
+    val studyLoading: Boolean = false,
+    val studyError: String = ""
 )
 
 class StocksViewModel(app: Application) : AndroidViewModel(app) {
@@ -97,6 +105,8 @@ class StocksViewModel(app: Application) : AndroidViewModel(app) {
     private var tagJob: Job? = null
     private var sectorJob: Job? = null
     private var trendsJob: Job? = null
+    private var studySearchJob: Job? = null
+    private var studyJob: Job? = null
     private val refreshTick = MutableStateFlow(0)
     private val forceFresh = AtomicBoolean(false)
 
@@ -270,6 +280,49 @@ class StocksViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             if (_state.value.watchedSymbols.contains(symbol)) watch.remove(symbol)
             else watch.add(symbol, name)
+        }
+    }
+
+    // ---- study mode --------------------------------------------------------
+
+    /** Debounced search over the whole US directory — ticker or company name. */
+    fun onStudyQueryChange(query: String) {
+        _state.update { it.copy(studyQuery = query) }
+        studySearchJob?.cancel()
+        val trimmed = query.trim()
+        if (trimmed.length < 2) {
+            _state.update { it.copy(studySuggestions = emptyList(), studySearching = false) }
+            return
+        }
+        studySearchJob = viewModelScope.launch {
+            delay(300)
+            _state.update { it.copy(studySearching = true) }
+            val results = market.search(trimmed)
+            _state.update { it.copy(studySuggestions = results, studySearching = false) }
+        }
+    }
+
+    /** Runs the full study for one picked name. */
+    fun selectStudy(symbol: String, name: String) {
+        studySearchJob?.cancel()
+        studyJob?.cancel()
+        _state.update {
+            it.copy(
+                studyQuery = "", studySuggestions = emptyList(),
+                studyLoading = true, studyError = ""
+            )
+        }
+        studyJob = viewModelScope.launch {
+            val study = container.study.getStudy(symbol, name)
+            _state.update {
+                it.copy(
+                    study = study ?: it.study,
+                    studyLoading = false,
+                    studyError = if (study == null) {
+                        "Could not reach $symbol's price history — try again in a moment."
+                    } else ""
+                )
+            }
         }
     }
 

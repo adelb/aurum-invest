@@ -3,6 +3,7 @@ package com.aurum.invest.data.remote
 import com.aurum.invest.data.model.Candle
 import com.aurum.invest.data.model.EarningsInfo
 import com.aurum.invest.data.model.ExtendedHours
+import com.aurum.invest.data.model.Fundamentals
 import com.aurum.invest.data.model.Quote
 import com.aurum.invest.data.model.ScreenerQuote
 import kotlinx.coroutines.Dispatchers
@@ -529,13 +530,70 @@ class YahooClient {
             }
         }
 
+    /**
+     * A company's fundamental snapshot — cap, debt, cash, margins, growth,
+     * multiples, and the street's consensus — from the crumb-gated
+     * quoteSummary API. Every absent figure stays null: the study engine
+     * treats null as unmeasured, never as zero.
+     */
+    suspend fun fetchFundamentals(symbol: String): Fundamentals? = withContext(Dispatchers.IO) {
+        try {
+            val root = crumbedGetJson { crumb ->
+                "https://query1.finance.yahoo.com/v10/finance/quoteSummary".toHttpUrl()
+                    .newBuilder()
+                    .addPathSegment(symbol)
+                    .addQueryParameter(
+                        "modules", "summaryDetail,defaultKeyStatistics,financialData"
+                    )
+                    .addQueryParameter("crumb", crumb)
+                    .build()
+                    .toString()
+            } ?: return@withContext null
+            val result = root.optJSONObject("quoteSummary")
+                ?.optJSONArray("result")
+                ?.optJSONObject(0)
+                ?: return@withContext null
+            val sd = result.optJSONObject("summaryDetail")
+            val ks = result.optJSONObject("defaultKeyStatistics")
+            val fd = result.optJSONObject("financialData")
+            fun raw(o: JSONObject?, key: String): Double? {
+                val v = o?.optJSONObject(key)?.optDouble("raw", Double.NaN)
+                    ?: o?.optDouble(key, Double.NaN)
+                    ?: return null
+                return if (v.isNaN()) null else v
+            }
+            Fundamentals(
+                symbol = symbol,
+                marketCap = raw(sd, "marketCap") ?: raw(ks, "marketCap"),
+                trailingPE = raw(sd, "trailingPE"),
+                forwardPE = raw(sd, "forwardPE") ?: raw(ks, "forwardPE"),
+                beta = raw(sd, "beta"),
+                dividendYield = raw(sd, "dividendYield"),
+                totalDebt = raw(fd, "totalDebt"),
+                totalCash = raw(fd, "totalCash"),
+                debtToEquity = raw(fd, "debtToEquity"),
+                profitMargins = raw(fd, "profitMargins") ?: raw(ks, "profitMargins"),
+                revenueGrowth = raw(fd, "revenueGrowth"),
+                earningsGrowth = raw(fd, "earningsGrowth"),
+                freeCashflow = raw(fd, "freeCashflow"),
+                priceToBook = raw(ks, "priceToBook"),
+                shortPctFloat = raw(ks, "shortPercentOfFloat"),
+                targetMeanPrice = raw(fd, "targetMeanPrice"),
+                recommendationMean = raw(fd, "recommendationMean"),
+                analystCount = raw(fd, "numberOfAnalystOpinions")?.toInt(),
+                fetchedAt = System.currentTimeMillis()
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     // ---- internals ---------------------------------------------------------
 
     /** One v7 quote call with the crumb attached; retries once on a stale crumb. */
-    private fun crumbedQuoteJson(symbols: List<String>): JSONObject? {
-        repeat(2) { attempt ->
-            val crumb = ensureCrumb(force = attempt > 0) ?: return null
-            val url = "https://query1.finance.yahoo.com/v7/finance/quote".toHttpUrl()
+    private fun crumbedQuoteJson(symbols: List<String>): JSONObject? =
+        crumbedGetJson { crumb ->
+            "https://query1.finance.yahoo.com/v7/finance/quote".toHttpUrl()
                 .newBuilder()
                 .addQueryParameter("symbols", symbols.joinToString(","))
                 .addQueryParameter(
@@ -546,8 +604,21 @@ class YahooClient {
                 .addQueryParameter("crumb", crumb)
                 .build()
                 .toString()
+        }
+
+    /**
+     * Executes a crumb-carrying GET (cookies ride via [cookieHttp]); a 401
+     * forces one crumb refresh and one retry, then gives up quietly.
+     */
+    private fun crumbedGetJson(buildUrl: (String) -> String): JSONObject? {
+        repeat(2) { attempt ->
+            val crumb = ensureCrumb(force = attempt > 0) ?: return null
             try {
-                val request = Request.Builder().url(url).header("User-Agent", USER_AGENT).get().build()
+                val request = Request.Builder()
+                    .url(buildUrl(crumb))
+                    .header("User-Agent", USER_AGENT)
+                    .get()
+                    .build()
                 cookieHttp.newCall(request).execute().use { response ->
                     when {
                         response.code == 401 && attempt == 0 -> {} // stale crumb — refresh and retry

@@ -276,6 +276,34 @@ data class CandleFeed(
 )
 
 /**
+ * A company's fundamental snapshot from Yahoo's quoteSummary (crumb-gated).
+ * EVERY field is nullable: an unmeasured figure stays null and contributes
+ * nothing anywhere — never a sector average, never a guess. ETFs and funds
+ * legitimately carry almost nothing here.
+ */
+data class Fundamentals(
+    val symbol: String,
+    val marketCap: Double? = null,
+    val trailingPE: Double? = null,
+    val forwardPE: Double? = null,
+    val beta: Double? = null,
+    val dividendYield: Double? = null,      // fraction, e.g. 0.0046
+    val totalDebt: Double? = null,
+    val totalCash: Double? = null,
+    val debtToEquity: Double? = null,       // percent, e.g. 6.5
+    val profitMargins: Double? = null,      // fraction
+    val revenueGrowth: Double? = null,      // fraction, yoy
+    val earningsGrowth: Double? = null,     // fraction, yoy
+    val freeCashflow: Double? = null,
+    val priceToBook: Double? = null,
+    val shortPctFloat: Double? = null,      // fraction
+    val targetMeanPrice: Double? = null,    // the street's 12-month mean target
+    val recommendationMean: Double? = null, // 1 strong buy .. 5 sell
+    val analystCount: Int? = null,
+    val fetchedAt: Long = 0L
+)
+
+/**
  * The next earnings date Yahoo knows for a symbol. [nextTs] null means the
  * lookup SUCCEEDED and no upcoming report is known (ETFs, funds) — a symbol
  * whose lookup failed is simply absent from the map, never faked as

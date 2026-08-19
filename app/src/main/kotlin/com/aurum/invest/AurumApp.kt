@@ -10,6 +10,7 @@ import com.aurum.invest.data.repo.PicksRepository
 import com.aurum.invest.data.repo.PortfolioRepository
 import com.aurum.invest.data.repo.RecordRepository
 import com.aurum.invest.data.repo.SettingsRepository
+import com.aurum.invest.data.repo.StudyRepository
 import com.aurum.invest.data.repo.TargetsRepository
 import com.aurum.invest.data.repo.WalletRepository
 import com.aurum.invest.data.repo.WatchRepository
@@ -47,5 +48,6 @@ class AppContainer(app: Application) {
     val bankFeed = BankFeedRepository(db.bankEventDao(), portfolio)
     val record = RecordRepository(db.engineCallDao(), market)
     val wealth = WealthRepository(db.cacheDao(), market, news, settings, picks, record)
+    val study = StudyRepository(market, news, wealth)
     val targets = TargetsRepository(db.cacheDao())
 }

@@ -180,6 +180,15 @@ object Meanings {
             "is the timing itself. This is the trade history judged - the Risk & " +
             "performance card below replays only today's composition."
 
+    const val PROJECTION =
+        "Not a prediction — a measured distribution. Every session in this stock's " +
+            "two-year history is classified by regime (trend structure, RSI band, " +
+            "volatility band); the sessions that looked like TODAY are replayed 21 " +
+            "sessions forward, and the outcomes' percentiles become the range: the " +
+            "median, the middle half, and the 9-in-10 band. The basis line names how " +
+            "many analog months stand behind the numbers and how tightly they match. " +
+            "What HAS happened after setups like this one - never a promise of what will."
+
     const val ENGINE_RECORD =
         "Every ADD, TRIM, and EXIT the wealth engine issues, and every next-session " +
             "pick, is logged at its live price the moment it appears - then scored " +

@@ -59,19 +59,33 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.text.font.FontWeight
+import com.aurum.invest.analytics.PriceProjection
 import com.aurum.invest.analytics.RotationState
 import com.aurum.invest.analytics.StockCatalog
+import com.aurum.invest.analytics.StockStudy
+import com.aurum.invest.analytics.StudyFactor
+import com.aurum.invest.analytics.TechniqueVerdict
 import com.aurum.invest.core.Fmt
+import com.aurum.invest.data.model.Fundamentals
 import com.aurum.invest.ui.components.ActionBadge
 import com.aurum.invest.ui.components.AnimatedMoney
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.EmptyState
+import com.aurum.invest.ui.components.InfoDot
+import com.aurum.invest.ui.components.Meanings
 import com.aurum.invest.ui.components.PillTag
 import com.aurum.invest.ui.components.SectionHeader
 import com.aurum.invest.ui.components.SegmentedToggle
 import com.aurum.invest.ui.components.Sparkline
+import com.aurum.invest.ui.components.StatTile
 import com.aurum.invest.ui.theme.AurumColors
 import java.util.Locale
 
@@ -86,7 +100,7 @@ fun StocksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Uni
     val vm: StocksViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
 
-    // 0 = Watchlist, 1 = Search.
+    // 0 = Watchlist, 1 = Search, 2 = Study.
     var mode by rememberSaveable { mutableIntStateOf(0) }
     // 0 = by tag, 1 = by sector.
     var searchMode by rememberSaveable { mutableIntStateOf(1) }
@@ -109,17 +123,16 @@ fun StocksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Uni
             )
             Spacer(modifier = Modifier.height(14.dp))
             SegmentedToggle(
-                options = listOf("Watchlist", "Search"),
+                options = listOf("Watchlist", "Search", "Study"),
                 selected = mode,
                 onSelect = { mode = it },
                 compact = true
             )
         }
 
-        if (mode == 0) {
-            WatchlistMode(vm, state, onOpenDetail, onOpenAnalysis)
-        } else {
-            SearchMode(
+        when (mode) {
+            0 -> WatchlistMode(vm, state, onOpenDetail, onOpenAnalysis)
+            1 -> SearchMode(
                 vm = vm,
                 state = state,
                 searchMode = searchMode,
@@ -127,6 +140,7 @@ fun StocksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Uni
                 onOpenDetail = onOpenDetail,
                 onOpenAnalysis = onOpenAnalysis
             )
+            else -> StudyMode(vm, state, onOpenDetail, onOpenAnalysis)
         }
     }
 }
@@ -916,3 +930,485 @@ private fun stocksFieldColors(): TextFieldColors = OutlinedTextFieldDefaults.col
     focusedPlaceholderColor = AurumColors.textDim,
     unfocusedPlaceholderColor = AurumColors.textDim
 )
+
+// ---------------------------------------------------------------- study mode
+
+/**
+ * One name, fully studied: search any US ticker or company name, get the
+ * graded evaluation and the measured one-month projection.
+ */
+@Composable
+private fun StudyMode(
+    vm: StocksViewModel,
+    state: StocksState,
+    onOpenDetail: (String) -> Unit,
+    onOpenAnalysis: (String) -> Unit
+) {
+    val keyboard = LocalSoftwareKeyboardController.current
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 120.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            OutlinedTextField(
+                value = state.studyQuery,
+                onValueChange = vm::onStudyQueryChange,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp),
+                colors = stocksFieldColors(),
+                placeholder = {
+                    Text(
+                        text = "Ticker or company name — NVDA, Nvidia…",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Rounded.Search,
+                        contentDescription = null,
+                        tint = AurumColors.textDim
+                    )
+                },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() })
+            )
+        }
+        if (state.studySuggestions.isNotEmpty()) {
+            items(state.studySuggestions) { (symbol, name) ->
+                AurumCard(onClick = {
+                    keyboard?.hide()
+                    vm.selectStudy(symbol, name)
+                }) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = symbol,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = AurumColors.gold
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = name,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AurumColors.textDim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+        when {
+            state.studyLoading -> item {
+                AurumCard {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = AurumColors.gold,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = "Reading two years of history, the 35-technique board, " +
+                                "the headlines, and the balance sheet…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AurumColors.textDim
+                        )
+                    }
+                }
+            }
+            state.study == null -> item {
+                AurumCard {
+                    Text(
+                        text = state.studyError.ifEmpty {
+                            "Pick any US stock — by ticker or by company name — and the " +
+                                "engine studies it end to end: trend, momentum against the " +
+                                "market, the 35-technique board, volume, volatility, " +
+                                "fundamentals, headlines, and a one-month projection built " +
+                                "from the stock's own comparable months."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
+            else -> {
+                val s = state.study
+                if (state.studyError.isNotEmpty()) {
+                    item {
+                        AurumCard {
+                            Text(
+                                text = state.studyError + " Showing the previous study.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AurumColors.loss
+                            )
+                        }
+                    }
+                }
+                item { StudyHeaderCard(s, onOpen = { onOpenDetail(s.symbol) }) }
+                s.projection?.let { p ->
+                    item { StudyProjectionCard(p, s.price) }
+                }
+                item { StudyFactorsCard(s) }
+                item { StudyPerformanceCard(s) }
+                s.fundamentals?.let { f -> item { StudyFundamentalsCard(f) } }
+                if (s.analystNote.isNotEmpty()) {
+                    item {
+                        AurumCard {
+                            Text(
+                                text = "The street",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = AurumColors.text
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = s.analystNote,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AurumColors.textDim
+                            )
+                        }
+                    }
+                }
+                item {
+                    AurumCard(onClick = { onOpenAnalysis(s.symbol) }) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Rounded.QueryStats,
+                                contentDescription = null,
+                                tint = AurumColors.gold,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Full 35-technique analysis of ${s.symbol}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = AurumColors.gold
+                            )
+                        }
+                    }
+                }
+                item {
+                    Column {
+                        s.notes.forEach { note ->
+                            Text(
+                                text = note,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AurumColors.textDim,
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+                        }
+                        Text(
+                            text = s.caveat,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AurumColors.textDim
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StudyHeaderCard(s: StockStudy, onOpen: () -> Unit) {
+    AurumCard(onClick = onOpen) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = s.symbol,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AurumColors.text
+                )
+                Text(
+                    text = s.name,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = Fmt.money(s.price),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AurumColors.text
+                )
+                Text(
+                    text = s.grade?.let { "${it}/100 · ${s.gradeBand}" } ?: s.gradeBand,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = when {
+                        s.grade == null -> AurumColors.textDim
+                        s.grade >= 80 -> AurumColors.gain
+                        s.grade >= 60 -> AurumColors.gold
+                        s.grade >= 40 -> AurumColors.textDim
+                        else -> AurumColors.loss
+                    }
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Text(
+            text = s.headline,
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+    }
+}
+
+@Composable
+private fun StudyProjectionCard(p: PriceProjection, price: Double) {
+    AurumCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "One month out — the measured range",
+                style = MaterialTheme.typography.titleSmall,
+                color = AurumColors.text,
+                modifier = Modifier.weight(1f)
+            )
+            InfoDot(title = "The projection", explanation = Meanings.PROJECTION)
+        }
+        Spacer(modifier = Modifier.height(14.dp))
+        ProjectionRangeBar(p, price)
+        Spacer(modifier = Modifier.height(14.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            StatTile(
+                label = "Median",
+                value = Fmt.money(p.medianPrice),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.deltaColor(p.medianPct)
+            )
+            StatTile(
+                label = "Middle half",
+                value = "${Fmt.money(p.q1Price)}–${Fmt.money(p.q3Price)}",
+                modifier = Modifier.weight(1.4f)
+            )
+            StatTile(
+                label = "Closed higher",
+                value = Fmt.pct(p.upSharePct),
+                modifier = Modifier.weight(1f),
+                valueColor = if (p.upSharePct >= 50.0) AurumColors.gain else AurumColors.loss
+            )
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Text(
+            text = String.format(
+                Locale.US,
+                "9 in 10 of those months landed between %s (%+.1f%%) and %s (%+.1f%%).",
+                Fmt.money(p.p10Price), p.p10Pct, Fmt.money(p.p90Price), p.p90Pct
+            ),
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = "Basis: ${p.analogCount} of this stock's own past months — " +
+                p.basis + "." +
+                (p.monthlyVolPct?.let {
+                    String.format(
+                        Locale.US,
+                        " Its recent volatility implies a typical monthly swing of ±%.1f%%.",
+                        it
+                    )
+                } ?: ""),
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+    }
+}
+
+/** The p10–p90 track with the q1–q3 body, the median tick, and "now". */
+@Composable
+private fun ProjectionRangeBar(p: PriceProjection, price: Double) {
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(26.dp)
+    ) {
+        val lo = minOf(p.p10Price, price)
+        val hi = maxOf(p.p90Price, price)
+        val span = (hi - lo).takeIf { it > 1e-9 } ?: 1.0
+        fun x(v: Double): Float = ((v - lo) / span).toFloat() * size.width
+        val midY = size.height / 2f
+
+        // The 9-in-10 track.
+        drawLine(
+            color = AurumColors.hairline,
+            start = Offset(x(p.p10Price), midY),
+            end = Offset(x(p.p90Price), midY),
+            strokeWidth = 4.dp.toPx(),
+            cap = StrokeCap.Round
+        )
+        // The middle half.
+        drawLine(
+            color = AurumColors.goldSoft,
+            start = Offset(x(p.q1Price), midY),
+            end = Offset(x(p.q3Price), midY),
+            strokeWidth = 12.dp.toPx(),
+            cap = StrokeCap.Round
+        )
+        // The median tick.
+        drawLine(
+            color = AurumColors.gold,
+            start = Offset(x(p.medianPrice), midY - 10.dp.toPx()),
+            end = Offset(x(p.medianPrice), midY + 10.dp.toPx()),
+            strokeWidth = 2.5.dp.toPx(),
+            cap = StrokeCap.Round
+        )
+        // Where the price stands today.
+        drawCircle(
+            color = AurumColors.text,
+            radius = 4.dp.toPx(),
+            center = Offset(x(price), midY)
+        )
+    }
+}
+
+@Composable
+private fun StudyFactorsCard(s: StockStudy) {
+    AurumCard {
+        Text(
+            text = "The graded evidence — ${Fmt.pct(s.coveragePct)} measured",
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        s.factors.forEach { f ->
+            Spacer(modifier = Modifier.height(10.dp))
+            StudyFactorRow(f)
+        }
+    }
+}
+
+@Composable
+private fun StudyFactorRow(f: StudyFactor) {
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = f.label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = AurumColors.text,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = f.score?.let { "$it/${f.maxScore}" } ?: "unmeasured",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = when {
+                    f.score == null -> AurumColors.textDim
+                    f.score * 2 >= f.maxScore -> AurumColors.gain
+                    f.score * 4 >= f.maxScore -> AurumColors.gold
+                    else -> AurumColors.loss
+                }
+            )
+        }
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = f.detail,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+    }
+}
+
+@Composable
+private fun StudyPerformanceCard(s: StockStudy) {
+    AurumCard {
+        Text(
+            text = "Performance & risk",
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            s.spans.forEach { span ->
+                StatTile(
+                    label = span.label +
+                        (span.spyPct?.let { " · SPY ${Fmt.signedPct(it)}" } ?: ""),
+                    value = span.stockPct?.let { Fmt.signedPct(it) } ?: "—",
+                    modifier = Modifier.weight(1f),
+                    valueColor = span.stockPct?.let { AurumColors.deltaColor(it) }
+                        ?: AurumColors.textDim
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            StatTile(
+                label = "Volatility (ann.)",
+                value = s.volatilityPct?.let { Fmt.pct(it) } ?: "—",
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                label = "Beta vs SPY",
+                value = s.beta?.let { String.format(Locale.US, "%.2f", it) } ?: "—",
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                label = "Max drawdown (1Y)",
+                value = s.maxDrawdownPct?.let { Fmt.pct(it) } ?: "—",
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.loss
+            )
+            StatTile(
+                label = "Below 52w high",
+                value = s.below52HighPct?.let { Fmt.pct(it) } ?: "—",
+                modifier = Modifier.weight(1f)
+            )
+        }
+        if (s.boardTotal > 0) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = "${s.boardBullish} of ${s.boardTotal} deciding techniques read bullish.",
+                style = MaterialTheme.typography.labelSmall,
+                color = when (s.boardVerdict) {
+                    TechniqueVerdict.BULLISH -> AurumColors.gain
+                    TechniqueVerdict.BEARISH -> AurumColors.loss
+                    TechniqueVerdict.NEUTRAL -> AurumColors.textDim
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun StudyFundamentalsCard(f: Fundamentals) {
+    val tiles = buildList {
+        f.marketCap?.let { add("Market cap" to "$" + Fmt.compact(it)) }
+        f.totalDebt?.let { add("Total debt" to "$" + Fmt.compact(it)) }
+        f.totalCash?.let { add("Total cash" to "$" + Fmt.compact(it)) }
+        f.debtToEquity?.let { add("Debt / equity" to Fmt.pct(it)) }
+        f.profitMargins?.let { add("Profit margin" to Fmt.pct(it * 100.0)) }
+        f.revenueGrowth?.let { add("Revenue growth" to Fmt.signedPct(it * 100.0)) }
+        f.earningsGrowth?.let { add("Earnings growth" to Fmt.signedPct(it * 100.0)) }
+        f.forwardPE?.let { add("Forward P/E" to String.format(Locale.US, "%.1f", it)) }
+        f.trailingPE?.let { add("Trailing P/E" to String.format(Locale.US, "%.1f", it)) }
+        f.priceToBook?.let { add("Price / book" to String.format(Locale.US, "%.1f", it)) }
+        f.freeCashflow?.let { add("Free cash flow" to "$" + Fmt.compact(it)) }
+        f.shortPctFloat?.let { add("Short % of float" to Fmt.pct(it * 100.0)) }
+        f.dividendYield?.let { add("Dividend yield" to Fmt.pct(it * 100.0)) }
+    }
+    if (tiles.isEmpty()) return
+    AurumCard {
+        Text(
+            text = "Fundamentals",
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        tiles.chunked(3).forEach { rowTiles ->
+            Row(modifier = Modifier.fillMaxWidth()) {
+                rowTiles.forEach { (label, value) ->
+                    StatTile(label = label, value = value, modifier = Modifier.weight(1f))
+                }
+                repeat(3 - rowTiles.size) { Spacer(modifier = Modifier.weight(1f)) }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+        Text(
+            text = "As reported to Yahoo, refreshed daily. An absent figure stays absent.",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+    }
+}

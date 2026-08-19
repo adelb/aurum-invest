@@ -411,6 +411,80 @@ class MarketRepository(
         null
     }
 
+    /**
+     * A company's fundamental snapshot, cached 24 hours. Null when the
+     * lookup failed and nothing is cached — the study engine reports the
+     * whole fundamentals factor unmeasured rather than guessing.
+     */
+    suspend fun getFundamentals(
+        symbol: String,
+        maxAgeMs: Long = 86_400_000L
+    ): com.aurum.invest.data.model.Fundamentals? {
+        val key = "fundamentals:${symbol.trim().uppercase()}"
+        val now = System.currentTimeMillis()
+        val cached = readCache(key)
+        val stored = cached?.let { fundamentalsFromJson(it.json) }
+        if (stored != null && now - cached.updatedAt <= maxAgeMs) return stored
+        val fresh = yahoo.fetchFundamentals(symbol.trim().uppercase())
+        if (fresh != null) {
+            writeCache(key, fundamentalsToJson(fresh).toString())
+            return fresh
+        }
+        return stored
+    }
+
+    private fun fundamentalsToJson(f: com.aurum.invest.data.model.Fundamentals): JSONObject =
+        JSONObject().apply {
+            put("symbol", f.symbol)
+            put("at", f.fetchedAt)
+            putOpt("cap", f.marketCap)
+            putOpt("tpe", f.trailingPE)
+            putOpt("fpe", f.forwardPE)
+            putOpt("beta", f.beta)
+            putOpt("div", f.dividendYield)
+            putOpt("debt", f.totalDebt)
+            putOpt("cash", f.totalCash)
+            putOpt("dte", f.debtToEquity)
+            putOpt("margins", f.profitMargins)
+            putOpt("revg", f.revenueGrowth)
+            putOpt("earng", f.earningsGrowth)
+            putOpt("fcf", f.freeCashflow)
+            putOpt("pb", f.priceToBook)
+            putOpt("shortf", f.shortPctFloat)
+            putOpt("target", f.targetMeanPrice)
+            putOpt("rec", f.recommendationMean)
+            putOpt("analysts", f.analystCount)
+        }
+
+    private fun fundamentalsFromJson(s: String): com.aurum.invest.data.model.Fundamentals? = try {
+        val o = JSONObject(s)
+        fun d(key: String): Double? =
+            if (o.has(key) && !o.isNull(key)) o.getDouble(key) else null
+        com.aurum.invest.data.model.Fundamentals(
+            symbol = o.getString("symbol"),
+            marketCap = d("cap"),
+            trailingPE = d("tpe"),
+            forwardPE = d("fpe"),
+            beta = d("beta"),
+            dividendYield = d("div"),
+            totalDebt = d("debt"),
+            totalCash = d("cash"),
+            debtToEquity = d("dte"),
+            profitMargins = d("margins"),
+            revenueGrowth = d("revg"),
+            earningsGrowth = d("earng"),
+            freeCashflow = d("fcf"),
+            priceToBook = d("pb"),
+            shortPctFloat = d("shortf"),
+            targetMeanPrice = d("target"),
+            recommendationMean = d("rec"),
+            analystCount = d("analysts")?.toInt(),
+            fetchedAt = o.optLong("at", 0L)
+        )
+    } catch (_: Exception) {
+        null
+    }
+
     /** Sectors for many symbols, concurrently; unknown symbols are simply absent. */
     suspend fun getSectors(symbols: List<String>): Map<String, String> {
         if (symbols.isEmpty()) return emptyMap()
