@@ -63,7 +63,9 @@ fun EditPositionScreen(
     var editing by remember { mutableStateOf<TransactionEntity?>(null) }
     var confirmDelete by remember { mutableStateOf<TransactionEntity?>(null) }
 
-    editing?.let { tx ->
+    // A SPLIT row (from a v6–v9 migrated ledger) is a ratio, not a trade —
+    // the buy/sell edit dialog would silently rewrite it into a buy.
+    editing?.takeIf { !it.side.equals("SPLIT", ignoreCase = true) }?.let { tx ->
         EditTradeDialog(
             tx = tx,
             onDismiss = { editing = null },

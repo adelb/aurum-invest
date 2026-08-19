@@ -19,9 +19,24 @@ object Schedules {
     private const val REFRESH_WORK_NAME = "aurum-refresh"
     private const val WEEKLY_PICKS_WORK_NAME = "aurum-weekly-picks"
 
+    /**
+     * Unique periodic works the v6–v9 releases scheduled whose worker classes
+     * this build does not carry. WorkManager keeps re-attempting persisted
+     * work by class name forever; on an update from those versions the stale
+     * entries must be cancelled once or they fail on every period.
+     */
+    private val STALE_WORK_NAMES = listOf(
+        "aurum-upattern",
+        "aurum-nextsession",
+        "aurum-price-alerts"
+    )
+
     fun ensure(context: Context) {
         try {
             val workManager = WorkManager.getInstance(context.applicationContext)
+            STALE_WORK_NAMES.forEach { name ->
+                runCatching { workManager.cancelUniqueWork(name) }
+            }
             val connected = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
                 .build()

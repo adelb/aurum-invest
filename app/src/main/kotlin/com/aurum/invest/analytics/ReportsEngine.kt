@@ -99,6 +99,17 @@ object ReportsEngine {
             val symbol = tx.symbol.trim().uppercase()
             val acc = bySymbol.getOrPut(symbol) { Acc() }
 
+            // Replicate PortfolioRepository.computePositions exactly: a SPLIT
+            // row (from a v6–v9 migrated ledger) rescales the replay state
+            // and never appears as trade activity.
+            if (tx.side == com.aurum.invest.data.repo.PortfolioRepository.SIDE_SPLIT) {
+                if (tx.shares > 0.0 && acc.shares > 0.0) {
+                    acc.shares *= tx.shares
+                    acc.avg /= tx.shares
+                }
+                continue
+            }
+
             val realized: Double?
             // Effective quantity: sells clamp to the held amount, matching the
             // position engine, so the report's totals can never disagree with

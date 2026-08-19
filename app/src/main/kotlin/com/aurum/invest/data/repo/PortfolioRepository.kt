@@ -134,6 +134,14 @@ class PortfolioRepository(private val txDao: TransactionDao) {
     companion object {
 
         /**
+         * The side string of a stock-split ledger row (the ratio lives in
+         * `shares`, price is 0). This build's UI never records one, but
+         * ledgers migrated from the v6–v9 releases may carry them, and every
+         * replay must rescale on them rather than mistake them for sells.
+         */
+        const val SIDE_SPLIT = "SPLIT"
+
+        /**
          * Shares each symbol sells without a buy to back them at that moment
          * in the replay — 0 (absent) for a sound history.
          */
@@ -143,13 +151,17 @@ class PortfolioRepository(private val txDao: TransactionDao) {
             for (tx in ordered) {
                 val sym = tx.symbol.trim().uppercase()
                 val cur = held[sym] ?: 0.0
-                if (tx.side == TradeSide.BUY.name) {
-                    held[sym] = cur + tx.shares
-                } else {
-                    if (tx.shares > cur) {
-                        unbacked[sym] = (unbacked[sym] ?: 0.0) + (tx.shares - cur)
+                when {
+                    tx.side == SIDE_SPLIT ->
+                        if (tx.shares > 0.0) held[sym] = cur * tx.shares
+                    tx.side == TradeSide.BUY.name ->
+                        held[sym] = cur + tx.shares
+                    else -> {
+                        if (tx.shares > cur) {
+                            unbacked[sym] = (unbacked[sym] ?: 0.0) + (tx.shares - cur)
+                        }
+                        held[sym] = (cur - tx.shares).coerceAtLeast(0.0)
                     }
-                    held[sym] = (cur - tx.shares).coerceAtLeast(0.0)
                 }
             }
             return unbacked
@@ -193,6 +205,16 @@ class PortfolioRepository(private val txDao: TransactionDao) {
                 // trim + uppercase must match ReportsEngine and dayPlBySymbol,
                 // or a stray-whitespace ledger row splits into two positions.
                 val acc = bySymbol.getOrPut(tx.symbol.trim().uppercase()) { Acc() }
+                // A SPLIT row (ledgers migrated from the v6–v9 releases store
+                // the ratio in [shares]) rescales the replay state and never
+                // trades: shares multiply, average cost divides, value holds.
+                if (tx.side == SIDE_SPLIT) {
+                    if (tx.shares > 0.0 && acc.shares > 0.0) {
+                        acc.shares *= tx.shares
+                        acc.avg /= tx.shares
+                    }
+                    continue
+                }
                 if (tx.side == TradeSide.BUY.name) {
                     val newShares = acc.shares + tx.shares
                     if (newShares > 0) {
@@ -270,6 +292,18 @@ class PortfolioRepository(private val txDao: TransactionDao) {
                 // FIFO lots bought today: [remaining qty, cost per share incl. fees]
                 val lots = ArrayDeque<DoubleArray>()
                 for (tx in todayBySymbol[sym].orEmpty()) {
+                    // A split effective today rescales everything held through
+                    // it — overnight shares and today's open lots alike.
+                    if (tx.side == SIDE_SPLIT) {
+                        if (tx.shares > 0.0) {
+                            fromYesterday *= tx.shares
+                            for (lot in lots) {
+                                lot[0] *= tx.shares
+                                lot[1] /= tx.shares
+                            }
+                        }
+                        continue
+                    }
                     if (tx.side == TradeSide.BUY.name) {
                         if (tx.shares > 0.0) {
                             lots.addLast(doubleArrayOf(tx.shares, tx.price + tx.fees / tx.shares))
