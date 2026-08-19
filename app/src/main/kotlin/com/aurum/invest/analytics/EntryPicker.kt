@@ -1,8 +1,10 @@
 package com.aurum.invest.analytics
 
+import com.aurum.invest.core.Dates
 import com.aurum.invest.data.model.EntryPick
 import com.aurum.invest.data.model.ScreenerQuote
 import com.aurum.invest.data.repo.MarketRepository
+import com.aurum.invest.data.repo.NewsRepository
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
@@ -26,13 +28,19 @@ import org.json.JSONObject
  *     a real discount off the 52-week high, liquid, not chasing a green spike.
  *  3. Deep read on the ~28 best — a year of candles, RSI reset, dip off the
  *     20-day high, support proximity, ATR reward/risk to the nearest
- *     resistance, and the 15-technique board (bearish boards are dropped:
+ *     resistance, and the 35-technique board (bearish boards are dropped:
  *     that is a falling knife, not an entry).
  *
  * The top [count] are returned with an entry limit, target, stop, and the
- * numbers behind the read. Never throws — failures skip the symbol.
+ * numbers behind the read — upside, risk, and reward/risk are all measured
+ * FROM THE LIMIT, the price the card actually tells the user to pay. A news
+ * check vetoes dips driven by bad headlines (the classic falling-knife trap
+ * a chart-only read cannot see). Never throws — failures skip the symbol.
  */
-class EntryPicker(private val market: MarketRepository) {
+class EntryPicker(
+    private val market: MarketRepository,
+    private val news: NewsRepository? = null
+) {
 
     companion object {
         /** Yahoo's market-wide saved screens; shared by every whole-market scan. */
@@ -48,6 +56,8 @@ class EntryPicker(private val market: MarketRepository) {
         )
         private const val SHORTLIST = 28
         private const val CANDLE_CHUNK = 7
+        /** Fixed score denominator — the realistic max of finalScore's parts. */
+        private const val SCORE_SCALE = 90.0
 
         fun toJson(picks: List<EntryPick>): String {
             val arr = JSONArray()
@@ -105,7 +115,8 @@ class EntryPicker(private val market: MarketRepository) {
                         vs50DayPct = o.optDouble("vs50DayPct", 0.0),
                         techDirection = o.optString("techDirection", "NEUTRAL"),
                         techBullish = o.optInt("techBullish", 0),
-                        techTotal = o.optInt("techTotal", 15),
+                        // 0, not 15: a failed board must not resurrect as 0/15.
+                        techTotal = o.optInt("techTotal", 0),
                         techConfidence = o.optInt("techConfidence", 0),
                         analystRating = if (o.has("analystRating")) o.getDouble("analystRating") else null,
                         reason = o.optString("reason", "")
@@ -124,7 +135,15 @@ class EntryPicker(private val market: MarketRepository) {
             val pool = HashMap<String, ScreenerQuote>()
             for (chunk in MARKET_SCREENS.chunked(4)) {
                 coroutineScope {
-                    chunk.map { id -> async { market.getScreener(id) } }.awaitAll()
+                    chunk.map { id ->
+                        async {
+                            try {
+                                market.getScreener(id)
+                            } catch (_: Exception) {
+                                emptyList()
+                            }
+                        }
+                    }.awaitAll()
                 }.forEach { list ->
                     list.forEach { q -> pool.putIfAbsent(q.symbol, q) }
                 }
@@ -149,12 +168,12 @@ class EntryPicker(private val market: MarketRepository) {
             }
             if (deep.isEmpty()) return emptyList()
 
+            // Fixed scale: 80 means a genuinely strong setup whichever day it
+            // is — never "best of a weak list". Rank 1 on a flat market reads
+            // low, and that is the point.
             val ranked = deep.sortedByDescending { it.finalScore }.take(count)
-            val minF = ranked.minOf { it.finalScore }
-            val maxF = ranked.maxOf { it.finalScore }
-            val span = maxF - minF
             ranked.mapIndexed { index, d ->
-                val scaled = if (span > 0.0) 55.0 + (d.finalScore - minF) / span * 45.0 else 70.0
+                val scaled = (d.finalScore / SCORE_SCALE * 100.0).coerceIn(5.0, 98.0)
                 d.toPick(dateIso, index + 1, round(scaled * 10.0) / 10.0)
             }
         } catch (_: Exception) {
@@ -259,7 +278,7 @@ class EntryPicker(private val market: MarketRepository) {
 
     private suspend fun deepRead(q: ScreenerQuote, pre: Double): Deep? {
         return try {
-            // A full year so all 15 techniques (incl. the 200-day cross) can vote.
+            // A full year so all 35 techniques (incl. the 200-day cross) can vote.
             val candles = try {
                 market.getDailyCandles(q.symbol, 365)
             } catch (_: Exception) {
@@ -267,8 +286,35 @@ class EntryPicker(private val market: MarketRepository) {
             }
             if (candles.size < 60) return null
             val closes = candles.map { it.close }
-            val price = q.price
+            // The screener price is up to 20 minutes old and still yesterday's
+            // close in extended hours — prefer the live print when one exists.
+            val ext = try {
+                market.getExtendedHours(q.symbol)
+            } catch (_: Exception) {
+                null
+            }
+            // The morning's pre-market print stays stale all session — the price must follow the live session.
+            val price = when (Dates.marketSessionNow()) {
+                Dates.MarketSession.REGULAR -> ext?.regularPrice?.takeIf { it > 0.0 }
+                Dates.MarketSession.PRE -> ext?.preMarketPrice?.takeIf { it > 0.0 }
+                else -> ext?.postMarketPrice?.takeIf { it > 0.0 }
+                    ?: ext?.regularPrice?.takeIf { it > 0.0 }
+            } ?: q.price
             if (price <= 0.0) return null
+
+            // News gate: a chart-perfect dip caused by a lawsuit, probe, or
+            // guidance cut is a falling knife wearing an entry costume.
+            val newsItems = if (news != null && q.symbol.length >= 2) {
+                try {
+                    news.getNews(q.symbol, candles)
+                } catch (_: Exception) {
+                    emptyList()
+                }
+            } else {
+                emptyList()
+            }
+            val newsScore = newsItems.sumOf { it.sentiment }.coerceIn(-3, 3)
+            if (newsScore <= -3) return null
 
             val rsi = Indicators.rsi(closes) ?: return null
             val atr = Indicators.atr(candles, 14) ?: return null
@@ -296,43 +342,57 @@ class EntryPicker(private val market: MarketRepository) {
                 price * 0.85
             )
             if (stop >= price) return null
-            var target = resistanceAbove ?: max(high20, price + 2.0 * atr)
-            if (target <= price * 1.005) target = max(high20, price + 2.0 * atr)
-            val upsidePct = (target / price - 1.0) * 100.0
-            val riskPct = (1.0 - stop / price) * 100.0
-            val rewardRisk = (target - price) / (price - stop)
 
             // Already at support (within 1.2 ATR above it) = enter here; else a
             // patient limit toward support, at most 1.2 ATR below the price.
             val nearSupport = supportBelow != null && price - supportBelow <= 1.2 * atr
-            val entryLimit = if (nearSupport) price else {
-                max(supportBelow ?: (price - 0.8 * atr), price - 1.2 * atr)
-            }
+            val entryLimit = min(
+                if (nearSupport) price else {
+                    max(supportBelow ?: (price - 0.8 * atr), price - 1.2 * atr)
+                },
+                price
+            )
+            if (entryLimit <= stop) return null
+
+            var target = resistanceAbove ?: max(high20, price + 2.0 * atr)
+            if (target <= entryLimit * 1.01) target = max(high20, entryLimit + 2.0 * atr)
+
+            // Upside, risk, and reward/risk are measured FROM THE LIMIT — the
+            // price the card tells the user to pay — not from wherever the
+            // stock happens to trade right now.
+            val upsidePct = (target / entryLimit - 1.0) * 100.0
+            val riskPct = (1.0 - stop / entryLimit) * 100.0
+            val rewardRisk = ((target - entryLimit) / (entryLimit - stop)).coerceAtMost(9.9)
 
             val rsiScore = (12.0 - abs(rsi - 40.0) / 2.0).coerceIn(0.0, 12.0)
             val dip20Score = (10.0 - abs(dipPct - 6.5) * 1.4).coerceIn(0.0, 10.0)
             val supportScore = if (nearSupport) 8.0 else 0.0
             val trendScore = if (rising50) 5.0 else 0.0
             val rrScore = (rewardRisk * 3.0).coerceIn(0.0, 9.0)
-            val boardScore = when (direction) {
-                TechniqueVerdict.BULLISH -> confidence * 0.10
+            // A missing board is unknown, not a 2-point NEUTRAL.
+            val boardScore = when {
+                analysis == null -> 0.0
+                direction == TechniqueVerdict.BULLISH -> confidence * 0.10
                 else -> 2.0
             }
             val last = candles.last()
             val bounceScore = if (last.close > last.open) 2.0 else 0.0
 
             val finalScore = pre * 0.8 + rsiScore + dip20Score + supportScore +
-                trendScore + rrScore + boardScore + bounceScore
+                trendScore + rrScore + boardScore + bounceScore + newsScore * 2.0
 
-            val reason = buildReason(
+            var reason = buildReason(
                 rsi, dipPct, vs50, nearSupport, supportBelow, rising50,
                 rewardRisk, direction, bullishCount, techTotal, q.analystRating
             )
+            if (newsScore != 0) {
+                reason += String.format(Locale.US, ", news tone %+d over 5 days", newsScore)
+            }
 
             Deep(
                 q = q,
                 finalScore = finalScore,
-                entryLimit = min(entryLimit, price),
+                entryLimit = entryLimit,
                 target = target,
                 stop = stop,
                 upsidePct = upsidePct,

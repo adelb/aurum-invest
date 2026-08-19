@@ -1,15 +1,17 @@
 package com.aurum.invest.ui.screens
 
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow as WrappingFlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,65 +21,73 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.QueryStats
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.compose.foundation.layout.fillMaxHeight
+import com.aurum.invest.analytics.AllocationMove
+import com.aurum.invest.analytics.AllocationPlan
+import com.aurum.invest.analytics.AllocationTarget
 import com.aurum.invest.analytics.AllocationSlice
 import com.aurum.invest.analytics.BookContext
+import com.aurum.invest.analytics.FlowVerdict
 import com.aurum.invest.analytics.GapStatus
+import com.aurum.invest.analytics.HoldingAction
+import com.aurum.invest.analytics.HoldingStage
+import com.aurum.invest.analytics.HoldingVerdict
+import com.aurum.invest.analytics.LiquidityAllocationLine
+import com.aurum.invest.analytics.LiquidityPlan
 import com.aurum.invest.analytics.MarketCall
 import com.aurum.invest.analytics.MarketMover
 import com.aurum.invest.analytics.MarketRating
+import com.aurum.invest.analytics.MoneyFlowReport
+import com.aurum.invest.analytics.NextSessionPick
+import com.aurum.invest.analytics.NextSessionReport
 import com.aurum.invest.analytics.NoteKind
 import com.aurum.invest.analytics.PickNote
+import com.aurum.invest.analytics.GradeAction
+import com.aurum.invest.analytics.GradeActionKind
+import com.aurum.invest.analytics.PortfolioGrade
 import com.aurum.invest.analytics.PortfolioLens
-import com.aurum.invest.analytics.SectorTrend
-import com.aurum.invest.analytics.SectorTrends
-import com.aurum.invest.analytics.TomorrowPick
-import com.aurum.invest.analytics.WealthAllocation
-import com.aurum.invest.analytics.WealthPlan
+import com.aurum.invest.analytics.PortfolioPerformance
+import com.aurum.invest.analytics.PortfolioReview
+import com.aurum.invest.analytics.RebalanceMove
+import com.aurum.invest.analytics.SectorAllocationTarget
+import com.aurum.invest.analytics.SectorFlow
+import com.aurum.invest.analytics.UnverifiedHolding
 import com.aurum.invest.analytics.WeeklyStrategy
+import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.ui.components.AurumCard
-import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.AurumRefreshBox
+import com.aurum.invest.ui.components.AlertPermissionCard
+import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.PillTag
 import com.aurum.invest.ui.components.ScoreBar
 import com.aurum.invest.ui.components.SentimentDot
 import com.aurum.invest.ui.components.StatTile
 import com.aurum.invest.ui.theme.AurumColors
+import java.util.Locale
 
 @Composable
 fun WealthScreen(onOpenAnalysis: (String) -> Unit, onOpenDetail: (String) -> Unit) {
@@ -102,254 +112,58 @@ fun WealthScreen(onOpenAnalysis: (String) -> Unit, onOpenDetail: (String) -> Uni
                     color = AurumColors.text
                 )
                 Text(
-                    text = when {
-                        state.editing -> "Your 4-month investment plan"
-                        state.plan != null -> "Weekly plan · updated ${Fmt.timeAgo(state.plan!!.updatedAt)}"
-                        else -> "Your 4-month investment plan"
-                    },
+                    text = state.review?.let { "Portfolio review · updated ${Fmt.timeAgo(it.computedAt)}" }
+                        ?: "Portfolio intelligence",
                     style = MaterialTheme.typography.bodyMedium,
                     color = AurumColors.textDim
                 )
             }
-            if (state.computing) {
+            if (state.refreshing) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(22.dp),
                     color = AurumColors.gold,
                     strokeWidth = 2.dp
                 )
-            } else if (!state.editing && state.plan != null) {
-                IconButton(onClick = vm::startEditing) {
-                    Icon(
-                        Icons.Rounded.Edit,
-                        contentDescription = "Edit amounts",
-                        tint = AurumColors.textDim
-                    )
-                }
+            } else {
                 IconButton(onClick = vm::refresh) {
                     Icon(
                         Icons.Rounded.Refresh,
-                        contentDescription = "Re-scan the market",
+                        contentDescription = "Re-run every engine",
                         tint = AurumColors.gold
                     )
                 }
             }
         }
 
-        when {
-            state.loading -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(color = AurumColors.gold)
-                }
-            }
-            state.editing -> {
-                SetupForm(
-                    initialBase = state.baseAmount,
-                    initialTarget = state.targetProfit,
-                    canCancel = state.plan != null,
-                    onCancel = vm::cancelEditing,
-                    onSave = vm::save
-                )
-            }
-            state.computing && state.plan == null -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = AurumColors.gold)
-                        Spacer(Modifier.height(14.dp))
-                        Text(
-                            text = "Scanning sectors, techniques, news, and insider flow…",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = AurumColors.textDim
-                        )
-                    }
-                }
-            }
-            state.plan == null -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(horizontal = 32.dp)
-                    ) {
-                        Text(
-                            text = "Could not build the plan",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = AurumColors.text
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = "Market data was unreachable. Check the connection and try again.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = AurumColors.textDim
-                        )
-                        Spacer(Modifier.height(14.dp))
-                        Button(
-                            onClick = vm::refresh,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = AurumColors.gold,
-                                contentColor = AurumColors.bg
-                            )
-                        ) { Text("Retry") }
-                    }
-                }
-            }
-            else -> {
-                AurumRefreshBox(
-                    refreshing = state.computing,
-                    onRefresh = vm::refresh,
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    PlanContent(
-                        plan = state.plan!!,
-                        pulse = state.pulse,
-                        pulseLoading = state.pulseLoading,
-                        book = state.book,
-                        pulseSectors = state.pulseSectors,
-                        strategy = state.strategy,
-                        strategyLoading = state.strategyLoading,
-                        onOpenAnalysis = onOpenAnalysis,
-                        onOpenDetail = onOpenDetail
-                    )
-                }
-            }
+        AurumRefreshBox(
+            refreshing = state.refreshing,
+            onRefresh = vm::refresh,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            WealthContent(
+                state = state,
+                onOpenAnalysis = onOpenAnalysis,
+                onOpenDetail = onOpenDetail
+            )
         }
     }
 }
 
-// ---------------------------------------------------------------- setup form
+// ---------------------------------------------------------------- content
 
 @Composable
-private fun SetupForm(
-    initialBase: Double?,
-    initialTarget: Double?,
-    canCancel: Boolean,
-    onCancel: () -> Unit,
-    onSave: (Double, Double) -> Unit
-) {
-    var baseText by rememberSaveable {
-        mutableStateOf(initialBase?.let { Fmt.qty(it) } ?: "")
-    }
-    var targetText by rememberSaveable {
-        mutableStateOf(initialTarget?.let { Fmt.qty(it) } ?: "")
-    }
-    val base = baseText.replace(",", "").toDoubleOrNull()
-    val target = targetText.replace(",", "").toDoubleOrNull()
-    val valid = base != null && base > 0.0 && target != null && target > 0.0
-
-    val fieldColors = OutlinedTextFieldDefaults.colors(
-        focusedTextColor = AurumColors.text,
-        unfocusedTextColor = AurumColors.text,
-        focusedBorderColor = AurumColors.gold,
-        unfocusedBorderColor = AurumColors.hairline,
-        focusedLabelColor = AurumColors.gold,
-        unfocusedLabelColor = AurumColors.textDim,
-        cursorColor = AurumColors.gold
-    )
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 28.dp)
-    ) {
-        item {
-            AurumCard {
-                Text(
-                    text = "Set the goal",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = AurumColors.text
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "Tell Aurum how much you want to put to work and what profit you " +
-                        "aim for over the next 4 months. Every week the plan re-reads the " +
-                        "market — trending sectors, the 15-technique board on every candidate, " +
-                        "news, and insider flow — and tells you what to buy, for how much, " +
-                        "and when to sell.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = AurumColors.textDim
-                )
-                Spacer(Modifier.height(16.dp))
-                OutlinedTextField(
-                    value = baseText,
-                    onValueChange = { baseText = it },
-                    label = { Text("Base amount to invest ($)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    colors = fieldColors,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = targetText,
-                    onValueChange = { targetText = it },
-                    label = { Text("Expected profit in 4 months ($)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    colors = fieldColors,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                if (base != null && base > 0.0 && target != null && target > 0.0) {
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        text = "That is ${Fmt.pct(target / base * 100.0)} over 4 months " +
-                            "(${Fmt.pct(target / base * 100.0 / 4.0)} per month). The plan " +
-                            "will tell you honestly whether that pace is realistic.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AurumColors.textDim
-                    )
-                }
-                Spacer(Modifier.height(16.dp))
-                Button(
-                    onClick = { if (valid) onSave(base!!, target!!) },
-                    enabled = valid,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = AurumColors.gold,
-                        contentColor = AurumColors.bg,
-                        disabledContainerColor = AurumColors.surfaceHigh,
-                        disabledContentColor = AurumColors.textDim
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Build my weekly plan")
-                }
-                if (canCancel) {
-                    Spacer(Modifier.height(6.dp))
-                    TextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
-                        Text("Keep the current plan", color = AurumColors.textDim)
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------- plan view
-
-@Composable
-private fun PlanContent(
-    plan: WealthPlan,
-    pulse: MarketRating?,
-    pulseLoading: Boolean,
-    book: BookContext,
-    pulseSectors: Map<String, String>,
-    strategy: WeeklyStrategy?,
-    strategyLoading: Boolean,
+private fun WealthContent(
+    state: WealthState,
     onOpenAnalysis: (String) -> Unit,
     onOpenDetail: (String) -> Unit
 ) {
-    val context = LocalContext.current
-    // Which sections the user has folded away. Survives rotation and tab
-    // switches, so the tab stays arranged the way they left it.
-    var collapsed by rememberSaveable { mutableStateOf(HashSet<String>()) }
+    // Which sections the user has folded away. The review and the next-session
+    // engine open by default — the rest starts folded so a first look reads in
+    // seconds, not scrolls.
+    var collapsed by rememberSaveable { mutableStateOf<Set<String>>(setOf("pulse", "flow", "book", "gaps", "weekmoney", "movers")) }
     fun open(key: String) = key !in collapsed
     fun toggle(key: String) {
-        collapsed = HashSet(collapsed).apply { if (!add(key)) remove(key) }
+        collapsed = if (key in collapsed) collapsed - key else collapsed + key
     }
 
     LazyColumn(
@@ -357,27 +171,192 @@ private fun PlanContent(
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 28.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // 1 — the portfolio review: hold / sell / cut, allocation, rebalance.
         item {
-            WealthSectionHeader("Market pulse", open("pulse")) { toggle("pulse") }
+            WealthSectionHeader(
+                title = "Your portfolio — the verdicts",
+                expanded = open("review"),
+                trailing = state.review?.let { r ->
+                    val actions = r.verdicts.count { it.action != HoldingAction.HOLD }
+                    if (actions == 0) "all clear" else "$actions to act on"
+                }
+            ) { toggle("review") }
+        }
+        if (open("review")) {
+            when {
+                state.bookLoaded && !state.hasPositions -> {
+                    item { ReviewEmptyCard() }
+                }
+                state.review == null && state.reviewLoading -> {
+                    item { LoadingCard("Reading every holding through the 35-technique board…") }
+                }
+                state.review == null -> {
+                    item {
+                        AurumCard {
+                            Text(
+                                text = "The engine could not verify a single holding from live " +
+                                    "market data — most likely a network problem. Pull down to " +
+                                    "retry; nothing is guessed in the meantime.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AurumColors.textDim
+                            )
+                        }
+                    }
+                }
+                else -> {
+                    val review = state.review
+                    item { ReviewSummaryCard(review) }
+                    review.grade?.let { grade ->
+                        item { PortfolioGradeCard(grade, onOpenDetail) }
+                    }
+                    items(review.verdicts.size) { i ->
+                        HoldingCard(
+                            verdict = review.verdicts[i],
+                            onOpenAnalysis = onOpenAnalysis,
+                            onOpenDetail = onOpenDetail
+                        )
+                    }
+                    if (review.unverified.isNotEmpty()) {
+                        item { UnverifiedHoldingsCard(review.unverified, onOpenDetail) }
+                    }
+                    review.allocationPlan?.let { plan ->
+                        item { AllocationPlanCard(plan, onOpenAnalysis, onOpenDetail) }
+                    }
+                    if (review.rebalance.isNotEmpty()) {
+                        item { RebalanceCard(review.rebalance, onOpenAnalysis, onOpenDetail) }
+                    }
+                }
+            }
+        }
+
+        // 1.5 — how much of the wallet's uninvested cash to deploy, and where.
+        item {
+            WealthSectionHeader(
+                title = "Your liquidity — where to put it to work",
+                expanded = open("liquidity"),
+                trailing = state.liquidityPlan?.let { Fmt.money(it.liquidity) }
+            ) { toggle("liquidity") }
+        }
+        if (open("liquidity")) {
+            item {
+                LiquidityPlanCard(
+                    plan = state.liquidityPlan,
+                    loading = state.liquidityPlanLoading,
+                    onOpenAnalysis = onOpenAnalysis,
+                    onOpenDetail = onOpenDetail
+                )
+            }
+        }
+
+        // 2 — the next-session engine.
+        item {
+            WealthSectionHeader(
+                title = "Positioned for the next session",
+                expanded = open("nextsession"),
+                trailing = state.nextSession?.let { ns ->
+                    if (ns.alerts.isNotEmpty()) "${ns.alerts.size} extreme" else "${ns.picks.size} picks"
+                }
+            ) { toggle("nextsession") }
+        }
+        if (open("nextsession")) {
+            item {
+                AlertPermissionCard(
+                    enabledText = "Extreme next-session alerts are on — checked after the close and pre-open.",
+                    title = "Get the extreme setup alert",
+                    message = "Allow notifications and Aurum will alert you when a stock clears " +
+                        "every score, analog-history, and 35-technique agreement gate."
+                )
+            }
+            val ns = state.nextSession
+            when {
+                ns == null && state.nextSessionLoading -> {
+                    item { LoadingCard("Scanning the screener universe and replaying every analog day…") }
+                }
+                ns == null -> {
+                    item {
+                        AurumCard {
+                            Text(
+                                text = "The next-session scan needs market data. Pull down to retry.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AurumColors.textDim
+                            )
+                        }
+                    }
+                }
+                else -> {
+                    item { NextSessionHeaderCard(ns) }
+                    items(ns.picks.size) { i ->
+                        NextSessionCard(
+                            rank = i + 1,
+                            pick = ns.picks[i],
+                            onOpenAnalysis = onOpenAnalysis,
+                            onOpenDetail = onOpenDetail
+                        )
+                    }
+                    item { NextSessionFooterCard(ns) }
+                }
+            }
+        }
+
+        // 4 — market context, folded by default.
+        item {
+            WealthSectionHeader(
+                title = "Market pulse",
+                expanded = open("pulse"),
+                trailing = state.pulse?.score?.let { "$it/100" }
+            ) { toggle("pulse") }
         }
         if (open("pulse")) {
-            item { MarketPulseCard(pulse = pulse, loading = pulseLoading) }
+            item { MarketPulseCard(pulse = state.pulse, loading = state.pulseLoading) }
         }
-        if (!book.isEmpty) {
+
+        // 5 — this week's money flow, the standalone engine.
+        item {
+            WealthSectionHeader(
+                title = "Where the money is moving",
+                expanded = open("flow"),
+                trailing = state.flow?.inflows?.firstOrNull()?.label
+            ) { toggle("flow") }
+        }
+        if (open("flow")) {
+            item { MoneyFlowCard(flow = state.flow, loading = state.flowLoading) }
+        }
+
+        // 6 — the user's book, folded by default.
+        if (!state.book.isEmpty) {
             item {
                 WealthSectionHeader(
                     title = "Your book",
                     expanded = open("book"),
-                    trailing = Fmt.money(book.totalValue)
+                    trailing = Fmt.money(state.book.totalValue)
                 ) { toggle("book") }
             }
             if (open("book")) {
-                item { BookCard(book = book, plan = plan) }
+                item { BookCard(book = state.book, flow = state.flow) }
             }
         }
 
-        // Which trending themes the book is missing, and what to buy for them.
-        if (strategy != null || strategyLoading) {
+        // 6b — performance & risk, reconstructed from the actual ledger (H2).
+        if (state.hasPositions) {
+            item {
+                WealthSectionHeader(
+                    title = "Performance & risk",
+                    expanded = open("perf"),
+                    trailing = state.performance?.let { Fmt.signedPct(it.twrPct) }
+                ) { toggle("perf") }
+            }
+            if (open("perf")) {
+                item {
+                    PerformanceCard(
+                        perf = state.performance,
+                        loading = state.performanceLoading
+                    )
+                }
+            }
+        }
+
+        // 7 — sector gaps + the theme lens.
+        if (state.strategy != null || state.strategyLoading) {
             item {
                 WealthSectionHeader(
                     title = "Sector gaps in your portfolio",
@@ -385,18 +364,26 @@ private fun PlanContent(
                 ) { toggle("gaps") }
             }
             if (open("gaps")) {
-                item {
-                    SectorGapsCard(strategy = strategy, loading = strategyLoading)
-                }
+                item { SectorGapsCard(strategy = state.strategy, loading = state.strategyLoading) }
             }
+            val strategy = state.strategy
             if (strategy != null && strategy.allocations.isNotEmpty()) {
                 item {
                     WealthSectionHeader(
-                        title = "Where to put this week's money",
+                        title = "Where to add, by theme",
                         expanded = open("weekmoney")
                     ) { toggle("weekmoney") }
                 }
                 if (open("weekmoney")) {
+                    item {
+                        Text(
+                            text = "How new money would split across the themes the flow engine " +
+                                "backs, as percentages — you decide the dollars.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AurumColors.textDim,
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        )
+                    }
                     items(strategy.allocations.size) { i ->
                         AllocationRow(
                             slice = strategy.allocations[i],
@@ -411,90 +398,37 @@ private fun PlanContent(
                 }
             }
         }
-        if (pulse != null && pulse.call != MarketCall.DEFENSIVE) {
-            if (pulse.bestYesterday.isNotEmpty()) {
-                item {
-                    WealthSectionHeader(
-                        title = "Last session's best performers",
-                        expanded = open("movers")
-                    ) { toggle("movers") }
-                }
-                if (open("movers")) {
-                    items(pulse.bestYesterday.size) { i ->
-                        val mover = pulse.bestYesterday[i]
-                        MoverRow(
-                            rank = i + 1,
-                            mover = mover,
-                            note = PortfolioLens.pickNote(mover.symbol, pulseSectors[mover.symbol], book),
-                            onOpen = { onOpenDetail(mover.symbol) }
-                        )
-                    }
+
+        // 8 — session extras, folded by default.
+        val pulse = state.pulse
+        if (pulse != null &&
+            (pulse.call == MarketCall.INVEST || pulse.call == MarketCall.SELECTIVE) &&
+            pulse.bestYesterday.isNotEmpty()
+        ) {
+            item {
+                WealthSectionHeader(
+                    title = "Last session's best performers",
+                    expanded = open("movers")
+                ) { toggle("movers") }
+            }
+            if (open("movers")) {
+                items(pulse.bestYesterday.size) { i ->
+                    val mover = pulse.bestYesterday[i]
+                    MoverRow(
+                        rank = i + 1,
+                        mover = mover,
+                        note = PortfolioLens.pickNote(mover.symbol, null, state.book),
+                        onOpen = { onOpenDetail(mover.symbol) }
+                    )
                 }
             }
-            if (pulse.nextDay.isNotEmpty()) {
-                item {
-                    WealthSectionHeader(
-                        title = "Positioned for the next session",
-                        expanded = open("tomorrow")
-                    ) { toggle("tomorrow") }
-                }
-                if (open("tomorrow")) {
-                    items(pulse.nextDay.size) { i ->
-                        val pick = pulse.nextDay[i]
-                        TomorrowRow(
-                            pick = pick,
-                            note = PortfolioLens.pickNote(pick.symbol, pulseSectors[pick.symbol], book),
-                            onOpen = { onOpenDetail(pick.symbol) },
-                            onAnalyze = { onOpenAnalysis(pick.symbol) }
-                        )
-                    }
-                }
-            }
-        }
-        item {
-            WealthSectionHeader("The goal", open("goal")) { toggle("goal") }
-        }
-        if (open("goal")) {
-            item { GoalCard(plan) }
-        }
-        item {
-            WealthSectionHeader("This week's market trend", open("trend")) { toggle("trend") }
-        }
-        if (open("trend")) {
-            item { SectorCard(plan, onOpenAnalysis) }
         }
 
         item {
-            WealthSectionHeader("This week's allocation", open("alloc")) { toggle("alloc") }
-        }
-        if (open("alloc")) {
-            items(plan.allocations.size) { i ->
-                AllocationCard(
-                    allocation = plan.allocations[i],
-                    onOpenAnalysis = onOpenAnalysis,
-                    onOpenDetail = onOpenDetail
-                )
-            }
-            item { TotalsCard(plan) }
-            item { ActionsCard(plan) }
-        }
-        if (plan.marketNotes.isNotEmpty()) {
-            item {
-                WealthSectionHeader("Insider & big-money flow", open("insider")) { toggle("insider") }
-            }
-            if (open("insider")) {
-                item { NewsCard(plan, onOpen = { url ->
-                    try {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                    } catch (_: Exception) {
-                        // no browser — ignore
-                    }
-                }) }
-            }
-        }
-        item {
             Text(
-                text = plan.caveat,
+                text = "Every number on this screen is computed from live market data, the " +
+                    "35-technique board, and measured money flows — decision support, not " +
+                    "financial advice.",
                 style = MaterialTheme.typography.labelSmall,
                 color = AurumColors.textDim,
                 modifier = Modifier.padding(horizontal = 4.dp)
@@ -526,13 +460,17 @@ private fun WealthSectionHeader(
             text = title,
             style = MaterialTheme.typography.titleMedium,
             color = AurumColors.text,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
         )
         if (trailing != null) {
             Text(
                 text = trailing,
                 style = MaterialTheme.typography.titleSmall,
-                color = AurumColors.textDim
+                color = AurumColors.textDim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             Spacer(Modifier.width(8.dp))
         }
@@ -545,87 +483,119 @@ private fun WealthSectionHeader(
     }
 }
 
-// ---------------------------------------------------------------- market pulse
-
 @Composable
-private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
+private fun LoadingCard(message: String) {
     AurumCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                color = AurumColors.gold,
+                strokeWidth = 2.dp
+            )
+            Spacer(Modifier.width(12.dp))
             Text(
-                text = when {
-                    pulse != null -> "Updated ${Fmt.timeAgo(pulse.computedAt)}"
-                    loading -> "Reading the market…"
-                    else -> "Market data unreachable"
-                },
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------- review
+
+@Composable
+private fun ReviewEmptyCard() {
+    AurumCard {
+        Text(
+            text = "No positions yet",
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "Add your first trade with the gold + button and the engine will read " +
+                "every holding through the 35-technique board: what to hold and why, what " +
+                "to sell and when, where to cut, and how the money should be allocated.",
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+    }
+}
+
+@Composable
+private fun ReviewSummaryCard(review: PortfolioReview) {
+    AurumCard {
+        Text(
+            text = review.headline,
+            style = MaterialTheme.typography.titleMedium,
+            color = AurumColors.text
+        )
+        if (review.marketNote.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = review.marketNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
+        if (review.policyNote.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = review.policyNote,
                 style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.textDim,
+                color = if (review.policyNote.startsWith("Default")) AurumColors.gold
+                else AurumColors.textDim
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            StatTile(
+                label = "Book value",
+                value = Fmt.money(review.totalValue),
                 modifier = Modifier.weight(1f)
             )
-            if (loading && pulse == null) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    color = AurumColors.gold,
-                    strokeWidth = 2.dp
-                )
-            } else if (pulse != null) {
-                Row(verticalAlignment = Alignment.Bottom) {
+            StatTile(
+                label = if (review.unverified.isEmpty()) "Holdings" else "Verified",
+                value = if (review.unverified.isEmpty()) "${review.verdicts.size}"
+                else "${review.verdicts.size} of ${review.verdicts.size + review.unverified.size}",
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                label = "Risk at stops",
+                value = review.openRiskPct?.let { Fmt.pct(it) } ?: "—",
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.gold
+            )
+        }
+        if (review.equityNote.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = review.equityNote,
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+        }
+        if (review.verdictNotes.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            review.verdictNotes.forEach { note ->
+                Row(modifier = Modifier.padding(vertical = 2.dp)) {
                     Text(
-                        text = "${pulse.score}",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = when (pulse.call) {
-                            MarketCall.INVEST -> AurumColors.gain
-                            MarketCall.SELECTIVE -> AurumColors.gold
-                            MarketCall.DEFENSIVE -> AurumColors.loss
-                        }
+                        text = "•  ",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.textDim
                     )
                     Text(
-                        text = " /100",
-                        style = MaterialTheme.typography.labelMedium,
+                        text = note,
+                        style = MaterialTheme.typography.labelSmall,
                         color = AurumColors.textDim
                     )
                 }
             }
         }
-        if (pulse == null) {
-            if (!loading) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "Pull down to try again.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim
-                )
-            }
-            return@AurumCard
-        }
-
-        Spacer(Modifier.height(10.dp))
-        ScoreBar(score = pulse.score.toDouble(), modifier = Modifier.fillMaxWidth())
-
-        Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            when (pulse.call) {
-                MarketCall.INVEST -> PillTag(text = "Worth investing this week", color = AurumColors.gain)
-                MarketCall.SELECTIVE -> PillTag(text = "Selective entries only", color = AurumColors.gold)
-                MarketCall.DEFENSIVE -> PillTag(text = "Not this week", color = AurumColors.loss)
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        Text(
-            text = pulse.headline,
-            style = MaterialTheme.typography.titleSmall,
-            color = AurumColors.text
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = pulse.advice,
-            style = MaterialTheme.typography.bodyMedium,
-            color = AurumColors.textDim
-        )
-
-        if (pulse.reasons.isNotEmpty()) {
+        if (review.sectorNotes.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
-            pulse.reasons.forEach { reason ->
+            review.sectorNotes.forEach { note ->
                 Row(modifier = Modifier.padding(vertical = 2.dp)) {
                     Text(
                         text = "•  ",
@@ -633,56 +603,1313 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
                         color = AurumColors.gold
                     )
                     Text(
-                        text = reason,
+                        text = note,
                         style = MaterialTheme.typography.bodySmall,
                         color = AurumColors.textDim
                     )
                 }
             }
         }
+    }
+}
 
-        if (pulse.indexes.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
-            Row(modifier = Modifier.fillMaxWidth()) {
-                pulse.indexes.forEach { ix ->
-                    Column(modifier = Modifier.weight(1f)) {
+@Composable
+private fun PortfolioGradeCard(grade: PortfolioGrade, onOpenDetail: (String) -> Unit) {
+    // Which discipline's action dropdown is open; one at a time.
+    var expandedKey by rememberSaveable { mutableStateOf<String?>(null) }
+    AurumCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Portfolio grade",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text
+                )
+                Text(
+                    text = "Your book against the published rules of elite investors — " +
+                        "Buffett, O'Neil, Livermore, Weinstein, Minervini.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = "${grade.score}",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = AurumColors.gold
+                )
+                Text(
+                    text = if (grade.maxScore == 100) "of 100" else "of ${grade.maxScore} measured",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        if (grade.maxScore > 0) {
+            ScoreBar(score = grade.score * 100.0 / grade.maxScore)
+            Spacer(Modifier.height(4.dp))
+        }
+        Text(
+            text = grade.band,
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.gold
+        )
+        Spacer(Modifier.height(10.dp))
+        grade.components.forEach { c ->
+            val expandable = c.actions.isNotEmpty() || c.principle.isNotEmpty()
+            val expanded = expandedKey == c.key
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(enabled = expandable) {
+                        expandedKey = if (expanded) null else c.key
+                    }
+                    .padding(vertical = 4.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = ix.name,
+                            text = c.label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AurumColors.text
+                        )
+                        if (c.actions.isNotEmpty()) {
+                            Spacer(Modifier.width(6.dp))
+                            PillTag(
+                                text = "${c.actions.size} fix${if (c.actions.size > 1) "es" else ""}",
+                                color = AurumColors.gold
+                            )
+                        }
+                    }
+                    Text(
+                        text = c.evidence,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                if (c.measured) {
+                    Text(
+                        text = "${c.points}/${c.maxPoints}",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = when {
+                            c.green -> AurumColors.gain
+                            c.points * 100 >= c.maxPoints * 50 -> AurumColors.text
+                            else -> AurumColors.loss
+                        }
+                    )
+                } else {
+                    PillTag(text = "not measured", color = AurumColors.textDim)
+                }
+                if (expandable) {
+                    Icon(
+                        imageVector = if (expanded) Icons.Rounded.ExpandLess
+                        else Icons.Rounded.ExpandMore,
+                        contentDescription = if (expanded) "Collapse" else "Show how to improve",
+                        tint = AurumColors.textDim,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+            if (expanded) {
+                Column(modifier = Modifier.padding(start = 8.dp, bottom = 6.dp)) {
+                    if (c.principle.isNotEmpty()) {
+                        Text(
+                            text = c.principle,
                             style = MaterialTheme.typography.labelSmall,
                             color = AurumColors.textDim
                         )
-                        Spacer(Modifier.height(2.dp))
-                        DeltaPct(
-                            value = ix.r5Pct,
-                            style = MaterialTheme.typography.titleSmall
-                        )
+                    }
+                    if (c.green && c.actions.isEmpty()) {
+                        Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "5 days · ${Fmt.signedPct(ix.vs50Pct)} vs 50d",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = AurumColors.textDim
+                            text = "In the green — nothing to fix here.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AurumColors.gain
+                        )
+                    }
+                    c.actions.forEach { action ->
+                        Spacer(Modifier.height(8.dp))
+                        GradeActionRow(action, onOpenDetail)
+                    }
+                    if (c.actions.isNotEmpty() && c.planReachesGreen) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "All steps together: ${c.points} → " +
+                                "${c.projectedPoints}/${c.maxPoints} — reaches the green line.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AurumColors.gain
                         )
                     }
                 }
             }
         }
-
-        Spacer(Modifier.height(12.dp))
+        HorizontalDivider(
+            color = AurumColors.hairline,
+            modifier = Modifier.padding(vertical = 8.dp)
+        )
         Text(
-            text = "Live index, breadth and screener data · decision support, not financial advice",
+            text = "Do next: ${grade.suggestion}",
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.gold
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "A comparison against these investors' published rules — their live holdings " +
+                "are not public in real time, and Aurum does not pretend otherwise. " +
+                "Points-after figures are today's arithmetic, not predictions.",
             style = MaterialTheme.typography.labelSmall,
             color = AurumColors.textDim
         )
     }
 }
 
+@Composable
+private fun GradeActionRow(action: GradeAction, onOpenDetail: (String) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable {
+                onOpenDetail(action.buySymbol.ifEmpty { action.symbol })
+            }
+            .padding(vertical = 2.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            when (action.kind) {
+                GradeActionKind.SELL -> PillTag(text = "Sell", color = AurumColors.loss)
+                GradeActionKind.TRIM -> PillTag(text = "Trim", color = AurumColors.info)
+                GradeActionKind.ROTATE -> PillTag(text = "Rotate", color = AurumColors.gold)
+                GradeActionKind.BUY -> PillTag(text = "Buy", color = AurumColors.gain)
+                GradeActionKind.REVIEW -> PillTag(text = "Review", color = AurumColors.textDim)
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = action.title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = AurumColors.text,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "${action.pointsNow} → ${action.pointsAfter}/${action.maxPoints}",
+                style = MaterialTheme.typography.titleSmall,
+                color = if (action.pointsAfter > action.pointsNow) AurumColors.gain
+                else AurumColors.textDim
+            )
+        }
+        Spacer(Modifier.height(3.dp))
+        Text(
+            text = action.detail,
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+        if (action.buySymbol.isNotEmpty()) {
+            Spacer(Modifier.height(5.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PillTag(text = "Buy ${action.buySymbol}", color = AurumColors.gain)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = action.buyName +
+                        if (action.buyEntry > 0.0) " · entry ≈ ${Fmt.money(action.buyEntry)}" else "",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActionPill(action: HoldingAction) {
+    when (action) {
+        HoldingAction.HOLD -> PillTag(text = "Hold", color = AurumColors.gain)
+        HoldingAction.TAKE_PROFIT -> PillTag(text = "Take profit", color = AurumColors.gold)
+        HoldingAction.TRIM -> PillTag(text = "Trim", color = AurumColors.info)
+        HoldingAction.SELL -> PillTag(text = "Sell", color = AurumColors.loss)
+        HoldingAction.CUT_LOSS -> PillTag(text = "Cut loss", color = AurumColors.loss)
+    }
+}
+
+@Composable
+private fun HoldingCard(
+    verdict: HoldingVerdict,
+    onOpenAnalysis: (String) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
+    val urgent = verdict.action == HoldingAction.CUT_LOSS || verdict.action == HoldingAction.SELL
+    val cardModifier =
+        if (urgent) Modifier.border(1.5.dp, AurumColors.loss, RoundedCornerShape(16.dp))
+        else Modifier
+    AurumCard(modifier = cardModifier, onClick = { onOpenDetail(verdict.symbol) }) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        text = verdict.symbol,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AurumColors.text
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = String.format(Locale.US, "%.0f%% of book", verdict.weightPct),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                }
+                if (verdict.sector != PortfolioLens.UNCLASSIFIED) {
+                    Text(
+                        text = verdict.sector,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                DeltaPct(
+                    value = verdict.unrealizedPlPct,
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Text(
+                    text = Fmt.signedMoney(verdict.unrealizedPl),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.deltaColor(verdict.unrealizedPl)
+                )
+                verdict.sessionMovePct?.let { move ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        DeltaPct(
+                            value = move,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                        Text(
+                            text = " session",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AurumColors.textDim
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.width(10.dp))
+            ActionPill(verdict.action)
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = verdict.headline,
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "When: ${verdict.whenText}",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (urgent) AurumColors.loss else AurumColors.gold
+        )
+        if (verdict.ridingNote.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = verdict.ridingNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.gain
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        VerdictReadRow(verdict)
+        Spacer(Modifier.height(8.dp))
+        verdict.whyPoints.forEach { why ->
+            Row(modifier = Modifier.padding(vertical = 1.dp)) {
+                Text(
+                    text = "•  ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.gold
+                )
+                Text(
+                    text = why,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            StatTile(
+                label = "Price",
+                value = Fmt.money(verdict.price),
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                label = "Take profit",
+                // A target at or below the price means none could be measured.
+                value = if (verdict.target > verdict.price) Fmt.money(verdict.target) else "—",
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.gain
+            )
+            StatTile(
+                label = if (verdict.trailStop != null && verdict.trailStop >= verdict.stop - 0.005) {
+                    "Trail"
+                } else "Exit below",
+                // stop == 0 is the engine's "no level could be measured", not a
+                // stop at zero — printing $0.00 would read as an instruction.
+                value = if (verdict.stop > 0.0) Fmt.money(verdict.stop) else "—",
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.loss
+            )
+        }
+        if (verdict.newsNote.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.Top) {
+                SentimentDot(sentiment = verdict.newsScore)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = verdict.newsNote,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .heightIn(min = 40.dp)
+                .clickable { onOpenAnalysis(verdict.symbol) }
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.QueryStats,
+                contentDescription = null,
+                tint = AurumColors.gold,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "Full 35-technique analysis",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.gold
+            )
+        }
+    }
+}
+
+@Composable
+private fun UnverifiedHoldingsCard(
+    unverified: List<UnverifiedHolding>,
+    onOpenDetail: (String) -> Unit
+) {
+    AurumCard {
+        Text(
+            text = "Not verified this run",
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "These holdings could not be measured from live market data, so they are " +
+                "excluded from the weights and the allocation plan — nothing about them is " +
+                "guessed. Pull down to retry.",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+        Spacer(Modifier.height(8.dp))
+        unverified.forEach { u ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .padding(vertical = 4.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { onOpenDetail(u.symbol) }
+            ) {
+                Text(
+                    text = u.symbol,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text,
+                    modifier = Modifier.width(64.dp)
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = String.format(Locale.US, "%s shares", Fmt.qty(u.shares)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                    Text(
+                        text = u.reason,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun VerdictReadRow(verdict: HoldingVerdict) {
+    // The two fixed-scale reads, the cycle stage, and the forward frame — each
+    // pill only appears when the number behind it was actually measured.
+    WrappingFlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        if (verdict.convictionMax > 0) {
+            val ratio = verdict.conviction * 100 / verdict.convictionMax
+            PillTag(
+                text = "Conviction ${verdict.conviction}/${verdict.convictionMax}",
+                color = when {
+                    ratio >= 70 -> AurumColors.gain
+                    ratio >= 45 -> AurumColors.gold
+                    else -> AurumColors.textDim
+                }
+            )
+        }
+        if (verdict.riskScoreMax > 0) {
+            val ratio = verdict.riskScore * 100 / verdict.riskScoreMax
+            PillTag(
+                text = "Risk ${verdict.riskScore}/${verdict.riskScoreMax}",
+                color = when {
+                    ratio >= 55 -> AurumColors.loss
+                    ratio >= 30 -> AurumColors.gold
+                    else -> AurumColors.textDim
+                }
+            )
+        }
+        when (verdict.stage) {
+            HoldingStage.ADVANCING -> PillTag(text = "Advancing", color = AurumColors.gain)
+            HoldingStage.TOPPING -> PillTag(text = "Topping", color = AurumColors.gold)
+            HoldingStage.BASING -> PillTag(text = "Basing", color = AurumColors.info)
+            HoldingStage.DECLINING -> PillTag(text = "Declining", color = AurumColors.loss)
+            HoldingStage.UNMEASURED -> Unit
+        }
+        verdict.riskReward?.let { rr ->
+            PillTag(
+                text = String.format(Locale.US, "R/R %.1f:1", rr),
+                color = if (rr >= 1.0) AurumColors.gain else AurumColors.loss
+            )
+        }
+        verdict.runwayPct?.let {
+            PillTag(text = String.format(Locale.US, "%.0f%% runway", it), color = AurumColors.textDim)
+        }
+        verdict.riskAtStopEquityPct?.let {
+            PillTag(
+                text = String.format(Locale.US, "%.2f%% of equity at risk", it),
+                color = AurumColors.textDim
+            )
+        }
+    }
+}
+
+@Composable
+private fun AllocationPlanCard(
+    plan: AllocationPlan,
+    onOpenAnalysis: (String) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
+    AurumCard {
+        Text(
+            text = "Allocation plan",
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = plan.headline,
+            style = MaterialTheme.typography.bodyMedium,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = if (plan.baseIsEquity) {
+                "Every percentage is a share of ${Fmt.money(plan.base)} equity — " +
+                    "${Fmt.money(plan.invested)} invested at cost" +
+                    (plan.liquidity?.let { " and ${Fmt.money(it)} uninvested" } ?: "") + "."
+            } else {
+                "Every percentage is a share of the ${Fmt.money(plan.base)} invested book — " +
+                    "the wallet total is not tracked, so cash is unknown."
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+
+        Spacer(Modifier.height(12.dp))
+        plan.targets.forEach { target ->
+            AllocationTargetRow(target, onOpenDetail)
+        }
+
+        if (plan.adds.isNotEmpty()) {
+            HorizontalDivider(
+                color = AurumColors.hairline,
+                modifier = Modifier.padding(vertical = 10.dp)
+            )
+            Text(
+                text = "New names for the money this frees",
+                style = MaterialTheme.typography.titleSmall,
+                color = AurumColors.text
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = "Scanned and scored by the same engine that answers your liquidity card.",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+            Spacer(Modifier.height(8.dp))
+            plan.adds.forEach { line ->
+                LiquidityLineRow(line, onOpenAnalysis, onOpenDetail)
+                Spacer(Modifier.height(10.dp))
+            }
+        }
+
+        if (plan.sectorTargets.isNotEmpty()) {
+            HorizontalDivider(
+                color = AurumColors.hairline,
+                modifier = Modifier.padding(vertical = 10.dp)
+            )
+            plan.sectorTargets.take(5).forEach { t ->
+                LiquiditySectorRow(t)
+                Spacer(Modifier.height(6.dp))
+            }
+        }
+
+        HorizontalDivider(
+            color = AurumColors.hairline,
+            modifier = Modifier.padding(vertical = 8.dp)
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Cash after the plan",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AurumColors.text,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = Fmt.pct(plan.targetCashPct),
+                style = MaterialTheme.typography.titleSmall,
+                color = AurumColors.gold
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = plan.cashNote,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+        plan.notes.forEach { note ->
+            Spacer(Modifier.height(6.dp))
+            Row {
+                Text(
+                    text = "•  ",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.gold
+                )
+                Text(
+                    text = note,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = plan.caveat,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+    }
+}
+
+@Composable
+private fun AllocationTargetRow(target: AllocationTarget, onOpenDetail: (String) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onOpenDetail(target.symbol) }
+            .padding(vertical = 5.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = target.symbol,
+                style = MaterialTheme.typography.titleSmall,
+                color = AurumColors.text,
+                modifier = Modifier.width(64.dp)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "${Fmt.pct(target.currentPct)} → ${Fmt.pct(target.targetPct)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = when (target.move) {
+                        AllocationMove.EXIT, AllocationMove.REDUCE -> AurumColors.loss
+                        AllocationMove.ADD -> AurumColors.gain
+                        AllocationMove.HOLD -> AurumColors.text
+                    }
+                )
+                Text(
+                    text = "${Fmt.money(target.currentValue)} → ${Fmt.money(target.targetValue)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            when (target.move) {
+                AllocationMove.EXIT -> PillTag(text = "Exit", color = AurumColors.loss)
+                AllocationMove.REDUCE -> PillTag(
+                    text = Fmt.signedMoney(target.deltaValue),
+                    color = AurumColors.loss
+                )
+                AllocationMove.ADD -> PillTag(
+                    text = Fmt.signedMoney(target.deltaValue),
+                    color = AurumColors.gain
+                )
+                AllocationMove.HOLD -> PillTag(text = "Sized", color = AurumColors.textDim)
+            }
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = target.note,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+    }
+}
+
+@Composable
+private fun RebalanceCard(
+    moves: List<RebalanceMove>,
+    onOpenAnalysis: (String) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
+    AurumCard {
+        Text(
+            text = "Sector rebalance",
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "Your book is over its concentration line — these moves bring it back.",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+        moves.forEachIndexed { i, move ->
+            if (i > 0) {
+                HorizontalDivider(
+                    color = AurumColors.hairline,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PillTag(text = "Sell", color = AurumColors.loss)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = move.sellSymbol,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { onOpenDetail(move.sellSymbol) }
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = "≈ ${Fmt.money(move.sellAmount)}",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.gold
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = move.sellReason,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+            Spacer(Modifier.height(8.dp))
+            if (move.buySymbol.isNotEmpty()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PillTag(text = "Buy", color = AurumColors.gain)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "${move.buySymbol} · ${move.buyName}",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = AurumColors.text,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { onOpenDetail(move.buySymbol) },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    IconButton(
+                        onClick = { onOpenAnalysis(move.buySymbol) },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.QueryStats,
+                            contentDescription = "Open ${move.buySymbol} analysis",
+                            tint = AurumColors.gold,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+                if (move.buySector.isNotEmpty()) {
+                    PillTag(text = move.buySector, color = AurumColors.info)
+                    Spacer(Modifier.height(4.dp))
+                }
+            }
+            Text(
+                text = move.buyReason,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------- next session
+
+@Composable
+private fun NextSessionHeaderCard(ns: NextSessionReport) {
+    AurumCard {
+        Text(
+            text = ns.headline,
+            style = MaterialTheme.typography.titleMedium,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "${ns.sessionNote} Updated ${Fmt.timeAgo(ns.computedAt)}.",
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+    }
+}
+
+@Composable
+private fun NextSessionCard(
+    rank: Int,
+    pick: NextSessionPick,
+    onOpenAnalysis: (String) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
+    val cardModifier =
+        if (pick.alert) Modifier.border(1.5.dp, AurumColors.gold, RoundedCornerShape(16.dp))
+        else Modifier
+    AurumCard(modifier = cardModifier, onClick = { onOpenDetail(pick.symbol) }) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "%02d".format(rank),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = AurumColors.gold
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = pick.symbol,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AurumColors.text
+                    )
+                    if (pick.alert) {
+                        Spacer(Modifier.width(8.dp))
+                        PillTag(text = "Every gate cleared", color = AurumColors.gold)
+                    }
+                }
+                Text(
+                    text = pick.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = Fmt.money(pick.price),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text
+                )
+                DeltaPct(value = pick.dayChangePct, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ScoreBar(score = pick.score.toDouble(), modifier = Modifier.weight(1f))
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = "${pick.score}/100",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.textDim
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            StatTile(
+                label = "Entry",
+                value = Fmt.money(pick.entry),
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                label = "Target",
+                value = Fmt.money(pick.target),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.gain
+            )
+            StatTile(
+                label = "Stop",
+                value = Fmt.money(pick.stop),
+                modifier = Modifier.weight(1f),
+                valueColor = AurumColors.loss
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (pick.probUpPct >= 0) {
+                PillTag(
+                    text = "${pick.probUpPct}% follow-through · ${pick.analogDays} analogs",
+                    color = if (pick.probUpPct >= 65) AurumColors.gain else AurumColors.textDim
+                )
+            } else {
+                PillTag(text = "Follow-through not measurable", color = AurumColors.textDim)
+            }
+            Spacer(Modifier.width(8.dp))
+            if (pick.techTotal > 0) {
+                PillTag(
+                    text = "${pick.techBullish}/${pick.techTotal} bullish",
+                    color = AurumColors.gain
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        // The v2 measured context: risk/reward on the capped target, the
+        // sector's money flow, and the session VWAP read. Each is measured or
+        // absent — an unmeasured input never renders a confident-looking pill.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            pick.riskReward?.let { rr ->
+                PillTag(
+                    text = String.format(Locale.US, "R/R %.1f", rr),
+                    color = if (rr >= 1.5) AurumColors.gain
+                    else if (rr < 1.0) AurumColors.loss else AurumColors.textDim
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            when (pick.flowVerdict) {
+                "INFLOW" -> {
+                    PillTag(text = "Sector inflow", color = AurumColors.gain)
+                    Spacer(Modifier.width(8.dp))
+                }
+                "OUTFLOW" -> {
+                    PillTag(text = "Sector outflow", color = AurumColors.loss)
+                    Spacer(Modifier.width(8.dp))
+                }
+            }
+            when (pick.aboveVwap) {
+                true -> PillTag(text = "Above VWAP", color = AurumColors.gain)
+                false -> PillTag(text = "Below VWAP", color = AurumColors.loss)
+                null -> {}
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Next session (ATR-projected) ",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.textDim
+            )
+            Text(
+                text = Fmt.signedPct(pick.expectedLowPct),
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.loss
+            )
+            Text(
+                text = " … ",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.textDim
+            )
+            Text(
+                text = Fmt.signedPct(pick.expectedHighPct),
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.gain
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = String.format(Locale.US, "RSI %.0f", pick.rsi),
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = pick.reason,
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+        if (pick.scanNote.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = pick.scanNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.info
+            )
+        }
+        if (pick.newsMeasured && pick.newsNote.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "News: ${pick.newsNote}",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (pick.flowNote.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = pick.flowNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
+        if (pick.extNote.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = pick.extNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.info
+            )
+        }
+        if (pick.heldNote.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = pick.heldNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.gold
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .heightIn(min = 40.dp)
+                .clickable { onOpenAnalysis(pick.symbol) }
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.QueryStats,
+                contentDescription = null,
+                tint = AurumColors.gold,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "Full analysis",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.gold
+            )
+        }
+    }
+}
+
+@Composable
+private fun NextSessionFooterCard(ns: NextSessionReport) {
+    AurumCard {
+        ns.notes.forEach { note ->
+            Row(modifier = Modifier.padding(vertical = 2.dp)) {
+                Text(
+                    text = "•  ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.gold
+                )
+                Text(
+                    text = note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "When a name clears every gate, Aurum pushes a notification — once per " +
+                "name per day, after the close or pre-open.",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.gold
+        )
+    }
+}
+
+// ---------------------------------------------------------------- money flow
+
+@Composable
+private fun MoneyFlowCard(flow: MoneyFlowReport?, loading: Boolean) {
+    AurumCard {
+        if (flow == null) {
+            Text(
+                text = if (loading) "Measuring dollar flows across every sector…"
+                else "Flow data unavailable. Pull down to retry.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AurumColors.textDim
+            )
+            return@AurumCard
+        }
+        Text(
+            text = flow.headline,
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "Updated ${Fmt.timeAgo(flow.computedAt)} · S&P 500 ${Fmt.signedPct(flow.spyR20Pct)} over 20 days",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+        Spacer(Modifier.height(10.dp))
+        flow.sectors.take(8).forEachIndexed { i, s ->
+            if (i > 0) {
+                HorizontalDivider(
+                    color = AurumColors.hairline,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            }
+            FlowRow(s)
+        }
+        Spacer(Modifier.height(10.dp))
+        flow.notes.forEach { note ->
+            Row(modifier = Modifier.padding(vertical = 2.dp)) {
+                Text(
+                    text = "•  ",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.gold
+                )
+                Text(
+                    text = note,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FlowRow(s: SectorFlow) {
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = s.label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AurumColors.text
+                )
+                Text(
+                    text = "Flow ${s.flowScore}/100 · ${s.etf} ${Fmt.signedPct(s.r5Pct)} in 5 days",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+            when (s.verdict) {
+                FlowVerdict.INFLOW -> PillTag(text = "Money in", color = AurumColors.gain)
+                FlowVerdict.OUTFLOW -> PillTag(text = "Money out", color = AurumColors.loss)
+                FlowVerdict.NEUTRAL -> PillTag(text = "Balanced", color = AurumColors.textDim)
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = s.reason,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+// ---------------------------------------------------------------- liquidity plan
+
+@Composable
+private fun LiquidityPlanCard(
+    plan: LiquidityPlan?,
+    loading: Boolean,
+    onOpenAnalysis: (String) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
+    AurumCard {
+        if (plan == null) {
+            if (loading) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = AurumColors.gold,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        text = "Reading the entry board and sector flows for your liquidity…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.textDim
+                    )
+                }
+            } else {
+                Text(
+                    text = "Set your total wallet from the Portfolio tab to get a liquidity plan.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+            }
+            return@AurumCard
+        }
+        Text(
+            text = plan.headline,
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "Updated ${Fmt.timeAgo(plan.computedAt)} · liquidity ${Fmt.money(plan.liquidity)}" +
+                if (plan.marketNote.isNotBlank()) " · ${plan.marketNote}" else "",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+        if (plan.sectorTargets.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            plan.sectorTargets.forEach { t ->
+                LiquiditySectorRow(t)
+                Spacer(Modifier.height(6.dp))
+            }
+        }
+        if (plan.lines.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            HorizontalDivider(color = AurumColors.hairline, modifier = Modifier.padding(vertical = 6.dp))
+            plan.lines.forEach { line ->
+                LiquidityLineRow(line, onOpenAnalysis, onOpenDetail)
+                Spacer(Modifier.height(10.dp))
+            }
+        } else {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "No candidate cleared this profile's bar today — nothing was force-deployed.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+        }
+        if (plan.reserveCash > 0.0) {
+            Spacer(Modifier.height(10.dp))
+            StatTile(label = "Reserve cash", value = Fmt.money(plan.reserveCash))
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = plan.reserveReason,
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = plan.policyNote,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = plan.caveat,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+    }
+}
+
+@Composable
+private fun LiquiditySectorRow(target: SectorAllocationTarget) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = target.sector,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = AurumColors.text
+            )
+            Text(
+                text = "${Fmt.pct(target.currentPct)} → ${Fmt.pct(target.targetPct)} · ${target.note}",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        when (target.flow) {
+            FlowVerdict.INFLOW -> PillTag(text = "Money in", color = AurumColors.gain)
+            FlowVerdict.OUTFLOW -> PillTag(text = "Money out", color = AurumColors.loss)
+            FlowVerdict.NEUTRAL -> PillTag(text = "Balanced", color = AurumColors.textDim)
+        }
+    }
+}
+
+@Composable
+private fun LiquidityLineRow(
+    line: LiquidityAllocationLine,
+    onOpenAnalysis: (String) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
+    Column(modifier = Modifier.clickable { onOpenDetail(line.symbol) }) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "#${line.rank}  ${line.symbol} · ${line.name}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "${line.sector} · ${Fmt.money(line.price)}/sh · " +
+                        "~${String.format(Locale.US, "%.2f", line.approxShares)} sh",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = Fmt.money(line.amount),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.gold
+                )
+                Text(
+                    text = "${line.confidence}% conf",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        line.rationale.take(2).forEach { r ->
+            Row(modifier = Modifier.padding(top = 2.dp)) {
+                Text(
+                    text = "•  ",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.gold
+                )
+                Text(
+                    text = r,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- book
+
 /**
  * The invested book by sector — the same PortfolioLens math the dashboard
  * allocation card and the Picks tags use, so the numbers agree everywhere.
  */
 @Composable
-private fun BookCard(book: BookContext, plan: WealthPlan) {
-    val trending = plan.topSectors.firstOrNull()
-    val notes = PortfolioLens.exposureNotes(book, trending?.key, trending?.label)
+private fun BookCard(book: BookContext, flow: MoneyFlowReport?) {
+    val lead = flow?.sectors?.firstOrNull()
+    val notes = PortfolioLens.exposureNotes(book, lead?.key, lead?.label)
     AurumCard {
         Row(
             modifier = Modifier
@@ -751,8 +1978,148 @@ private fun BookCard(book: BookContext, plan: WealthPlan) {
     }
 }
 
+// ---------------------------------------------------------------- market pulse
+
+@Composable
+private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
+    AurumCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = when {
+                    pulse != null -> "Updated ${Fmt.timeAgo(pulse.computedAt)}"
+                    loading -> "Reading the market…"
+                    else -> "Market data unreachable"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim,
+                modifier = Modifier.weight(1f)
+            )
+            if (loading && pulse == null) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    color = AurumColors.gold,
+                    strokeWidth = 2.dp
+                )
+            } else if (pulse != null) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    // An INCOMPLETE pulse carries no score — a number next to
+                    // "No call" would read as a measurement.
+                    Text(
+                        text = pulse.score?.toString() ?: "—",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = when (pulse.call) {
+                            MarketCall.INVEST -> AurumColors.gain
+                            MarketCall.SELECTIVE -> AurumColors.gold
+                            MarketCall.DEFENSIVE -> AurumColors.loss
+                            MarketCall.INCOMPLETE -> AurumColors.textDim
+                        }
+                    )
+                    if (pulse.score != null) {
+                        Text(
+                            text = " /100",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = AurumColors.textDim
+                        )
+                    }
+                }
+            }
+        }
+        if (pulse == null) {
+            if (!loading) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "Pull down to try again.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+            }
+            return@AurumCard
+        }
+
+        pulse.score?.let { s ->
+            Spacer(Modifier.height(10.dp))
+            ScoreBar(score = s.toDouble(), modifier = Modifier.fillMaxWidth())
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            when (pulse.call) {
+                MarketCall.INVEST -> PillTag(text = "Worth investing this week", color = AurumColors.gain)
+                MarketCall.SELECTIVE -> PillTag(text = "Selective entries only", color = AurumColors.gold)
+                MarketCall.DEFENSIVE -> PillTag(text = "Not this week", color = AurumColors.loss)
+                MarketCall.INCOMPLETE -> PillTag(text = "No call — data incomplete", color = AurumColors.textDim)
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = pulse.headline,
+            style = MaterialTheme.typography.titleSmall,
+            color = AurumColors.text
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = pulse.advice,
+            style = MaterialTheme.typography.bodyMedium,
+            color = AurumColors.textDim
+        )
+
+        if (pulse.reasons.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            pulse.reasons.forEach { reason ->
+                Row(modifier = Modifier.padding(vertical = 2.dp)) {
+                    Text(
+                        text = "•  ",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.gold
+                    )
+                    Text(
+                        text = reason,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
+        }
+
+        if (pulse.indexes.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Row(modifier = Modifier.fillMaxWidth()) {
+                pulse.indexes.forEach { ix ->
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = ix.name,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AurumColors.textDim
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        DeltaPct(
+                            value = ix.r5Pct,
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = "5 days · ${Fmt.signedPct(ix.vs50Pct)} vs 50d",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AurumColors.textDim
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = "Live index, breadth and screener data · decision support, not financial advice",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+    }
+}
+
+// ---------------------------------------------------------------- sector gaps
+
 /**
- * This week's trending themes measured against the book: what is missing,
+ * This week's flowing themes measured against the book: what is missing,
  * what is already covered, and the stock that would fill each gap.
  */
 @Composable
@@ -792,7 +2159,10 @@ private fun SectorGapsCard(strategy: WeeklyStrategy?, loading: Boolean) {
                     )
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        text = "You hold ${Fmt.pct(gap.heldPct)} · suggested ${Fmt.pct(gap.targetPct)}",
+                        text = buildString {
+                            append("You hold ${Fmt.pct(gap.heldPct)} · suggested ${Fmt.pct(gap.targetPct)}")
+                            if (gap.flowScore >= 0) append(" · flow ${gap.flowScore}/100")
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = AurumColors.textDim
                     )
@@ -836,7 +2206,7 @@ private fun SectorGapsCard(strategy: WeeklyStrategy?, loading: Boolean) {
     }
 }
 
-/** One line of the weekly deployment plan: theme, money, and the stock to use. */
+/** One line of the theme lens: theme, share of new money, and the stock to use. */
 @Composable
 private fun AllocationRow(
     slice: AllocationSlice,
@@ -873,18 +2243,15 @@ private fun AllocationRow(
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    text = if (slice.amount > 0.0) Fmt.money(slice.amount)
-                    else Fmt.pct(slice.sharePct),
+                    text = Fmt.pct(slice.sharePct),
                     style = MaterialTheme.typography.titleMedium,
                     color = AurumColors.gold
                 )
-                if (slice.amount > 0.0) {
-                    Text(
-                        text = Fmt.pct(slice.sharePct) + " of this week",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = AurumColors.textDim
-                    )
-                }
+                Text(
+                    text = "of new money",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
             }
         }
         if (lead != null) {
@@ -921,19 +2288,11 @@ private fun AllocationRow(
                     value = Fmt.money(lead.price),
                     modifier = Modifier.weight(1f)
                 )
-                if (slice.amount > 0.0 && lead.entry > 0.0) {
-                    StatTile(
-                        label = "Approx. shares",
-                        value = Fmt.qty(slice.amount / lead.entry),
-                        modifier = Modifier.weight(1f)
-                    )
-                } else {
-                    StatTile(
-                        label = "You hold",
-                        value = Fmt.pct(slice.heldPct),
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+                StatTile(
+                    label = "You hold",
+                    value = Fmt.pct(slice.heldPct),
+                    modifier = Modifier.weight(1f)
+                )
             }
             Spacer(Modifier.height(8.dp))
             Row(
@@ -1040,6 +2399,8 @@ private fun StrategyNotesCard(strategy: WeeklyStrategy) {
     }
 }
 
+// ---------------------------------------------------------------- movers
+
 /** A pick's portfolio note as a stamped tag; held gold, risk red, fresh blue. */
 @Composable
 private fun WealthNoteTag(note: PickNote?) {
@@ -1104,453 +2465,102 @@ private fun MoverRow(
     }
 }
 
+/**
+ * Performance & risk (H2): the account's actual equity path — time-weighted
+ * return vs SPY, volatility, drawdown, beta, Sharpe, and diversification that
+ * isn't (correlated pairs) — every window defined, nothing extrapolated.
+ */
 @Composable
-private fun TomorrowRow(
-    pick: TomorrowPick,
-    note: PickNote? = null,
-    onOpen: () -> Unit,
-    onAnalyze: () -> Unit
-) {
-    AurumCard(onClick = onOpen) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = pick.symbol,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
-                )
-                Text(
-                    text = pick.name,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = Fmt.money(pick.price),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
-                )
-                DeltaPct(
-                    value = pick.dayChangePct,
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
-            IconButton(onClick = onAnalyze, modifier = Modifier.size(40.dp)) {
-                Icon(
-                    Icons.Rounded.QueryStats,
-                    contentDescription = "Open ${pick.symbol} analysis",
-                    tint = AurumColors.gold
-                )
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = pick.reason,
-            style = MaterialTheme.typography.bodySmall,
-            color = AurumColors.textDim
-        )
-        Spacer(Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "Entry ${Fmt.money(pick.entry)}",
-                style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.gold
-            )
-            Text(
-                text = "  ·  next session ",
-                style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.textDim
-            )
-            Text(
-                text = Fmt.signedPct(pick.expectedLowPct),
-                style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.loss
-            )
-            Text(
-                text = " … ",
-                style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.textDim
-            )
-            Text(
-                text = Fmt.signedPct(pick.expectedHighPct),
-                style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.gain
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                text = "Score ${pick.score}",
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.textDim
-            )
-        }
-        WealthNoteTag(note)
-    }
-}
-
-@Composable
-private fun GoalCard(plan: WealthPlan) {
+private fun PerformanceCard(perf: PortfolioPerformance?, loading: Boolean) {
     AurumCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Spacer(Modifier.weight(1f))
-            FeasibilityPill(plan.feasibility)
+        if (perf == null) {
+            Text(
+                text = if (loading) {
+                    "Replaying your ledger against a year of daily closes…"
+                } else {
+                    "Not enough measurable history yet — the engine needs at least " +
+                        "${com.aurum.invest.analytics.PortfolioPerformanceEngine.MIN_DAYS} " +
+                        "trading days with a priced book."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = AurumColors.textDim
+            )
+            return@AurumCard
         }
-        Spacer(Modifier.height(10.dp))
         Row(modifier = Modifier.fillMaxWidth()) {
             StatTile(
-                label = "Base",
-                value = Fmt.money(plan.baseAmount),
-                modifier = Modifier.weight(1f)
-            )
-            StatTile(
-                label = "Target profit",
-                value = Fmt.money(plan.targetProfit),
+                label = "Your return (TWR)",
+                value = Fmt.signedPct(perf.twrPct),
                 modifier = Modifier.weight(1f),
-                valueColor = AurumColors.gold
+                valueColor = AurumColors.deltaColor(perf.twrPct)
             )
             StatTile(
-                label = "Needed / month",
-                value = Fmt.pct(plan.requiredMonthlyPct),
-                modifier = Modifier.weight(1f)
-            )
-        }
-        Spacer(Modifier.height(10.dp))
-        Text(
-            text = plan.feasibilityNote,
-            style = MaterialTheme.typography.bodySmall,
-            color = AurumColors.textDim
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = "Horizon ends ${plan.horizonEndIso} · plan re-scans every Monday.",
-            style = MaterialTheme.typography.labelSmall,
-            color = AurumColors.textDim
-        )
-    }
-}
-
-@Composable
-private fun FeasibilityPill(feasibility: String) {
-    when (feasibility) {
-        "REALISTIC" -> PillTag(text = "Realistic", color = AurumColors.gain)
-        "AGGRESSIVE" -> PillTag(text = "Aggressive", color = AurumColors.gold)
-        else -> PillTag(text = "Very stretched", color = AurumColors.loss)
-    }
-}
-
-@Composable
-private fun SectorCard(plan: WealthPlan, onOpenAnalysis: (String) -> Unit) {
-    AurumCard {
-        Text(
-            text = plan.sectorHeadline,
-            style = MaterialTheme.typography.titleSmall,
-            color = AurumColors.text
-        )
-        Spacer(Modifier.height(10.dp))
-        plan.topSectors.forEach { s -> SectorRow(s, onOpenAnalysis) }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = "Tap a ticker for its 15-technique analysis.",
-            style = MaterialTheme.typography.labelSmall,
-            color = AurumColors.textDim
-        )
-    }
-}
-
-@Composable
-private fun SectorRow(s: SectorTrend, onOpenStock: (String) -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 5.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = s.label,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = AurumColors.text
-                )
-                Text(
-                    text = s.reason,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Spacer(Modifier.width(10.dp))
-            Column(horizontalAlignment = Alignment.End) {
-                DeltaPct(value = s.r5Pct, style = MaterialTheme.typography.labelMedium)
-                Text(
-                    text = "5 days",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
-            }
-        }
-        val watch = SectorTrends.WATCH[s.key].orEmpty()
-        if (watch.isNotEmpty()) {
-            Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                watch.forEach { (symbol, _) ->
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(AurumColors.surfaceHigh)
-                            .clickable { onOpenStock(symbol) }
-                            .padding(horizontal = 10.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = symbol,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.SemiBold
-                            ),
-                            color = AurumColors.text
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AllocationCard(
-    allocation: WealthAllocation,
-    onOpenAnalysis: (String) -> Unit,
-    onOpenDetail: (String) -> Unit
-) {
-    AurumCard(onClick = { onOpenDetail(allocation.symbol) }) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
-                        text = allocation.symbol,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
-                    )
-                    if (allocation.name.isNotBlank()) {
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = allocation.name,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = AurumColors.textDim,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-                if (allocation.sectorLabel.isNotBlank()) {
-                    Spacer(Modifier.height(4.dp))
-                    PillTag(text = allocation.sectorLabel, color = AurumColors.info)
-                }
-            }
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = Fmt.money(allocation.amount),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = AurumColors.gold
-                )
-                Text(
-                    text = "≈ ${Fmt.qty(allocation.shares)} shares",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-        Row(modifier = Modifier.fillMaxWidth()) {
-            StatTile(
-                label = "Entry",
-                value = Fmt.money(allocation.entry),
-                modifier = Modifier.weight(1f)
-            )
-            StatTile(
-                label = "Target",
-                value = Fmt.money(allocation.target),
+                label = "SPY same days",
+                value = Fmt.signedPct(perf.benchmarkTwrPct),
                 modifier = Modifier.weight(1f),
-                valueColor = AurumColors.gain
+                valueColor = AurumColors.deltaColor(perf.benchmarkTwrPct)
             )
             StatTile(
-                label = "Stop",
-                value = Fmt.money(allocation.stop),
+                label = "Max drawdown",
+                value = Fmt.pct(perf.maxDrawdownPct),
                 modifier = Modifier.weight(1f),
                 valueColor = AurumColors.loss
             )
         }
         Spacer(Modifier.height(10.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "Expected: ${Fmt.signedMoney(allocation.expectedProfit)} " +
-                    "(${Fmt.signedPct(allocation.expectedPct)})",
-                style = MaterialTheme.typography.bodyMedium,
-                color = AurumColors.gain,
+        Row(modifier = Modifier.fillMaxWidth()) {
+            StatTile(
+                label = "Volatility (ann.)",
+                value = Fmt.pct(perf.volatilityPct),
                 modifier = Modifier.weight(1f)
             )
-            PillTag(
-                text = "${allocation.techBullish}/${allocation.techTotal} bullish",
-                color = AurumColors.gain
+            StatTile(
+                label = "Beta vs SPY",
+                value = perf.beta?.let { String.format(Locale.US, "%.2f", it) } ?: "—",
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                label = "Sharpe (rf 0)",
+                value = perf.sharpe?.let { String.format(Locale.US, "%.2f", it) } ?: "—",
+                modifier = Modifier.weight(1f)
             )
         }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = allocation.reason,
-            style = MaterialTheme.typography.bodySmall,
-            color = AurumColors.textDim
-        )
-        Spacer(Modifier.height(8.dp))
-        AdviceLine(label = "Buy", text = allocation.buyAdvice)
-        Spacer(Modifier.height(4.dp))
-        AdviceLine(label = "Sell", text = allocation.sellAdvice)
-        if (allocation.insiderNote.isNotBlank()) {
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.Top) {
-                PillTag(text = "Insider", color = AurumColors.gold)
-                Spacer(Modifier.width(8.dp))
+        if (perf.equityCurve.size >= 2) {
+            Spacer(Modifier.height(12.dp))
+            com.aurum.invest.ui.components.Sparkline(
+                data = perf.equityCurve.map { it.equity },
+                modifier = Modifier.fillMaxWidth().height(56.dp)
+            )
+            Spacer(Modifier.height(4.dp))
+            Row(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = allocation.insiderNote,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.text,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                    text = Fmt.dateShort(perf.windowStartTs),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = Fmt.dateShort(perf.windowEndTs),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
                 )
             }
         }
-        Spacer(Modifier.height(10.dp))
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .heightIn(min = 40.dp)
-                .clickable { onOpenAnalysis(allocation.symbol) }
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.QueryStats,
-                contentDescription = null,
-                tint = AurumColors.gold,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.width(6.dp))
+        if (perf.correlatedPairs.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
             Text(
-                text = "15-technique analysis",
-                style = MaterialTheme.typography.labelMedium,
+                text = "Diversification that isn't: " + perf.correlatedPairs.joinToString("; ") {
+                    "${it.a}–${it.b} move together (r=${it.correlation})"
+                } + " — these fall together in a drawdown.",
+                style = MaterialTheme.typography.bodySmall,
                 color = AurumColors.gold
             )
         }
-    }
-}
-
-@Composable
-private fun AdviceLine(label: String, text: String) {
-    Row(verticalAlignment = Alignment.Top) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = AurumColors.gold,
-            modifier = Modifier.width(36.dp)
-        )
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodySmall,
-            color = AurumColors.text
-        )
-    }
-}
-
-@Composable
-private fun TotalsCard(plan: WealthPlan) {
-    AurumCard {
-        Text(
-            text = "If the plan plays out",
-            style = MaterialTheme.typography.labelMedium,
-            color = AurumColors.textDim
-        )
-        Spacer(Modifier.height(10.dp))
-        Row(modifier = Modifier.fillMaxWidth()) {
-            StatTile(
-                label = "Deployed",
-                value = Fmt.money(plan.baseAmount - plan.cashReserve),
-                modifier = Modifier.weight(1f)
-            )
-            StatTile(
-                label = "Cash reserve",
-                value = Fmt.money(plan.cashReserve),
-                modifier = Modifier.weight(1f)
-            )
-            StatTile(
-                label = "Expected profit",
-                value = Fmt.signedMoney(plan.expectedProfitTotal),
-                modifier = Modifier.weight(1f),
-                valueColor = AurumColors.deltaColor(plan.expectedProfitTotal)
-            )
-        }
         Spacer(Modifier.height(10.dp))
         Text(
-            text = plan.gapNote,
-            style = MaterialTheme.typography.bodySmall,
+            text = perf.methodNote,
+            style = MaterialTheme.typography.labelSmall,
             color = AurumColors.textDim
         )
-    }
-}
-
-@Composable
-private fun ActionsCard(plan: WealthPlan) {
-    AurumCard {
-        Text(
-            text = "This week",
-            style = MaterialTheme.typography.labelMedium,
-            color = AurumColors.textDim
-        )
-        Spacer(Modifier.height(6.dp))
-        plan.weeklyActions.forEach { line ->
-            Row(modifier = Modifier.padding(vertical = 3.dp)) {
-                Text(
-                    text = "•  ",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = AurumColors.gold
-                )
-                Text(
-                    text = line,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = AurumColors.text
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun NewsCard(plan: WealthPlan, onOpen: (String) -> Unit) {
-    AurumCard {
-        plan.marketNotes.forEach { n ->
-            Row(
-                verticalAlignment = Alignment.Top,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onOpen(n.url) }
-                    .padding(vertical = 6.dp)
-            ) {
-                SentimentDot(sentiment = n.sentiment, modifier = Modifier.padding(top = 5.dp))
-                Spacer(Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = n.title,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AurumColors.text,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = listOf(n.source, Fmt.timeAgo(n.publishedAt))
-                            .filter { it.isNotBlank() }
-                            .joinToString(" · "),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = AurumColors.textDim
-                    )
-                }
-            }
-        }
     }
 }

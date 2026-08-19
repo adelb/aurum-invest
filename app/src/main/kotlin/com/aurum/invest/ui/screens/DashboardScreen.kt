@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
@@ -57,7 +58,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -68,6 +71,7 @@ import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.PortfolioSummary
 import com.aurum.invest.data.repo.TargetsRepository
+import com.aurum.invest.data.repo.WalletState
 import com.aurum.invest.ui.components.ActionBadge
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
@@ -79,7 +83,8 @@ import com.aurum.invest.ui.components.GoldGradientText
 import com.aurum.invest.ui.components.PillTag
 import com.aurum.invest.ui.components.SectionHeader
 import com.aurum.invest.ui.components.Sparkline
-import com.aurum.invest.ui.components.StatTile
+import com.aurum.invest.ui.components.AnimatedMoney
+import com.aurum.invest.ui.components.LiveStatTile
 import com.aurum.invest.ui.theme.AurumColors
 
 @Composable
@@ -94,6 +99,18 @@ fun DashboardScreen(
     val state by vm.state.collectAsStateWithLifecycle()
     var confirmRemove by remember { mutableStateOf<String?>(null) }
     var targetFor by remember { mutableStateOf<HoldingRow?>(null) }
+    var showWalletDialog by remember { mutableStateOf(false) }
+
+    if (showWalletDialog) {
+        WalletSetupDialog(
+            current = state.wallet.total,
+            onDismiss = { showWalletDialog = false },
+            onSave = { amount ->
+                vm.setWalletTotal(amount)
+                showWalletDialog = false
+            }
+        )
+    }
 
     targetFor?.let { row ->
         SellTargetDialog(
@@ -159,12 +176,28 @@ fun DashboardScreen(
 
                 item {
                     Spacer(Modifier.height(20.dp))
-                    HeroSummary(summary = state.summary)
+                    HeroSummary(
+                        summary = state.summary,
+                        wallet = state.wallet,
+                        pricesAsOf = state.pricesAsOf,
+                        pricesPaused = state.pricesPaused
+                    )
                 }
 
                 item {
                     Spacer(Modifier.height(20.dp))
                     SummaryTiles(summary = state.summary)
+                    TextButton(onClick = { showWalletDialog = true }) {
+                        Text(
+                            text = if (state.wallet.configured) {
+                                "Edit total wallet"
+                            } else {
+                                "Set your total wallet"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = AurumColors.gold
+                        )
+                    }
                 }
 
                 if (state.holdings.size >= 2) {
@@ -376,7 +409,7 @@ private fun SectorAllocation(book: BookContext) {
         book.slices.forEachIndexed { i, slice ->
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(vertical = 3.dp)
+                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)
             ) {
                 Box(
                     modifier = Modifier
@@ -386,21 +419,75 @@ private fun SectorAllocation(book: BookContext) {
                             AurumColors.allocation[i % AurumColors.allocation.size]
                         )
                 )
+                Spacer(Modifier.width(6.dp))
                 Text(
-                    text = "  ${slice.sector}",
+                    text = slice.sector,
                     style = MaterialTheme.typography.labelMedium,
-                    color = AurumColors.text
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
-                Spacer(Modifier.weight(1f))
+                Spacer(Modifier.width(8.dp))
+                // The symbol list is the only part allowed to lose characters:
+                // it is unweighted and capped, so it is measured before the
+                // sector name and shrinks first. Three names plus "+N" keeps a
+                // crowded sector inside the cap instead of ellipsising.
                 Text(
-                    text = slice.symbols.take(4).joinToString(", ") +
-                        (if (slice.symbols.size > 4) " +${slice.symbols.size - 4}" else "") +
-                        "  ·  " + Fmt.pct(slice.weightPct),
+                    text = slice.symbols.take(3).joinToString(", ") +
+                        (if (slice.symbols.size > 3) " +${slice.symbols.size - 3}" else ""),
                     style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 112.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                // The weight is the point of the row, so it is its own Text
+                // with no ellipsis and no wrapping — it gets its natural width
+                // first and can never be cut to "60.5…" by a crowded sector.
+                Text(
+                    text = Fmt.pct(slice.weightPct),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    softWrap = false
                 )
             }
         }
+    }
+}
+
+/**
+ * One wallet figure. [signed] switches to +/- formatting and the gain/loss
+ * colour — used for the P/L lines, which must read as movement, not as a
+ * balance.
+ */
+@Composable
+private fun WalletStat(
+    label: String,
+    value: Double,
+    modifier: Modifier = Modifier,
+    signed: Boolean = false,
+    valueColor: Color = AurumColors.text
+) {
+    Column(modifier = modifier) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        // Exact cents (rounding $25,477.30 to "$25,477" hides money the user
+        // has), and animated so a figure moved by the live ticker announces
+        // itself instead of silently differing from a second ago.
+        AnimatedMoney(
+            value = value,
+            style = MaterialTheme.typography.bodyMedium,
+            baseColor = if (signed) AurumColors.deltaColor(value) else valueColor,
+            signed = signed
+        )
     }
 }
 
@@ -453,25 +540,141 @@ private fun HeaderRow(
 }
 
 @Composable
-private fun HeroSummary(summary: PortfolioSummary?) {
+private fun HeroSummary(
+    summary: PortfolioSummary?,
+    wallet: WalletState = WalletState.UNSET,
+    pricesAsOf: Long = 0L,
+    pricesPaused: Boolean = false
+) {
     val s = summary ?: PortfolioSummary(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     Column(modifier = Modifier.fillMaxWidth().animateContentSize()) {
         Text(
-            text = "Total value",
+            // "Holdings value", not "Total value": brokerage cash is a
+            // separate line (or not tracked at all) — the sum of open
+            // positions must never masquerade as account equity.
+            text = "Holdings value",
             style = MaterialTheme.typography.labelMedium,
             color = AurumColors.textDim
         )
         Spacer(Modifier.height(4.dp))
-        Text(
-            text = Fmt.money(s.marketValue),
-            style = MaterialTheme.typography.displayLarge,
-            color = AurumColors.text
+        // Exact cents at 44sp overflows a narrow screen once the book passes
+        // seven figures, so the longest strings step down a size rather than
+        // wrap. The value animates: it flips onto each new number and flashes
+        // green up / red down as the one-second ticker re-prices the book.
+        val holdingsText = Fmt.moneyExact(s.marketValue)
+        AnimatedMoney(
+            value = s.marketValue,
+            style = if (holdingsText.length > 12) MaterialTheme.typography.displaySmall
+            else MaterialTheme.typography.displayLarge,
+            baseColor = AurumColors.text
         )
+        if (s.unpricedCount > 0) {
+            Text(
+                text = "${s.unpricedCount} holding${if (s.unpricedCount == 1) "" else "s"} " +
+                    "without a live price — ${Fmt.money(s.unpricedCost)} counted at cost, " +
+                    "not market value.",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.gold
+            )
+        }
+        if (wallet.configured) {
+            Spacer(Modifier.height(2.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                WalletStat(
+                    label = "Wallet",
+                    value = wallet.total,
+                    modifier = Modifier.weight(1f)
+                )
+                WalletStat(
+                    label = "Invested",
+                    value = wallet.invested,
+                    modifier = Modifier.weight(1f)
+                )
+                WalletStat(
+                    label = "Liquidity",
+                    value = wallet.liquidity,
+                    modifier = Modifier.weight(1f),
+                    valueColor = if (wallet.shortfall) AurumColors.loss else AurumColors.text
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            // The second row closes the loop: what the sells booked, the
+            // accumulated P/L, and what the wallet is actually worth today.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                WalletStat(
+                    label = "Realized",
+                    value = wallet.realizedPl,
+                    modifier = Modifier.weight(1f),
+                    signed = true
+                )
+                WalletStat(
+                    label = "Total P/L",
+                    value = wallet.totalPl,
+                    modifier = Modifier.weight(1f),
+                    signed = true
+                )
+                WalletStat(
+                    label = "Net worth",
+                    value = wallet.netWorth,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            // Says out loud how the three cash figures relate, so a sell that
+            // moves liquidity is never mistaken for a number drifting on its own.
+            Text(
+                text = "Liquidity = wallet − invested + realized · " +
+                    "net worth = liquidity + holdings",
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+            if (wallet.shortfall) {
+                Text(
+                    text = "Your ledger has ${Fmt.moneyExact(-wallet.liquidity)} more deployed than " +
+                        "the stated wallet covers — raise the total if you've added money.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.gold
+                )
+            }
+        }
+        // Three minutes is roughly twelve missed ticks — past that the reads
+        // are failing, not merely slow, and the figures above are a cached
+        // price wearing a live screen's clothes. Fifteen minutes was the old
+        // threshold and it let exactly that go unsaid for a quarter of an hour.
+        val stale = pricesAsOf > 0L && System.currentTimeMillis() - pricesAsOf > 3 * 60_000L
+        if (stale || pricesPaused) {
+            Text(
+                text = buildString {
+                    if (pricesAsOf > 0L) {
+                        append("Prices as of ${Fmt.timeShort(pricesAsOf)} (${Fmt.timeAgo(pricesAsOf)})")
+                    } else {
+                        append("Prices unavailable")
+                    }
+                    // The reason, when there is one. A frozen figure with only
+                    // a timestamp reads as a quiet market; naming the refusal
+                    // says it is the feed, not the tape.
+                    if (pricesPaused) append(" — the price feed is rate-limiting us, retrying shortly")
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.gold
+            )
+        }
         Spacer(Modifier.height(4.dp))
         // The headline delta: how the holdings stand AGAINST THE MONEY PUT IN
         // (market value vs remaining cost basis), not just today's move.
         Row(verticalAlignment = Alignment.CenterVertically) {
-            DeltaMoney(value = s.unrealizedPl, style = MaterialTheme.typography.titleMedium)
+            AnimatedMoney(
+                value = s.unrealizedPl,
+                style = MaterialTheme.typography.titleMedium,
+                baseColor = AurumColors.deltaColor(s.unrealizedPl),
+                signed = true
+            )
             if (s.investedCost > 0.0) {
                 Text(
                     text = "  ·  ",
@@ -492,7 +695,12 @@ private fun HeroSummary(summary: PortfolioSummary?) {
         Spacer(Modifier.height(2.dp))
         // The session move, demoted to a secondary line.
         Row(verticalAlignment = Alignment.CenterVertically) {
-            DeltaMoney(value = s.dayPl, style = MaterialTheme.typography.bodySmall)
+            AnimatedMoney(
+                value = s.dayPl,
+                style = MaterialTheme.typography.bodySmall,
+                baseColor = AurumColors.deltaColor(s.dayPl),
+                signed = true
+            )
             Text(
                 // Before today's US open, the delta belongs to the last session.
                 text = if (Dates.usMarketOpenedToday()) " today" else " last session",
@@ -507,23 +715,30 @@ private fun HeroSummary(summary: PortfolioSummary?) {
 private fun SummaryTiles(summary: PortfolioSummary?) {
     val s = summary ?: PortfolioSummary(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     AurumCard {
-        Row(modifier = Modifier.fillMaxWidth()) {
-            StatTile(
+        // Invested and Realized also appear in the wallet block above; both
+        // places must print the same figure to the cent, on one line each.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            LiveStatTile(
                 label = "Invested",
-                value = Fmt.money(s.investedCost),
+                value = s.investedCost,
                 modifier = Modifier.weight(1f)
             )
-            StatTile(
+            LiveStatTile(
                 label = "Unrealized P/L",
-                value = Fmt.signedMoney(s.unrealizedPl),
+                value = s.unrealizedPl,
                 modifier = Modifier.weight(1f),
-                valueColor = AurumColors.deltaColor(s.unrealizedPl)
+                signed = true,
+                baseColor = AurumColors.deltaColor(s.unrealizedPl)
             )
-            StatTile(
+            LiveStatTile(
                 label = "Realized P/L",
-                value = Fmt.signedMoney(s.realizedPl),
+                value = s.realizedPl,
                 modifier = Modifier.weight(1f),
-                valueColor = AurumColors.deltaColor(s.realizedPl)
+                signed = true,
+                baseColor = AurumColors.deltaColor(s.realizedPl)
             )
         }
     }
@@ -549,13 +764,17 @@ private fun HoldingCard(
                     Text(
                         text = position.symbol,
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
+                        color = AurumColors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 Text(
                     text = "${Fmt.qty(position.shares)} shares · ${Fmt.money(view.marketValue)}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             if (row.spark.size >= 2) {
@@ -566,51 +785,90 @@ private fun HoldingCard(
                 Spacer(Modifier.width(14.dp))
             }
             Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = Fmt.money(price),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = AurumColors.text
-                )
-                if (quote != null) {
-                    DeltaPct(
-                        value = quote.dayChangePct,
-                        style = MaterialTheme.typography.bodySmall
+                if (view.priced) {
+                    Text(
+                        text = Fmt.money(price),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AurumColors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (quote != null) {
+                        DeltaPct(
+                            value = quote.dayChangePct,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                } else {
+                    // No live quote: showing avg cost as "the price" with a
+                    // flat 0% would look like verified data. Say what it is.
+                    Text(
+                        text = "no price",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AurumColors.gold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "at cost ${Fmt.money(position.avgCost)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
         }
         Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "Unrealized  ",
-                style = MaterialTheme.typography.bodySmall,
-                color = AurumColors.textDim
-            )
-            DeltaMoney(value = view.unrealizedPl, style = MaterialTheme.typography.bodySmall)
-            Text(
-                text = "  ·  ",
-                style = MaterialTheme.typography.bodySmall,
-                color = AurumColors.textDim
-            )
-            DeltaPct(value = view.unrealizedPlPct, style = MaterialTheme.typography.bodySmall)
-            Spacer(Modifier.weight(1f))
-            row.advice?.let { ActionBadge(action = it.action) }
-            Spacer(Modifier.width(6.dp))
-            IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
-                Icon(
-                    Icons.Rounded.Edit,
-                    contentDescription = "Edit ${position.symbol} trades",
-                    tint = AurumColors.textDim,
-                    modifier = Modifier.size(16.dp)
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Unrealized  ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
                 )
+                DeltaMoney(value = view.unrealizedPl, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    text = "  ·  ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+                DeltaPct(value = view.unrealizedPlPct, style = MaterialTheme.typography.bodySmall)
             }
-            IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
-                Icon(
-                    Icons.Rounded.Close,
-                    contentDescription = "Remove ${position.symbol} from portfolio",
-                    tint = AurumColors.textDim,
-                    modifier = Modifier.size(16.dp)
-                )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Dashboard advice is computed WITHOUT news tone (the detail
+                // screen's full read includes it) — the label keeps that honest.
+                row.advice?.let {
+                    Text(
+                        text = "tech read ",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    ActionBadge(action = it.action)
+                }
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        Icons.Rounded.Edit,
+                        contentDescription = "Edit ${position.symbol} trades",
+                        tint = AurumColors.textDim,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+                IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        Icons.Rounded.Close,
+                        contentDescription = "Remove ${position.symbol} from portfolio",
+                        tint = AurumColors.textDim,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         }
         if (row.ext?.preMarketPct != null || row.ext?.postMarketPct != null) {
@@ -680,7 +938,9 @@ private fun SellTargetFlag(row: HoldingRow, onClick: () -> Unit) {
                 text = if (reached) "Target reached — sell at ${Fmt.money(targetPrice)}"
                 else "Sell at ${Fmt.money(targetPrice)}",
                 style = MaterialTheme.typography.titleSmall,
-                color = accent
+                color = accent,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             Spacer(Modifier.height(2.dp))
             val distance = row.distanceToTargetPct
@@ -696,9 +956,12 @@ private fun SellTargetFlag(row: HoldingRow, onClick: () -> Unit) {
                         append(Fmt.pct(distance))
                         append(" to go")
                     }
+                    append(" · before fees & tax")
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = AurumColors.textDim
+                color = AurumColors.textDim,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
         }
         val gain = row.targetPct?.let { row.view.position.shares * row.view.position.avgCost * it / 100.0 }
@@ -706,7 +969,10 @@ private fun SellTargetFlag(row: HoldingRow, onClick: () -> Unit) {
             Text(
                 text = Fmt.signedMoney(gain),
                 style = MaterialTheme.typography.titleSmall,
-                color = accent
+                color = accent,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 96.dp)
             )
         }
     }
@@ -778,7 +1044,7 @@ private fun SellTargetDialog(
                             append(Fmt.signedMoney(shares * avgCost * pct / 100.0))
                             append(" on ")
                             append(Fmt.qty(shares))
-                            append(" shares")
+                            append(" shares · before selling fees and tax")
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = AurumColors.textDim
@@ -822,6 +1088,68 @@ private fun SellTargetDialog(
                     Text("Cancel", color = AurumColors.textDim)
                 }
             }
+        }
+    )
+}
+
+/**
+ * Lets the user state the single number the wallet math is built on: their
+ * total investing cash. Invested / liquidity / net worth are all derived
+ * from this plus the ledger — never asked for separately.
+ */
+@Composable
+private fun WalletSetupDialog(
+    current: Double,
+    onDismiss: () -> Unit,
+    onSave: (Double) -> Unit
+) {
+    var amountText by remember {
+        mutableStateOf(if (current > 0.0) Fmt.money(current).filter { it.isDigit() || it == '.' } else "")
+    }
+    val amount = amountText.replace(",", "").trim().toDoubleOrNull()
+    val valid = amount != null && amount > 0.0
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = AurumColors.surface,
+        titleContentColor = AurumColors.text,
+        textContentColor = AurumColors.textDim,
+        title = { Text("Set your total wallet") },
+        text = {
+            Column {
+                Text(
+                    text = "Enter the money you put in for investing — the capital itself, " +
+                        "before any profit. Aurum reads what's invested from your ledger, " +
+                        "and every sell returns its cost plus the P/L it booked to your " +
+                        "liquidity. Only change this when you actually add or withdraw cash.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = amountText,
+                    onValueChange = { amountText = it },
+                    label = { Text("Total wallet ($)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { if (amount != null) onSave(amount) },
+                enabled = valid,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AurumColors.gold,
+                    contentColor = AurumColors.bg,
+                    disabledContainerColor = AurumColors.surfaceHigh,
+                    disabledContentColor = AurumColors.textDim
+                )
+            ) { Text("Save") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel", color = AurumColors.textDim) }
         }
     )
 }

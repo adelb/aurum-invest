@@ -6,6 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -40,15 +42,17 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
-import com.aurum.invest.data.model.DailyPick
 import com.aurum.invest.data.model.EntryPick
 import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.PowerPick
 import com.aurum.invest.analytics.NoteKind
 import com.aurum.invest.analytics.PickNote
 import com.aurum.invest.analytics.PortfolioLens
+import com.aurum.invest.analytics.UPick
+import com.aurum.invest.analytics.UState
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
+import com.aurum.invest.ui.components.AlertPermissionCard
 import com.aurum.invest.ui.components.DeltaPct
 import com.aurum.invest.ui.components.EmptyState
 import com.aurum.invest.ui.components.ExtHoursChips
@@ -63,7 +67,7 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 private enum class PicksTab(val key: String) {
-    DAILY(PicksViewModel.TAB_DAILY),
+    U(PicksViewModel.TAB_U),
     ENTRIES(PicksViewModel.TAB_ENTRIES),
     POWER(PicksViewModel.TAB_POWER),
     WEEKLY(PicksViewModel.TAB_WEEKLY)
@@ -73,7 +77,7 @@ private enum class PicksTab(val key: String) {
 fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit) {
     val vm: PicksViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
-    var tab by rememberSaveable { mutableStateOf(PicksTab.DAILY) }
+    var tab by rememberSaveable { mutableStateOf(PicksTab.U) }
 
     // Each tab's market-wide scan starts only when that tab is first shown,
     // instead of all four firing at once when the screen opens.
@@ -93,7 +97,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = when (tab) {
-                        PicksTab.DAILY -> "Daily Picks"
+                        PicksTab.U -> "U-Pattern Day"
                         PicksTab.ENTRIES -> "Best Entries"
                         PicksTab.POWER -> "Power Hour"
                         PicksTab.WEEKLY -> "Weekly Picks"
@@ -103,8 +107,8 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 )
                 Text(
                     text = when (tab) {
-                        PicksTab.DAILY -> state.dailyLabel
-                        PicksTab.ENTRIES -> "Market-wide entry-price scan"
+                        PicksTab.U -> state.uLabel + " · dip first, rise into the close"
+                        PicksTab.ENTRIES -> "Entry-price scan · 8-screen universe"
                         PicksTab.POWER -> "Buy 2:30–4:00 PM ET · sell into tomorrow"
                         PicksTab.WEEKLY -> state.weekLabel
                     },
@@ -113,7 +117,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 )
             }
             val busy = when (tab) {
-                PicksTab.DAILY -> state.dailyRefreshing
+                PicksTab.U -> state.uRefreshing
                 PicksTab.ENTRIES -> state.entryRefreshing
                 PicksTab.POWER -> state.powerRefreshing
                 PicksTab.WEEKLY -> state.refreshing
@@ -131,7 +135,8 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                     IconButton(
                         onClick = {
                             when (tab) {
-                                PicksTab.DAILY -> vm.refreshDaily()
+                                // The header button is the FULL market rescan.
+                                PicksTab.U -> vm.rescanU()
                                 PicksTab.ENTRIES -> vm.refreshEntries()
                                 PicksTab.POWER -> vm.refreshPower()
                                 PicksTab.WEEKLY -> vm.refresh()
@@ -149,16 +154,16 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
         }
 
         SegmentedToggle(
-            options = listOf("Today", "Entries", "Power", "Weekly"),
+            options = listOf("U-Day", "Entries", "Power", "Weekly"),
             selected = when (tab) {
-                PicksTab.DAILY -> 0
+                PicksTab.U -> 0
                 PicksTab.ENTRIES -> 1
                 PicksTab.POWER -> 2
                 PicksTab.WEEKLY -> 3
             },
             onSelect = {
                 tab = when (it) {
-                    0 -> PicksTab.DAILY
+                    0 -> PicksTab.U
                     1 -> PicksTab.ENTRIES
                     2 -> PicksTab.POWER
                     else -> PicksTab.WEEKLY
@@ -170,14 +175,15 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
 
         AurumRefreshBox(
             refreshing = when (tab) {
-                PicksTab.DAILY -> state.dailyRefreshing
+                PicksTab.U -> state.uRefreshing
                 PicksTab.ENTRIES -> state.entryRefreshing
                 PicksTab.POWER -> state.powerRefreshing
                 PicksTab.WEEKLY -> state.refreshing
             },
             onRefresh = {
                 when (tab) {
-                    PicksTab.DAILY -> vm.refreshDaily()
+                    // Pull = quick live re-read; the header button rescans.
+                    PicksTab.U -> vm.refreshU()
                     PicksTab.ENTRIES -> vm.refreshEntries()
                     PicksTab.POWER -> vm.refreshPower()
                     PicksTab.WEEKLY -> vm.refresh()
@@ -191,7 +197,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             when (tab) {
-                PicksTab.DAILY -> dailyItems(state, onOpenDetail, onOpenAnalysis, vm::refreshDaily)
+                PicksTab.U -> uItems(state, onOpenDetail, onOpenAnalysis, vm::rescanU)
                 PicksTab.ENTRIES -> entryItems(state, onOpenDetail, onOpenAnalysis, vm::refreshEntries)
                 PicksTab.POWER -> powerItems(state, onOpenDetail, onOpenAnalysis, vm::refreshPower)
                 PicksTab.WEEKLY -> weeklyItems(state, onOpenDetail, onOpenAnalysis, vm::refresh)
@@ -201,23 +207,17 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
     }
 }
 
-// ---------------------------------------------------------------- daily tab
+// -------------------------------------------------------------- U-pattern tab
 
-private fun androidx.compose.foundation.lazy.LazyListScope.dailyItems(
+private fun androidx.compose.foundation.lazy.LazyListScope.uItems(
     state: PicksState,
     onOpenDetail: (String) -> Unit,
     onOpenAnalysis: (String) -> Unit,
-    onRefresh: () -> Unit
+    onRescan: () -> Unit
 ) {
+    item { UAlertsCard() }
     when {
-        state.saturday -> item {
-            EmptyState(
-                title = "Daily picks are off on Saturday",
-                message = "The US market is closed. Fresh same-day candidates return tomorrow, " +
-                    "built from the latest pre-market moves, volume, techniques, and news."
-            )
-        }
-        state.dailyRows.isEmpty() && (state.dailyLoading || state.dailyRefreshing) -> item {
+        state.uRows.isEmpty() && (state.uLoading || state.uRefreshing) -> item {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -228,49 +228,96 @@ private fun androidx.compose.foundation.lazy.LazyListScope.dailyItems(
                     CircularProgressIndicator(color = AurumColors.gold)
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(
-                        text = "Scanning for today's movers…",
+                        text = "Fingerprinting the market's intraday history — the first scan " +
+                            "of the day replays ~21 sessions of 5-minute bars per name, so it " +
+                            "takes a minute or two. Later refreshes are quick.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = AurumColors.textDim
                     )
                 }
             }
         }
-        state.dailyRows.isEmpty() -> item {
-            EmptyState(
-                title = "No daily picks yet",
-                message = "Scan the market for stocks set up for a 3-10%+ move today.",
-                actionLabel = "Scan now",
-                onAction = onRefresh
-            )
+        state.uRows.isEmpty() -> item {
+            // Honest empty state: "no setup" may only be claimed when the
+            // screener universe was actually reachable.
+            val cov = state.coverage
+            if (cov != null && !cov.reachable) {
+                EmptyState(
+                    title = "Scan failed — data source unreachable",
+                    message = "None of the ${cov.screensRequested} Yahoo screens behind this " +
+                        "scan could be fetched, so an empty list here means the scan FAILED — " +
+                        "it says nothing about whether the edge exists today.",
+                    actionLabel = "Retry the scan",
+                    onAction = onRescan
+                )
+            } else {
+                EmptyState(
+                    title = "No stock passes the U bar today",
+                    message = "A name is listed only when its measured record clears every gate: " +
+                        "a real U habit (40%+ of recent sessions), a 1%+ median rebound, and a " +
+                        "buy rule that actually paid on replay." +
+                        (cov?.let {
+                            if (it.screensMissing > 0) {
+                                " Note: only ${it.screensLive + it.screensStale} of " +
+                                    "${it.screensRequested} screens were reachable — this was a " +
+                                    "PARTIAL scan."
+                            } else {
+                                " The scan covered ${it.rowsSeen} screener rows and found no " +
+                                    "qualifying setup."
+                            }
+                        } ?: ""),
+                    actionLabel = "Rescan the market",
+                    onAction = onRescan
+                )
+            }
         }
         else -> {
             item {
                 Text(
-                    text = "Stocks the engine reads as capable of a 3-10%+ up-move today, " +
-                        "from momentum, volume, the 15 techniques, pre/post-market prints, and news.",
+                    text = "Stocks that habitually dip after the open and climb back through " +
+                        "the close — found by scanning Yahoo's 8 predefined market screens " +
+                        "(a broad liquid-name sample, not every US stock), proven on ~21 " +
+                        "sessions of 5-minute bars each (U-day rate, parabola curvature, " +
+                        "VWAP-reclaim rule replay), confirmed by the 35-technique board, and " +
+                        "tracked live so each card says whether NOW is the time to buy.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
+                ScanCoverageNote(state.coverage)
             }
-            items(state.dailyRows, key = { "d-${it.symbol}" }) { pick ->
-                DailyPickCard(
+            items(state.uRows, key = { "u-${it.symbol}" }) { pick ->
+                UPatternCard(
                     pick = pick,
                     onOpen = { onOpenDetail(pick.symbol) },
                     onAnalyze = { onOpenAnalysis(pick.symbol) },
-                    note = noteFor(state, pick.symbol),
-                    ext = state.extHours[pick.symbol]
+                    note = noteFor(state, pick.symbol)
                 )
             }
             item {
                 Text(
-                    text = "Recomputed each day except Saturday. Potential ranges come from " +
-                        "volatility (ATR) plus live catalysts — decision support, not financial advice.",
+                    text = "The buy signal is mechanical: after a real dip, a 5-minute bar " +
+                        "closing back above VWAP without a new session low. Each name's card " +
+                        "shows how often that exact rule paid on ITS OWN last month — a " +
+                        "tendency with a measured record, not a promise. Alerts are checked " +
+                        "every 15 minutes during the session. Decision support, not " +
+                        "financial advice.",
                     style = MaterialTheme.typography.labelSmall,
                     color = AurumColors.textDim
                 )
             }
         }
     }
+}
+
+/** Notification opt-in for buy-zone alerts; a quiet confirmation once granted. */
+@Composable
+private fun UAlertsCard() {
+    AlertPermissionCard(
+        enabledText = "Buy-zone alerts are on — checked every 15 minutes during the session.",
+        title = "Get pinged at the turn",
+        message = "Allow notifications and Aurum will alert you the moment a tracked " +
+            "name confirms its intraday turn and enters the buy zone."
+    )
 }
 
 // ---------------------------------------------------------------- power tab
@@ -302,24 +349,42 @@ private fun androidx.compose.foundation.lazy.LazyListScope.powerItems(
             }
         }
         state.powerRows.isEmpty() -> item {
-            EmptyState(
-                title = "No power-hour setups found",
-                message = "No stock shows the 4-day strength this play needs right now. " +
-                    "Rescan during the buy window for the freshest read.",
-                actionLabel = "Scan now",
-                onAction = onRefresh
-            )
+            val cov = state.coverage
+            if (cov != null && !cov.reachable) {
+                EmptyState(
+                    title = "Scan failed — data source unreachable",
+                    message = "None of the ${cov.screensRequested} Yahoo screens could be " +
+                        "fetched — an empty list here means the scan FAILED, not that no " +
+                        "setup exists.",
+                    actionLabel = "Retry",
+                    onAction = onRefresh
+                )
+            } else {
+                EmptyState(
+                    title = "No power-hour setups found",
+                    message = "No scanned stock shows the 4-day strength this play needs right " +
+                        "now. Rescan during the buy window for the freshest read." +
+                        (cov?.takeIf { it.screensMissing > 0 }?.let {
+                            " Note: only ${it.screensLive + it.screensStale} of " +
+                                "${it.screensRequested} screens were reachable — a PARTIAL scan."
+                        } ?: ""),
+                    actionLabel = "Scan now",
+                    onAction = onRefresh
+                )
+            }
         }
         else -> {
             item {
                 Text(
                     text = "The 10 strongest candidates to buy in the last 90 minutes and hold " +
-                        "into tomorrow: the whole market screened for names finishing near " +
-                        "their daily high on hot volume after 4 strong trading days, confirmed " +
-                        "by the 15-technique board. Refresh inside the window for the live read.",
+                        "into tomorrow: Yahoo's 8 market screens (a broad liquid-name sample, " +
+                        "not every US stock) swept for names finishing near their daily high " +
+                        "on hot volume after 4 strong trading days, confirmed by the " +
+                        "35-technique board. Refresh inside the window for the live read.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
+                ScanCoverageNote(state.coverage)
             }
             items(state.powerRows, key = { "p-${it.symbol}" }) { pick ->
                 PowerPickCard(
@@ -370,6 +435,7 @@ private fun PowerWindowBanner() {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PowerPickCard(
     pick: PowerPick,
@@ -396,7 +462,9 @@ private fun PowerPickCard(
                     Text(
                         text = pick.symbol,
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
+                        color = AurumColors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (pick.name.isNotBlank()) {
                         Spacer(modifier = Modifier.width(8.dp))
@@ -405,20 +473,24 @@ private fun PowerPickCard(
                             style = MaterialTheme.typography.bodySmall,
                             color = AurumColors.textDim,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     PillTag(
                         text = String.format(
-                            Locale.US, "+%.1f–%.1f%% overnight potential",
+                            Locale.US, "+%.1f–%.1f%% ATR-based range",
                             pick.expectedLowPct, pick.expectedHighPct
                         ),
                         color = AurumColors.gold
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
                     if (pick.techDirection == "BULLISH" && pick.techTotal > 0) {
                         PillTag(
                             text = "${pick.techBullish}/${pick.techTotal} bullish",
@@ -458,8 +530,8 @@ private fun PowerPickCard(
                 }
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "Sell into tomorrow morning's strength — at the target, or by " +
-                        "10:30 AM ET; exit immediately if the stop breaks.",
+                    text = "Sell into tomorrow morning's strength — at the target, or in the " +
+                        "first hour if it stalls; exit immediately if the stop breaks.",
                     style = MaterialTheme.typography.labelMedium,
                     color = AurumColors.text
                 )
@@ -469,6 +541,20 @@ private fun PowerPickCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
+                if (pick.headline.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        SentimentDot(sentiment = pick.newsScore)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "${pick.headline} — ${pick.headlineSource}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AurumColors.textDim,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
                 if (ext?.preMarketPct != null || ext?.postMarketPct != null) {
                     Spacer(modifier = Modifier.height(8.dp))
                     ExtHoursChips(ext = ext)
@@ -486,7 +572,7 @@ private fun PowerPickCard(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Full analysis & $3,000 plan",
+                        text = "Full analysis & buy plan",
                         style = MaterialTheme.typography.labelMedium,
                         color = AurumColors.gold
                     )
@@ -497,7 +583,9 @@ private fun PowerPickCard(
                 Text(
                     text = Fmt.money(pick.price),
                     style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 DeltaPct(value = pick.dayChangePct, style = MaterialTheme.typography.labelMedium)
                 Text(
@@ -531,7 +619,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
                     CircularProgressIndicator(color = AurumColors.gold)
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(
-                        text = "Sweeping the whole market for entry setups…",
+                        text = "Sweeping the screener universe for entry setups…",
                         style = MaterialTheme.typography.bodyMedium,
                         color = AurumColors.textDim
                     )
@@ -539,23 +627,41 @@ private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
             }
         }
         state.entryRows.isEmpty() -> item {
-            EmptyState(
-                title = "No entry setups found",
-                message = "The market-wide scan found no stock at a compelling entry right now.",
-                actionLabel = "Sweep again",
-                onAction = onRefresh
-            )
+            val cov = state.coverage
+            if (cov != null && !cov.reachable) {
+                EmptyState(
+                    title = "Scan failed — data source unreachable",
+                    message = "None of the ${cov.screensRequested} Yahoo screens could be " +
+                        "fetched — an empty list here means the scan FAILED, not that no " +
+                        "entry exists.",
+                    actionLabel = "Retry",
+                    onAction = onRefresh
+                )
+            } else {
+                EmptyState(
+                    title = "No entry setups found",
+                    message = "The scan found no stock at a compelling entry right now." +
+                        (cov?.takeIf { it.screensMissing > 0 }?.let {
+                            " Note: only ${it.screensLive + it.screensStale} of " +
+                                "${it.screensRequested} screens were reachable — a PARTIAL scan."
+                        } ?: ""),
+                    actionLabel = "Sweep again",
+                    onAction = onRefresh
+                )
+            }
         }
         else -> {
             item {
                 Text(
-                    text = "The 10 best entry prices on the market right now: hundreds of names " +
-                        "from Yahoo's market-wide screens, kept only when the long trend is " +
-                        "intact, the price has pulled back toward support, and the 15-technique " +
-                        "board does not read the dip as a falling knife.",
+                    text = "The best entry setups across Yahoo's 8 predefined screens (a broad " +
+                        "liquid-name sample, not every US stock): kept only when the long trend " +
+                        "is intact, the price has pulled back toward support, the 35-technique " +
+                        "board does not read the dip as a falling knife, and the week's news " +
+                        "does not explain the dip away.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
+                ScanCoverageNote(state.coverage)
             }
             items(state.entryRows, key = { "e-${it.symbol}" }) { pick ->
                 EntryPickCard(
@@ -568,9 +674,10 @@ private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
             }
             item {
                 Text(
-                    text = "Rescanned on demand from live screener and price data. Entry, target, " +
-                        "and stop derive from support/resistance and volatility (ATR) — decision " +
-                        "support, not financial advice.",
+                    text = "Refreshed automatically every 30 minutes and on demand. Upside, risk, " +
+                        "and R:R are measured from the limit price shown — the price you would " +
+                        "actually pay. Entry, target, and stop derive from support/resistance " +
+                        "and ATR — decision support, not financial advice.",
                     style = MaterialTheme.typography.labelSmall,
                     color = AurumColors.textDim
                 )
@@ -579,6 +686,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EntryPickCard(
     pick: EntryPick,
@@ -605,7 +713,9 @@ private fun EntryPickCard(
                     Text(
                         text = pick.symbol,
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
+                        color = AurumColors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (pick.name.isNotBlank()) {
                         Spacer(modifier = Modifier.width(8.dp))
@@ -614,17 +724,21 @@ private fun EntryPickCard(
                             style = MaterialTheme.typography.bodySmall,
                             color = AurumColors.textDim,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     PillTag(
                         text = String.format(Locale.US, "RR %.1f", pick.rewardRisk),
                         color = AurumColors.gold
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
                     if (pick.techDirection == "BULLISH" && pick.techTotal > 0) {
                         PillTag(
                             text = "${pick.techBullish}/${pick.techTotal} bullish",
@@ -633,7 +747,6 @@ private fun EntryPickCard(
                     }
                     val rating = pick.analystRating
                     if (rating != null && rating <= 2.5) {
-                        Spacer(modifier = Modifier.width(8.dp))
                         PillTag(text = "Buy-rated", color = AurumColors.info)
                     }
                 }
@@ -671,7 +784,7 @@ private fun EntryPickCard(
                 Text(
                     text = String.format(
                         Locale.US,
-                        "+%.1f%% to target · %.1f%% risk to the stop",
+                        "+%.1f%% to target · %.1f%% risk to the stop — from the limit price",
                         pick.upsidePct, pick.riskPct
                     ),
                     style = MaterialTheme.typography.labelMedium,
@@ -711,7 +824,9 @@ private fun EntryPickCard(
                 Text(
                     text = Fmt.money(pick.price),
                     style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 DeltaPct(value = pick.dayChangePct, style = MaterialTheme.typography.labelMedium)
                 Text(
@@ -725,13 +840,29 @@ private fun EntryPickCard(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+/** Pill color + label for one U-pattern live state. */
 @Composable
-private fun DailyPickCard(
-    pick: DailyPick,
+private fun UStatePill(state: String) {
+    val (label, color) = when (state) {
+        UState.BUY_ZONE.name -> "BUY ZONE — turn confirmed" to AurumColors.gain
+        UState.IN_DIP.name -> "In the dip — wait" to AurumColors.gold
+        UState.NO_DIP_YET.name -> "No dip yet" to AurumColors.textDim
+        UState.TOO_LATE.name -> "Too late — already ran" to AurumColors.loss
+        UState.NO_TURN.name -> "No turn today" to AurumColors.loss
+        UState.AFTER_CLOSE.name -> "Session done" to AurumColors.info
+        else -> "Market closed" to AurumColors.textDim
+    }
+    PillTag(text = label, color = color)
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun UPatternCard(
+    pick: UPick,
     onOpen: () -> Unit,
     onAnalyze: () -> Unit,
-    note: PickNote? = null,
-    ext: ExtendedHours? = null
+    note: PickNote? = null
 ) {
     AurumCard(
         modifier = Modifier
@@ -751,7 +882,9 @@ private fun DailyPickCard(
                     Text(
                         text = pick.symbol,
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
+                        color = AurumColors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (pick.name.isNotBlank()) {
                         Spacer(modifier = Modifier.width(8.dp))
@@ -760,21 +893,23 @@ private fun DailyPickCard(
                             style = MaterialTheme.typography.bodySmall,
                             color = AurumColors.textDim,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    UStatePill(pick.state)
                     PillTag(
-                        text = String.format(
-                            Locale.US, "+%.0f–%.0f%% potential",
-                            pick.expectedLowPct, pick.expectedHighPct
-                        ),
+                        text = "U on ${pick.uDays}/${pick.sessions} days",
                         color = AurumColors.gold
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    if (pick.techDirection == "BULLISH" && pick.techTotal > 0) {
+                    if (pick.techTotal > 0) {
                         PillTag(
                             text = "${pick.techBullish}/${pick.techTotal} bullish",
                             color = AurumColors.gain
@@ -783,13 +918,85 @@ private fun DailyPickCard(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    ScoreBar(score = pick.score, modifier = Modifier.weight(1f))
+                    ScoreBar(score = pick.score.toDouble(), modifier = Modifier.weight(1f))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = pick.score.roundToInt().toString(),
+                        text = pick.score.toString(),
                         style = MaterialTheme.typography.labelMedium,
                         color = AurumColors.gold
                     )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                // The live verdict — this is the "when to buy" answer.
+                Text(
+                    text = pick.stateNote,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = when (pick.state) {
+                        UState.BUY_ZONE.name -> AurumColors.gain
+                        UState.IN_DIP.name -> AurumColors.gold
+                        else -> AurumColors.textDim
+                    }
+                )
+                val entry = pick.entry
+                val stop = pick.stop
+                val target = pick.target
+                if (entry != null && stop != null && target != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Entry",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AurumColors.textDim
+                            )
+                            Text(
+                                text = Fmt.money(entry),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = AurumColors.gain
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Stop",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AurumColors.textDim
+                            )
+                            Text(
+                                text = Fmt.money(stop),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = AurumColors.loss
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Target",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AurumColors.textDim
+                            )
+                            Text(
+                                text = Fmt.money(target),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = AurumColors.gold
+                            )
+                        }
+                        val rr = pick.rewardRisk
+                        if (rr != null && rr > 0.0) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "R:R",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = AurumColors.textDim
+                                )
+                                Text(
+                                    text = String.format(Locale.US, "%.1f", rr),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = AurumColors.text,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
                 }
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
@@ -797,23 +1004,13 @@ private fun DailyPickCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
-                ExtendedHoursRow(pick, ext)
-                if (pick.headline.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        SentimentDot(sentiment = pick.headlineSentiment)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (pick.headlineSource.isBlank()) pick.headline
-                            else "${pick.headline} — ${pick.headlineSource}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = AurumColors.text,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Dip window ${pick.buyWindow} · sell window ${pick.sellWindow} " +
+                        "(your time)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -838,68 +1035,22 @@ private fun DailyPickCard(
                 Text(
                     text = Fmt.money(pick.price),
                     style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 DeltaPct(value = pick.dayChangePct, style = MaterialTheme.typography.labelMedium)
-                Text(
-                    // Before the open, price and change still belong to the
-                    // previous regular session — say so instead of "today".
-                    text = when (pick.marketState) {
-                        "PRE", "PREPRE", "CLOSED", "POSTPOST" -> "last session"
-                        else -> "today"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
+                val dip = pick.dipTodayPct
+                if (dip != null && dip > 0.0) {
+                    Text(
+                        text = String.format(Locale.US, "dip −%.1f%%", dip),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                }
             }
         }
         PortfolioNoteTag(note)
-    }
-}
-
-/**
- * "Pre-market +2.1% · After hours -0.3%" line; hidden when neither print
- * exists. The LIVE extended-hours read wins over the values stored with the
- * pick, which age as the session moves on.
- */
-@Composable
-private fun ExtendedHoursRow(pick: DailyPick, ext: ExtendedHours? = null) {
-    val pre = ext?.preMarketPct ?: pick.preMarketPct
-    val post = ext?.postMarketPct ?: pick.postMarketPct
-    if (pre == null && post == null) return
-    Spacer(modifier = Modifier.height(6.dp))
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        if (pre != null) {
-            Text(
-                text = "Pre-market ",
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.textDim
-            )
-            Text(
-                text = Fmt.signedPct(pre),
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.deltaColor(pre)
-            )
-        }
-        if (pre != null && post != null) {
-            Text(
-                text = "  ·  ",
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.textDim
-            )
-        }
-        if (post != null) {
-            Text(
-                text = "After hours ",
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.textDim
-            )
-            Text(
-                text = Fmt.signedPct(post),
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.deltaColor(post)
-            )
-        }
     }
 }
 
@@ -911,6 +1062,17 @@ private fun androidx.compose.foundation.lazy.LazyListScope.weeklyItems(
     onOpenAnalysis: (String) -> Unit,
     onRefresh: () -> Unit
 ) {
+    item {
+        Text(
+            text = "The week's strongest sustained setups — momentum, volume, and the " +
+                "35-technique board over the fixed universe plus Yahoo's predefined screens " +
+                "(a broad liquid-name sample, not every US stock). Every pick now carries " +
+                "its stop and first target in the reason line: a pick without an exit is " +
+                "not a plan.",
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+    }
     if (state.rows.isEmpty()) {
         item {
             if (state.loading || state.refreshing) {
@@ -966,6 +1128,15 @@ private fun androidx.compose.foundation.lazy.LazyListScope.weeklyItems(
             )
         }
     }
+    item {
+        Text(
+            text = "Computed at the week's open and held for the week; \"since pick\" tracks " +
+                "each name live. Scores sit on a fixed scale — a quiet week reads low, and " +
+                "that is the honest answer. Decision support, not financial advice.",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
+    }
 }
 
 @Composable
@@ -995,7 +1166,9 @@ private fun PickCard(
                     Text(
                         text = pick.symbol,
                         style = MaterialTheme.typography.titleMedium,
-                        color = AurumColors.text
+                        color = AurumColors.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (pick.name.isNotBlank()) {
                         Spacer(modifier = Modifier.width(8.dp))
@@ -1004,7 +1177,8 @@ private fun PickCard(
                             style = MaterialTheme.typography.bodySmall,
                             color = AurumColors.textDim,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                     }
                 }
@@ -1052,7 +1226,9 @@ private fun PickCard(
                 Text(
                     text = Fmt.money(pick.priceAtPick),
                     style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.text
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = "at pick",
@@ -1093,5 +1269,22 @@ private fun PortfolioNoteTag(note: PickNote?) {
             NoteKind.CONCENTRATION -> AurumColors.loss
             NoteKind.DIVERSIFIES -> AurumColors.info
         }
+    )
+}
+
+/**
+ * One-line universe provenance under a scan header (H4): exactly which
+ * screens were served, how many rows the universe held, and when — so
+ * "market scan" can never be read as "every US stock, right now".
+ */
+@Composable
+private fun ScanCoverageNote(coverage: com.aurum.invest.data.model.ScanCoverage?) {
+    if (coverage == null) return
+    Text(
+        text = "Universe: ${coverage.summary()}" +
+            (if (coverage.oldestAsOf > 0L) " · as of ${Fmt.timeShort(coverage.oldestAsOf)}" else ""),
+        style = MaterialTheme.typography.labelSmall,
+        color = if (coverage.healthy) AurumColors.textDim else AurumColors.gold,
+        modifier = Modifier.padding(top = 6.dp)
     )
 }

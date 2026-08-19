@@ -13,8 +13,8 @@ android {
         applicationId = "com.aurum.invest"
         minSdk = 26
         targetSdk = 34
-        versionCode = 26
-        versionName = "3.8"
+        versionCode = 53
+        versionName = "9.0"
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -41,6 +41,12 @@ android {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
     sourceSets["main"].kotlin.srcDirs("src/main/kotlin")
+    sourceSets["test"].kotlin.srcDirs("src/test/kotlin")
+}
+
+ksp {
+    // Exported Room schemas make migrations reviewable and testable.
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {
@@ -81,6 +87,15 @@ dependencies {
     // Splash screen so first frame is our dark ground, not a white flash
     implementation("androidx.core:core-splashscreen:1.0.1")
 
+    // App lock (biometric / device credential)
+    implementation("androidx.biometric:biometric:1.1.0")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+
+    // Unit tests — financial logic must have deterministic regression checks.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.0.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.0")
+    testImplementation("org.json:json:20240303")
 }

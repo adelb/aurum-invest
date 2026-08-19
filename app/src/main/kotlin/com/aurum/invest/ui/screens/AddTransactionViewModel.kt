@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
+import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.model.Position
 import com.aurum.invest.data.model.TradeSide
 import com.aurum.invest.data.repo.PortfolioRepository
@@ -30,11 +31,16 @@ data class AddTxState(
     val price: String = "",
     val amount: String = "",
     val fees: String = "",
+    val note: String = "",
     val suggestions: List<Pair<String, String>> = emptyList(),
     val saving: Boolean = false,
     val held: Position? = null,
+    /** True once the held-position lookup for the current symbol has completed. */
+    val heldKnown: Boolean = false,
     val sellAll: Boolean = false,
     val lastEdited: AddTxLastEdited = AddTxLastEdited.SHARES,
+    /** Set when a save was rejected (e.g. oversell caught at the authoritative check). */
+    val saveError: String? = null,
     /**
      * Money already invested across all open positions. Lets the amount be
      * sized as a percentage of the book instead of typed in dollars.
@@ -49,11 +55,30 @@ data class AddTxState(
     private val feesOk: Boolean
         get() = fees.isBlank() || (fees.trim().toDoubleOrNull()?.let { it >= 0.0 } == true)
 
+    /**
+     * A sell must never exceed the held quantity — the ledger records what
+     * happened, and "sold 50 while holding 10" cannot have happened. The form
+     * refuses it up front instead of letting the replay silently clamp later.
+     */
+    val oversellError: String?
+        get() {
+            if (side != TradeSide.SELL || !heldKnown) return null
+            val sh = sharesVal ?: return null
+            if (sh <= 0.0) return null
+            val heldShares = held?.shares ?: 0.0
+            return when {
+                heldShares <= 1e-9 -> "You don't hold $symbol — record the buy first."
+                sh > heldShares + 1e-6 -> "You hold only ${Fmt.qty(heldShares)} shares of $symbol."
+                else -> null
+            }
+        }
+
     val valid: Boolean
         get() = symbol.isNotBlank() &&
             (sharesVal ?: 0.0) > 0.0 &&
             (priceVal ?: 0.0) > 0.0 &&
-            feesOk
+            feesOk &&
+            (side == TradeSide.BUY || (heldKnown && oversellError == null))
 
     /** Buy: cost incl. fees. Sell: net proceeds after fees. */
     val total: Double
@@ -126,7 +151,7 @@ class AddTransactionViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onSymbolChange(value: String) {
         val cleaned = value.uppercase().filter { !it.isWhitespace() }
-        _state.update { it.copy(symbol = cleaned, held = null, sellAll = false) }
+        _state.update { it.copy(symbol = cleaned, held = null, heldKnown = false, sellAll = false, saveError = null) }
         refreshHeld(cleaned)
         searchJob?.cancel()
         if (cleaned.length < 2) {
@@ -143,8 +168,12 @@ class AddTransactionViewModel(app: Application) : AndroidViewModel(app) {
     fun pickSuggestion(symbol: String) {
         searchJob?.cancel()
         val sym = symbol.uppercase()
-        _state.update { it.copy(symbol = sym, suggestions = emptyList(), held = null, sellAll = false) }
+        _state.update { it.copy(symbol = sym, suggestions = emptyList(), held = null, heldKnown = false, sellAll = false, saveError = null) }
         refreshHeld(sym)
+    }
+
+    fun onNoteChange(value: String) {
+        _state.update { it.copy(note = value.take(200)) }
     }
 
     fun onSharesChange(value: String) {
@@ -208,16 +237,32 @@ class AddTransactionViewModel(app: Application) : AndroidViewModel(app) {
         if (!s.valid || s.saving) return
         val shares = s.sharesVal ?: return
         val price = s.priceVal ?: return
-        _state.update { it.copy(saving = true) }
+        _state.update { it.copy(saving = true, saveError = null) }
         viewModelScope.launch {
             try {
+                // Authoritative oversell check against the live ledger — the
+                // form's held snapshot could be stale by save time.
+                if (s.side == TradeSide.SELL) {
+                    val sellable = portfolio.sellableShares(s.symbol)
+                    if (shares > sellable + 1e-6) {
+                        _state.update {
+                            it.copy(
+                                saving = false,
+                                saveError = "Sell rejected: the ledger holds " +
+                                    "${Fmt.qty(sellable)} shares of ${s.symbol.trim().uppercase()}."
+                            )
+                        }
+                        return@launch
+                    }
+                }
                 portfolio.addTransaction(
                     symbol = s.symbol.trim().uppercase(),
                     side = s.side,
                     shares = shares,
                     price = price,
                     fees = s.feesVal,
-                    source = "MANUAL"
+                    source = "MANUAL",
+                    note = s.note.trim()
                 )
                 onDone()
             } finally {
@@ -238,8 +283,8 @@ class AddTransactionViewModel(app: Application) : AndroidViewModel(app) {
             val match = open.firstOrNull { it.symbol == sym }
             _state.update { st ->
                 if (st.symbol.trim().uppercase() != sym) st
-                else if (match == null) st.copy(held = null, sellAll = false)
-                else st.copy(held = match)
+                else if (match == null) st.copy(held = null, heldKnown = true, sellAll = false)
+                else st.copy(held = match, heldKnown = true)
             }
         }
     }

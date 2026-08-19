@@ -25,12 +25,13 @@ class BankFeedRepository(
 
     /**
      * Records a captured notification. Exact duplicates seen within the last
-     * 60 seconds are skipped. Returns the new event id, or -1 when deduped
-     * (or when storage fails).
+     * 24 hours are skipped (banks re-post the same alert on reconnect and
+     * device restart, not just within a minute). Returns the new event id,
+     * or -1 when deduped (or when storage fails).
      */
     suspend fun recordNotification(pkg: String, title: String, text: String, postedAt: Long): Long {
         return try {
-            val since = System.currentTimeMillis() - 60_000L
+            val since = System.currentTimeMillis() - 24L * 60 * 60 * 1000
             if (bankDao.countRecentDuplicates(pkg, title, text, since) > 0) return -1L
             val parsed = TradeParser.parse(title, text)
             bankDao.insert(
@@ -48,21 +49,74 @@ class BankFeedRepository(
         }
     }
 
-    /** Imports the event as a BANK-source transaction and marks it IMPORTED. */
-    suspend fun importEvent(eventId: Long, symbol: String, side: TradeSide, shares: Double, price: Double) {
-        try {
-            val event = bankDao.get(eventId) ?: return
+    /**
+     * Imports the event as a BANK-source transaction and marks it IMPORTED.
+     * [price] must already be in USD; when the alert was denominated in
+     * another currency, [currency]/[fxRate] record the conversion that
+     * produced it.
+     *
+     * Every operation is unique. Duplicate detection is layered by identity
+     * strength, never by the stock alone:
+     *  1. an event already IMPORTED never writes again (double-tap safe);
+     *  2. when the alert carries a broker reference, THAT is the operation's
+     *     identity — only a ledger row with the same (symbol, ref) is a
+     *     duplicate. A same-size rebuy at the same price is a different ref,
+     *     so it imports like any other operation;
+     *  3. only a ref-less alert falls back to the shape heuristic (same
+     *     symbol/side/shares/price within ±36h), the last net against a
+     *     broker re-sending the same alert text.
+     *
+     * Returns true when a ledger row was written, false otherwise.
+     */
+    suspend fun importEvent(
+        eventId: Long,
+        symbol: String,
+        side: TradeSide,
+        shares: Double,
+        price: Double,
+        currency: String = "USD",
+        fxRate: Double = 1.0
+    ): Boolean {
+        return try {
+            val event = bankDao.get(eventId) ?: return false
+            if (event.status == BankEvent.STATUS_IMPORTED) return false
+            val ref = event.parsedJson?.let { TradeParser.fromJson(it) }?.ref?.trim()
+                ?.takeIf { it.isNotEmpty() }
+            val duplicate =
+                if (ref != null) {
+                    // The reference identifies the operation — but only among
+                    // rows that carry one. This same execution may already sit
+                    // in the ledger from a ref-less alert, where there is no
+                    // ref to recognise it by, so the shape heuristic still runs
+                    // against ref-less rows. Rows with a DIFFERENT ref are left
+                    // alone: those are genuinely different operations.
+                    portfolio.bankRefExists(symbol, ref) ||
+                        portfolio.bankRefLessDuplicateExists(
+                            symbol, side, shares, price, event.postedAt
+                        )
+                } else {
+                    portfolio.bankDuplicateExists(symbol, side, shares, price, event.postedAt)
+                }
+            if (duplicate) {
+                bankDao.setStatus(eventId, BankEvent.STATUS_IMPORTED)
+                return false
+            }
             portfolio.addTransaction(
                 symbol = symbol,
                 side = side,
                 shares = shares,
                 price = price,
                 ts = event.postedAt,
-                source = "BANK"
+                source = "BANK",
+                currency = currency,
+                fxRate = fxRate,
+                ref = ref
             )
             bankDao.setStatus(eventId, BankEvent.STATUS_IMPORTED)
+            true
         } catch (_: Exception) {
             // never throw to callers
+            false
         }
     }
 
@@ -72,6 +126,20 @@ class BankFeedRepository(
         } catch (_: Exception) {
             // never throw to callers
         }
+    }
+
+    /** Retention: raw notification text is sensitive — old captures are deleted. */
+    suspend fun purgeOlderThan(days: Int): Int = try {
+        bankDao.purgeOlderThan(System.currentTimeMillis() - days * 24L * 60 * 60 * 1000)
+    } catch (_: Exception) {
+        0
+    }
+
+    /** Deletes every captured notification (imported ledger rows stay). */
+    suspend fun deleteAllCaptures(): Int = try {
+        bankDao.deleteAll()
+    } catch (_: Exception) {
+        0
     }
 
     private fun BankEventEntity.toModel(): BankEvent = BankEvent(

@@ -21,7 +21,16 @@ data class EditPositionState(
     val loading: Boolean = true,
     val trades: List<TransactionEntity> = emptyList(),
     /** The position as the ledger currently computes it — updates live while editing. */
-    val position: Position? = null
+    val position: Position? = null,
+    /** Set when an edit was rejected because it would make the ledger oversell. */
+    val editError: String? = null,
+    /**
+     * Shares this symbol sells that no buy in the ledger backs — normally 0.
+     * A gap appears when the history is incomplete (a bank SELL imported
+     * without its BUY), and the position quietly ignores those shares. The
+     * screen says so instead of letting the user meet it as a rejected edit.
+     */
+    val ledgerGap: Double = 0.0
 )
 
 /**
@@ -49,8 +58,14 @@ class EditPositionViewModel(app: Application) : AndroidViewModel(app) {
             portfolio.observeTransactionsFor(cleaned).collectLatest { trades ->
                 val position = portfolio.positionsNow()
                     .firstOrNull { it.symbol.equals(cleaned, ignoreCase = true) }
+                val gap = portfolio.ledgerGapFor(cleaned)
                 _state.update {
-                    it.copy(loading = false, trades = trades, position = position)
+                    it.copy(
+                        loading = false,
+                        trades = trades,
+                        position = position,
+                        ledgerGap = gap
+                    )
                 }
             }
         }
@@ -68,13 +83,60 @@ class EditPositionViewModel(app: Application) : AndroidViewModel(app) {
         if (shares <= 0.0 || price <= 0.0) return
         viewModelScope.launch {
             runCatching {
+                // Replay the whole ledger with this row changed. Only an edit
+                // that WIDENS the gap between what a symbol sells and what it
+                // ever bought is rejected — a gap the ledger already carried is
+                // not this edit's doing and must stay editable.
+                val problem = portfolio.validateEdit(
+                    tx.copy(side = side.name, shares = shares, price = price, fees = fees, ts = ts)
+                )
+                if (problem != null) {
+                    _state.update {
+                        it.copy(
+                            editError = "Edit rejected: $problem Record the missing buy " +
+                                "first, or reduce the sell to what you really sold."
+                        )
+                    }
+                    return@runCatching
+                }
                 portfolio.updateTransaction(tx, side, shares, price, fees, ts, plOverride)
+                _state.update { it.copy(editError = null) }
             }
         }
     }
 
+    fun clearEditError() {
+        _state.update { it.copy(editError = null) }
+    }
+
+    /** Records a stock split for this symbol (ratio 4.0 = 4-for-1, 0.25 = 1-for-4 reverse). */
+    fun recordSplit(ratio: Double, ts: Long) {
+        if (ratio <= 0.0 || symbol.isBlank()) return
+        viewModelScope.launch { runCatching { portfolio.addSplit(symbol, ratio, ts) } }
+    }
+
+    /**
+     * Deletes one ledger row — unless a later sell depended on it, in which
+     * case the deletion is rejected with the reason instead of silently
+     * rewriting that sell's realized outcome.
+     */
     fun deleteTrade(tx: TransactionEntity) {
-        viewModelScope.launch { runCatching { portfolio.deleteTransaction(tx) } }
+        viewModelScope.launch {
+            runCatching {
+                val problem = portfolio.validateDelete(tx)
+                if (problem != null) {
+                    _state.update {
+                        it.copy(
+                            editError = "Delete rejected: $problem Delete the dependent " +
+                                "sell first if you want both gone."
+                        )
+                    }
+                    return@runCatching
+                }
+                portfolio.deleteTransaction(tx)
+                _state.update { it.copy(editError = null) }
+            }
+        }
     }
 
     companion object {

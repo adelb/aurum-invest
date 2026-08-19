@@ -21,7 +21,9 @@ data class RssNewsItem(
 
 /**
  * Fetches and parses the Google News RSS search feed for a stock symbol.
- * Never throws: any network or parse failure yields an empty list.
+ * Never throws. NULL means the fetch FAILED (network/HTTP/parse breakdown);
+ * an empty list means the feed was reached and genuinely has no items —
+ * callers must not conflate the two.
  */
 class NewsClient {
 
@@ -30,20 +32,20 @@ class NewsClient {
         .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
-    /** Fetch + parse the feed for [symbol]. Empty list on any failure. */
-    suspend fun fetchNews(symbol: String): List<RssNewsItem> =
+    /** Fetch + parse the feed for [symbol]. Null = fetch failed; empty = verified no items. */
+    suspend fun fetchNews(symbol: String): List<RssNewsItem>? =
         fetchFeed(symbol + "+stock+when:5d")
 
     /**
      * Fetch + parse the feed for an arbitrary search [query] (spaces allowed;
      * they are encoded). Window defaults to the last 7 days.
      */
-    suspend fun fetchQuery(query: String, windowDays: Int = 7): List<RssNewsItem> =
+    suspend fun fetchQuery(query: String, windowDays: Int = 7): List<RssNewsItem>? =
         fetchFeed(
             query.trim().replace(Regex("\\s+"), "+") + "+when:${windowDays}d"
         )
 
-    private suspend fun fetchFeed(encodedQuery: String): List<RssNewsItem> =
+    private suspend fun fetchFeed(encodedQuery: String): List<RssNewsItem>? =
         withContext(Dispatchers.IO) {
             try {
                 val url = "https://news.google.com/rss/search" +
@@ -56,18 +58,23 @@ class NewsClient {
                     )
                     .build()
                 http.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) return@withContext emptyList()
-                    val body = response.body ?: return@withContext emptyList()
+                    if (!response.isSuccessful) return@withContext null
+                    val body = response.body ?: return@withContext null
                     parseRss(body.byteStream())
                 }
             } catch (_: Exception) {
-                emptyList()
+                null
             }
         }
 
-    /** Parse an RSS 2.0 stream; returns every well-formed `<item>` seen before any error. */
-    private fun parseRss(stream: InputStream): List<RssNewsItem> {
+    /**
+     * Parse an RSS 2.0 stream; returns every well-formed `<item>` seen before
+     * any error. Null when the stream broke before ANY item was parsed — a
+     * zero-item result is only trustworthy when the parse ran clean.
+     */
+    private fun parseRss(stream: InputStream): List<RssNewsItem>? {
         val items = mutableListOf<RssNewsItem>()
+        var broke = false
         try {
             val parser = Xml.newPullParser()
             parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
@@ -113,8 +120,9 @@ class NewsClient {
             }
         } catch (_: Exception) {
             // Keep whatever was parsed before the failure.
+            broke = true
         }
-        return items
+        return if (items.isEmpty() && broke) null else items
     }
 
     /** Collect the text content of the current element; leaves the parser on its end tag. */

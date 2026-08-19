@@ -7,11 +7,13 @@ import com.aurum.invest.AurumApp
 import com.aurum.invest.analytics.BookContext
 import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.core.Dates
-import com.aurum.invest.data.model.DailyPick
+import com.aurum.invest.analytics.UPick
+import com.aurum.invest.analytics.EntryPicker
 import com.aurum.invest.data.model.EntryPick
 import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.PowerPick
 import com.aurum.invest.data.model.Quote
+import com.aurum.invest.data.model.ScanCoverage
 import com.aurum.invest.data.model.WeeklyPick
 import com.aurum.invest.data.repo.PortfolioRepository
 import kotlinx.coroutines.async
@@ -39,12 +41,11 @@ data class PicksState(
     val weekLabel: String = "",
     val loading: Boolean = true,
     val refreshing: Boolean = false,
-    // Daily picks — same-day 3-10%+ candidates, off on Saturdays.
-    val dailyRows: List<DailyPick> = emptyList(),
-    val dailyLabel: String = "",
-    val dailyLoading: Boolean = true,
-    val dailyRefreshing: Boolean = false,
-    val saturday: Boolean = false,
+    // U-pattern picks — the standalone dip-then-rise engine's daily list.
+    val uRows: List<UPick> = emptyList(),
+    val uLabel: String = "",
+    val uLoading: Boolean = true,
+    val uRefreshing: Boolean = false,
     // Best entries — market-wide scan for stocks at a good entry price now.
     val entryRows: List<EntryPick> = emptyList(),
     val entryLoading: Boolean = true,
@@ -59,13 +60,19 @@ data class PicksState(
     val pickSectors: Map<String, String> = emptyMap(),
     // Live pre/post-market read per visible symbol, so every pick card can
     // carry the same extended-hours chips the portfolio shows.
-    val extHours: Map<String, ExtendedHours> = emptyMap()
+    val extHours: Map<String, ExtendedHours> = emptyMap(),
+    /**
+     * Universe health of the last market-wide scan (H4): these lists come
+     * from Yahoo's predefined screens, NOT "the whole US market", and an
+     * empty list only means "no setup" when the screens were reachable.
+     */
+    val coverage: ScanCoverage? = null
 )
 
 class PicksViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
-        const val TAB_DAILY = "daily"
+        const val TAB_U = "upattern"
         const val TAB_ENTRIES = "entries"
         const val TAB_POWER = "power"
         const val TAB_WEEKLY = "weekly"
@@ -78,12 +85,13 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
     /** Tabs whose scan has already been kicked off this session. */
     private val started = java.util.Collections.synchronizedSet(HashSet<String>())
 
+    /** Tabs with a scan in flight right now — guards double-fire on re-show. */
+    private val inFlight = java.util.Collections.synchronizedSet(HashSet<String>())
+
     private val _state = MutableStateFlow(
         PicksState(
             weekLabel = Dates.weekStartLabel(Dates.currentWeekStartIso()),
-            dailyLabel = Dates.todayLabel(),
-            saturday = Dates.isSaturday(),
-            dailyLoading = !Dates.isSaturday()
+            uLabel = Dates.todayLabel()
         )
     )
     val state: StateFlow<PicksState> = _state.asStateFlow()
@@ -170,7 +178,7 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
                 .map { st ->
                     (st.rows.map { it.pick.symbol } +
                         st.budgetRows.map { it.pick.symbol } +
-                        st.dailyRows.map { it.symbol } +
+                        st.uRows.map { it.symbol } +
                         st.entryRows.map { it.symbol } +
                         st.powerRows.map { it.symbol }).toSet()
                 }
@@ -186,6 +194,14 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
                         _state.update { it.copy(pickSectors = it.pickSectors + fetched) }
                     }
                 }
+        }
+    }
+
+    /** Re-reads the screener-universe health after a market-wide scan ran. */
+    private suspend fun refreshCoverage() {
+        runCatching {
+            val cov = market.screenerCoverage(EntryPicker.MARKET_SCREENS)
+            _state.update { it.copy(coverage = cov) }
         }
     }
 
@@ -215,32 +231,50 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Loads the data for [tab] the first time it is shown. Each scan runs at
-     * most once per session; already-loaded tabs return immediately.
+     * Loads the data for [tab] whenever it is shown. The repos hold the
+     * freshness rule (each list has a TTL), so re-showing a tab with a fresh
+     * set returns instantly, while a set from hours ago quietly recomputes —
+     * a power-hour list built at 3 AM must not be the 3:45 PM default read.
+     * The weekly lists are Room-backed and genuinely once-per-session.
      */
     fun ensureTab(tab: String) {
-        if (!started.add(tab)) return
-        when (tab) {
-            TAB_DAILY -> viewModelScope.launch {
-                if (Dates.isSaturday()) {
-                    _state.update { it.copy(dailyLoading = false) }
-                    return@launch
-                }
-                val daily = picks.ensureDaily()
-                _state.update { it.copy(dailyRows = daily, dailyLoading = false) }
-            }
-            TAB_ENTRIES -> viewModelScope.launch {
-                val entries = picks.ensureEntries()
-                _state.update { it.copy(entryRows = entries, entryLoading = false) }
-            }
-            TAB_POWER -> viewModelScope.launch {
-                val power = picks.ensurePower()
-                _state.update { it.copy(powerRows = power, powerLoading = false) }
-            }
-            TAB_WEEKLY -> viewModelScope.launch {
+        if (tab == TAB_WEEKLY) {
+            if (!started.add(tab)) return
+            viewModelScope.launch {
                 picks.ensureCurrentWeek()
                 _state.update { it.copy(loading = false) }
                 picks.ensureBudgetWeek()
+            }
+            return
+        }
+        if (!inFlight.add(tab)) return
+        when (tab) {
+            TAB_U -> viewModelScope.launch {
+                try {
+                    val rows = picks.ensureUPattern()
+                    _state.update { it.copy(uRows = rows, uLoading = false) }
+                    refreshCoverage()
+                } finally {
+                    inFlight.remove(tab)
+                }
+            }
+            TAB_ENTRIES -> viewModelScope.launch {
+                try {
+                    val entries = picks.ensureEntries()
+                    _state.update { it.copy(entryRows = entries, entryLoading = false) }
+                    refreshCoverage()
+                } finally {
+                    inFlight.remove(tab)
+                }
+            }
+            TAB_POWER -> viewModelScope.launch {
+                try {
+                    val power = picks.ensurePower()
+                    _state.update { it.copy(powerRows = power, powerLoading = false) }
+                    refreshCoverage()
+                } finally {
+                    inFlight.remove(tab)
+                }
             }
         }
     }
@@ -253,6 +287,7 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val power = picks.recomputePower()
                 _state.update { it.copy(powerRows = power, powerLoading = false) }
+                refreshCoverage()
                 loadExtHours(power.map { it.symbol }, maxAgeMs = 60_000L)
             } finally {
                 _state.update { it.copy(powerRefreshing = false) }
@@ -268,6 +303,7 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val entries = picks.recomputeEntries()
                 _state.update { it.copy(entryRows = entries, entryLoading = false) }
+                refreshCoverage()
                 loadExtHours(entries.map { it.symbol }, maxAgeMs = 60_000L)
             } finally {
                 _state.update { it.copy(entryRefreshing = false) }
@@ -275,17 +311,38 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Recompute today's daily picks from fresh quotes, extended hours, and news. */
-    fun refreshDaily() {
-        if (_state.value.dailyRefreshing || _state.value.saturday) return
+    /**
+     * Pull-to-refresh on the U tab: cheap live re-read when a list exists
+     * (states move in minutes; fingerprints don't), full market rescan when
+     * the day has no list yet.
+     */
+    fun refreshU() {
+        if (_state.value.uRefreshing) return
         viewModelScope.launch {
-            _state.update { it.copy(dailyRefreshing = true) }
+            _state.update { it.copy(uRefreshing = true) }
             try {
-                val daily = picks.recomputeDaily()
-                _state.update { it.copy(dailyRows = daily, dailyLoading = false) }
-                loadExtHours(daily.map { it.symbol }, maxAgeMs = 60_000L)
+                val rows =
+                    if (_state.value.uRows.isEmpty()) picks.recomputeUPattern()
+                    else picks.refreshULive()
+                _state.update { it.copy(uRows = rows, uLoading = false) }
+                refreshCoverage()
             } finally {
-                _state.update { it.copy(dailyRefreshing = false) }
+                _state.update { it.copy(uRefreshing = false) }
+            }
+        }
+    }
+
+    /** The explicit full rescan — screens, fingerprints, gates, live read. */
+    fun rescanU() {
+        if (_state.value.uRefreshing) return
+        viewModelScope.launch {
+            _state.update { it.copy(uRefreshing = true) }
+            try {
+                val rows = picks.recomputeUPattern()
+                _state.update { it.copy(uRows = rows, uLoading = false) }
+                refreshCoverage()
+            } finally {
+                _state.update { it.copy(uRefreshing = false) }
             }
         }
     }

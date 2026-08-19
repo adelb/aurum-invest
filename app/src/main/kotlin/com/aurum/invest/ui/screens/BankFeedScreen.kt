@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,10 +18,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -87,7 +90,9 @@ fun BankFeedScreen() {
             .background(AurumColors.bg)
     ) {
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .imePadding(),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 32.dp)
         ) {
             item(key = "header") {
@@ -180,8 +185,8 @@ fun BankFeedScreen() {
                     val event = state.pending[i]
                     PendingEventCard(
                         event = event,
-                        onImport = { symbol, side, shares, price ->
-                            vm.importEvent(event.id, symbol, side, shares, price)
+                        onImport = { symbol, side, shares, price, currency, fxRate ->
+                            vm.importEvent(event.id, symbol, side, shares, price, currency, fxRate)
                         },
                         onDismiss = { vm.dismissEvent(event.id) }
                     )
@@ -246,7 +251,7 @@ fun BankFeedScreen() {
 @Composable
 private fun PendingEventCard(
     event: BankEvent,
-    onImport: (symbol: String, side: TradeSide, shares: Double, price: Double) -> Unit,
+    onImport: (symbol: String, side: TradeSide, shares: Double, price: Double, currency: String, fxRate: Double) -> Unit,
     onDismiss: () -> Unit
 ) {
     var expanded by remember(event.id) { mutableStateOf(false) }
@@ -254,12 +259,20 @@ private fun PendingEventCard(
     var sharesText by remember(event.id) { mutableStateOf(editNum(event.parsed?.shares)) }
     var priceText by remember(event.id) { mutableStateOf(editNum(event.parsed?.price)) }
     var side by remember(event.id) { mutableStateOf(event.parsed?.side ?: TradeSide.BUY) }
+    var fxText by remember(event.id) { mutableStateOf("") }
+
+    // A non-USD alert must NOT be stored as a USD number. The form demands the
+    // conversion rate and shows the resulting USD price before import.
+    val currency = event.parsed?.currency ?: "USD"
+    val nonUsd = currency != "USD"
+    val fxVal = fxText.trim().replace(",", "").toDoubleOrNull()
 
     val sharesVal = sharesText.trim().replace(",", "").toDoubleOrNull()
     val priceVal = priceText.trim().replace(",", "").toDoubleOrNull()
     val valid = symbol.isNotBlank() && symbol.all { it.isLetter() } &&
         sharesVal != null && sharesVal > 0.0 &&
-        priceVal != null && priceVal > 0.0
+        priceVal != null && priceVal > 0.0 &&
+        (!nonUsd || (fxVal != null && fxVal > 0.0))
 
     AurumCard(
         modifier = Modifier
@@ -291,7 +304,9 @@ private fun PendingEventCard(
         Text(
             text = event.title,
             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-            color = AurumColors.text
+            color = AurumColors.text,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
         )
         Spacer(Modifier.height(4.dp))
         Text(
@@ -305,14 +320,23 @@ private fun PendingEventCard(
         val parsed = event.parsed
         if (parsed != null) {
             Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 PillTag(
                     text = parsed.side.name,
                     color = if (parsed.side == TradeSide.BUY) AurumColors.gain else AurumColors.loss
                 )
                 parsed.symbol?.let { PillTag(text = it, color = AurumColors.gold) }
                 parsed.shares?.let { PillTag(text = "${Fmt.qty(it)} sh", color = AurumColors.textDim) }
-                parsed.price?.let { PillTag(text = Fmt.money(it), color = AurumColors.textDim) }
+                parsed.price?.let {
+                    PillTag(
+                        text = if (nonUsd) "$currency ${Fmt.num2(it)}" else Fmt.money(it),
+                        color = if (nonUsd) AurumColors.gold else AurumColors.textDim
+                    )
+                }
+                parsed.ref?.let { PillTag(text = "ref $it", color = AurumColors.textDim) }
             }
         }
 
@@ -356,11 +380,37 @@ private fun PendingEventCard(
                     OutlinedTextField(
                         value = priceText,
                         onValueChange = { priceText = it },
-                        label = { Text("Price $") },
+                        label = { Text(if (nonUsd) "Price ($currency)" else "Price $") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         colors = feedFieldColors(),
                         modifier = Modifier.weight(1f)
+                    )
+                }
+                if (nonUsd) {
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = fxText,
+                        onValueChange = { fxText = it },
+                        label = { Text("1 $currency = ? USD") },
+                        singleLine = true,
+                        supportingText = {
+                            val p = priceVal
+                            val f = fxVal
+                            Text(
+                                text = if (p != null && f != null && f > 0.0) {
+                                    "Stored as ${Fmt.money(p * f)} per share (USD)"
+                                } else {
+                                    "This alert is in $currency — enter the FX rate so the " +
+                                        "ledger stores a real USD price, not a mislabeled number."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AurumColors.gold
+                            )
+                        },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        colors = feedFieldColors(),
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
                 Spacer(Modifier.height(14.dp))
@@ -368,7 +418,10 @@ private fun PendingEventCard(
                     Button(
                         onClick = {
                             if (sharesVal != null && priceVal != null) {
-                                onImport(symbol, side, sharesVal, priceVal)
+                                onImport(
+                                    symbol, side, sharesVal, priceVal,
+                                    currency, if (nonUsd) (fxVal ?: 1.0) else 1.0
+                                )
                             }
                         },
                         enabled = valid,

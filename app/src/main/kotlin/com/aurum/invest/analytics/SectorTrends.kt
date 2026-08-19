@@ -36,7 +36,15 @@ class SectorTrends(
         /** Theme -> proxy ETF. Ordered roughly by how often users ask about them. */
         val SECTORS: List<Triple<String, String, String>> = listOf(
             Triple("semis", "Semiconductors & AI hardware", "SMH"),
-            Triple("ai", "AI & robotics", "BOTZ"),
+            // BOTZ holds the AI-and-automation majors; "robotics" moved to the
+            // drones theme below so two shelves do not both claim the word.
+            Triple("ai", "AI & automation", "BOTZ"),
+            // ROBO is the liquid robotics-and-automation basket. No drone-pure
+            // ETF trades with enough volume to read momentum off honestly, so
+            // this proxies the robotics half and the WATCH names below carry
+            // the drone half — the shelf says so rather than implying the ETF
+            // tracks drones.
+            Triple("drones", "Drones & robotics", "ROBO"),
             Triple("quantum", "Quantum computing", "QTUM"),
             Triple("software", "Software & big tech", "XLK"),
             Triple("oil", "Oil & gas", "XLE"),
@@ -48,6 +56,8 @@ class SectorTrends(
             Triple("defense", "Defense & aerospace", "ITA"),
             Triple("industrials", "Industrials", "XLI"),
             Triple("consumer", "Consumer & retail", "XLY"),
+            Triple("media", "Media & telecom", "XLC"),
+            Triple("autos", "Autos & EV", "DRIV"),
             Triple("utilities", "Utilities & power", "XLU"),
             Triple("nuclear", "Uranium & nuclear", "URA"),
             Triple("solar", "Solar & clean energy", "TAN")
@@ -61,6 +71,10 @@ class SectorTrends(
             "ai" to listOf(
                 "PLTR" to "Palantir", "TSLA" to "Tesla",
                 "ISRG" to "Intuitive Surgical", "SYM" to "Symbotic"
+            ),
+            "drones" to listOf(
+                "AVAV" to "AeroVironment", "KTOS" to "Kratos Defense",
+                "RCAT" to "Red Cat Holdings", "UMAC" to "Unusual Machines"
             ),
             "quantum" to listOf(
                 "IONQ" to "IonQ", "RGTI" to "Rigetti",
@@ -100,6 +114,12 @@ class SectorTrends(
             "consumer" to listOf(
                 "WMT" to "Walmart", "COST" to "Costco", "HD" to "Home Depot", "MCD" to "McDonald's"
             ),
+            "media" to listOf(
+                "NFLX" to "Netflix", "DIS" to "Disney", "TMUS" to "T-Mobile", "SPOT" to "Spotify"
+            ),
+            "autos" to listOf(
+                "TSLA" to "Tesla", "GM" to "General Motors", "F" to "Ford", "RIVN" to "Rivian"
+            ),
             "utilities" to listOf(
                 "NEE" to "NextEra", "VST" to "Vistra", "DUK" to "Duke Energy", "SO" to "Southern Co."
             ),
@@ -110,6 +130,21 @@ class SectorTrends(
                 "FSLR" to "First Solar", "ENPH" to "Enphase", "RUN" to "Sunrun", "SEDG" to "SolarEdge"
             )
         )
+
+        /**
+         * Reverse of [WATCH]: symbol -> (theme key, theme label), for engines
+         * that need to know which tracked theme a candidate belongs to
+         * without a network lookup. Covers all the watch names; a symbol on
+         * two themes keeps the first (earlier themes rank higher in demand).
+         */
+        val SYMBOL_THEME: Map<String, Pair<String, String>> by lazy {
+            buildMap {
+                WATCH.forEach { (key, stocks) ->
+                    val label = SECTORS.firstOrNull { it.first == key }?.second ?: key
+                    stocks.forEach { (sym, _) -> putIfAbsent(sym, key to label) }
+                }
+            }
+        }
 
         /** News tone is fetched only for the strongest movers to keep the scan fast. */
         private const val NEWS_TOP = 6
@@ -173,19 +208,23 @@ class SectorTrends(
                             if (last <= 0.0 || c5 <= 0.0 || c20 <= 0.0) return@async null
                             val r5 = (last / c5 - 1.0) * 100.0
                             val r20 = (last / c20 - 1.0) * 100.0
-                            // Today's in-progress bar has partial volume — read
-                            // the surge off the last COMPLETED session instead.
+                            // A live bar has partial volume. After the close,
+                            // today's completed bar must remain in the read.
                             val volumes = candles.map { it.volume.toDouble() }
-                            val lastIsToday = com.aurum.invest.core.Dates.sameDay(
-                                candles.last().ts, System.currentTimeMillis()
-                            )
+                            val lastIsIncomplete =
+                                com.aurum.invest.core.Dates.isCurrentEtDailyBarIncomplete(
+                                    candles.last().ts
+                                )
                             val volIdx =
-                                if (lastIsToday && volumes.size >= 2) volumes.size - 2
+                                if (lastIsIncomplete && volumes.size >= 2) volumes.size - 2
                                 else volumes.size - 1
-                            val vol20 = volumes
-                                .subList((volIdx - 19).coerceAtLeast(0), volIdx + 1)
-                                .average()
-                            val volRatio = if (vol20 > 0.0) volumes[volIdx] / vol20 else 1.0
+                            val volBase = volumes
+                                .subList((volIdx - 20).coerceAtLeast(0), volIdx)
+                                .filter { it > 0.0 }
+                            val volRatio =
+                                if (volBase.isNotEmpty() && volumes[volIdx] > 0.0) {
+                                    volumes[volIdx] / volBase.average()
+                                } else 1.0
                             Partial(key, label, etf, r5, r20, volRatio)
                         } catch (_: Exception) {
                             null
@@ -195,10 +234,10 @@ class SectorTrends(
             }.filterNotNull()
             if (raw.isEmpty()) return emptyList()
 
-            // News tone for the leading movers only.
+            // News tone for the leading movers only. Results come back
+            // through awaitAll — no shared map mutated across IO threads.
             val byMomentum = raw.sortedByDescending { it.r5 * 2.0 + it.r20 }
-            val toneBySector = HashMap<String, Int>()
-            coroutineScope {
+            val toneBySector: Map<String, Int> = coroutineScope {
                 byMomentum.take(NEWS_TOP).map { p ->
                     async {
                         val items = try {
@@ -210,15 +249,19 @@ class SectorTrends(
                         } catch (_: Exception) {
                             emptyList()
                         }
-                        toneBySector[p.key] = items.sumOf { it.sentiment }.coerceIn(-5, 5)
+                        p.key to items.sumOf { it.sentiment }.coerceIn(-5, 5)
                     }
                 }.awaitAll()
-            }
+            }.toMap()
 
             raw.map { p ->
                 val tone = toneBySector[p.key] ?: 0
+                // Tone stays OUT of the ranking score: only the top movers
+                // get a tone fetched, so a ±10 term would rank the measured
+                // few against the unmeasured many on feed luck. It is still
+                // displayed and folded into the reason text.
                 val score = p.r5 * 2.0 + p.r20 * 0.8 +
-                    ((p.volRatio - 1.0) * 8.0).coerceIn(-4.0, 8.0) + tone * 2.0
+                    ((p.volRatio - 1.0) * 8.0).coerceIn(-4.0, 8.0)
                 SectorTrend(
                     key = p.key,
                     label = p.label,

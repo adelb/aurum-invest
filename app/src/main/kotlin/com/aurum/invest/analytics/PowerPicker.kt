@@ -4,6 +4,7 @@ import com.aurum.invest.core.Dates
 import com.aurum.invest.data.model.PowerPick
 import com.aurum.invest.data.model.ScreenerQuote
 import com.aurum.invest.data.repo.MarketRepository
+import com.aurum.invest.data.repo.NewsRepository
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
@@ -27,17 +28,22 @@ import org.json.JSONObject
  *  3. Deep read on the ~28 best: the last 4 TRADING DAYS' behavior (total
  *     move, up-day consistency, acceleration into today), RSI in the
  *     momentum band, 4-day volume vs the 20-day average, breakout proximity,
- *     and the 15-technique board (bearish boards are dropped).
+ *     and the 35-technique board (bearish boards are dropped).
  *
  * Next-day potential is derived honestly from ATR plus the momentum read;
  * each pick carries a morning exit target and a hard stop under today's low.
  * Never throws — failures skip the symbol.
  */
-class PowerPicker(private val market: MarketRepository) {
+class PowerPicker(
+    private val market: MarketRepository,
+    private val news: NewsRepository? = null
+) {
 
     companion object {
         private const val SHORTLIST = 28
         private const val CANDLE_CHUNK = 7
+        /** Fixed score denominator — the realistic max of finalScore's parts. */
+        private const val SCORE_SCALE = 100.0
 
         fun toJson(picks: List<PowerPick>): String {
             val arr = JSONArray()
@@ -64,6 +70,9 @@ class PowerPicker(private val market: MarketRepository) {
                     put("techTotal", p.techTotal)
                     put("techConfidence", p.techConfidence)
                     put("reason", p.reason)
+                    put("newsScore", p.newsScore)
+                    put("headline", p.headline)
+                    put("headlineSource", p.headlineSource)
                 })
             }
             return arr.toString()
@@ -94,9 +103,13 @@ class PowerPicker(private val market: MarketRepository) {
                         rsi = o.optDouble("rsi", 50.0),
                         techDirection = o.optString("techDirection", "NEUTRAL"),
                         techBullish = o.optInt("techBullish", 0),
-                        techTotal = o.optInt("techTotal", 15),
+                        // 0, not 15: a failed board must not resurrect as 0/15.
+                        techTotal = o.optInt("techTotal", 0),
                         techConfidence = o.optInt("techConfidence", 0),
-                        reason = o.optString("reason", "")
+                        reason = o.optString("reason", ""),
+                        newsScore = o.optInt("newsScore", 0),
+                        headline = o.optString("headline", ""),
+                        headlineSource = o.optString("headlineSource", "")
                     )
                 )
             }
@@ -112,7 +125,15 @@ class PowerPicker(private val market: MarketRepository) {
             val pool = HashMap<String, ScreenerQuote>()
             for (chunk in EntryPicker.MARKET_SCREENS.chunked(4)) {
                 coroutineScope {
-                    chunk.map { id -> async { market.getScreener(id) } }.awaitAll()
+                    chunk.map { id ->
+                        async {
+                            try {
+                                market.getScreener(id)
+                            } catch (_: Exception) {
+                                emptyList()
+                            }
+                        }
+                    }.awaitAll()
                 }.forEach { list ->
                     list.forEach { q -> pool.putIfAbsent(q.symbol, q) }
                 }
@@ -137,12 +158,11 @@ class PowerPicker(private val market: MarketRepository) {
             }
             if (deep.isEmpty()) return emptyList()
 
+            // Fixed scale: the score means the same thing every day, instead
+            // of rank 1 always reading 100 however weak the list.
             val ranked = deep.sortedByDescending { it.finalScore }.take(count)
-            val minF = ranked.minOf { it.finalScore }
-            val maxF = ranked.maxOf { it.finalScore }
-            val span = maxF - minF
             ranked.mapIndexed { index, d ->
-                val scaled = if (span > 0.0) 55.0 + (d.finalScore - minF) / span * 45.0 else 70.0
+                val scaled = (d.finalScore / SCORE_SCALE * 100.0).coerceIn(5.0, 98.0)
                 d.toPick(dateIso, index + 1, round(scaled * 10.0) / 10.0)
             }
         } catch (_: Exception) {
@@ -170,19 +190,25 @@ class PowerPicker(private val market: MarketRepository) {
         val vs50 = (q.price / q.fiftyDayAvg - 1.0) * 100.0
         if (vs50 < -1.0) return null   // momentum plays live above the 50-day
 
-        // Where is the price inside today's range? Near the high = conviction close.
+        // Where is the price inside today's range? Near the high = conviction
+        // close. Null = the screener sent no range — score it neutrally
+        // instead of letting missing data impersonate a 50% close.
         val closePos = if (q.dayHigh > q.dayLow && q.dayLow > 0.0) {
             (q.price - q.dayLow) / (q.dayHigh - q.dayLow)
-        } else 0.5
-        if (closePos < 0.45) return null   // finishing weak — fading into the close
+        } else null
+        if (closePos != null && closePos < 0.45) return null   // fading into the close
 
         val strengthScore = when {
             q.dayChangePct in 0.5..8.0 -> 8.0 + (4.0 - kotlin.math.abs(q.dayChangePct - 4.0))
             q.dayChangePct > 8.0 -> 6.0      // strong but extended
             else -> 3.0                       // flat-green day
         }
-        val closeScore = ((closePos - 0.45) * 20.0).coerceIn(0.0, 11.0)
-        val volPace = if (q.avgVolume3M > 0L) q.dayVolume.toDouble() / q.avgVolume3M else 0.0
+        val closeScore = closePos?.let { ((it - 0.45) * 20.0).coerceIn(0.0, 11.0) } ?: 0.0
+        // Missing volume is unknown, not zero — give it nothing either way,
+        // but never let it pretend to be a measured dead tape.
+        val volPace = if (q.avgVolume3M > 0L && q.dayVolume > 0L) {
+            q.dayVolume.toDouble() / q.avgVolume3M
+        } else 0.8
         val volScore = ((volPace - 0.8) * 6.0).coerceIn(0.0, 9.0)
         val off52 = if (q.fiftyTwoWeekHigh > 0.0) {
             (q.price / q.fiftyTwoWeekHigh - 1.0) * 100.0
@@ -216,7 +242,11 @@ class PowerPicker(private val market: MarketRepository) {
         val techBullish: Int,
         val techTotal: Int,
         val techConfidence: Int,
-        val reason: String
+        val reason: String,
+        val newsScore: Int,
+        val headline: String,
+        val headlineSource: String,
+        val livePrice: Double
     ) {
         fun toPick(date: String, rank: Int, score: Double) = PowerPick(
             date = date,
@@ -224,7 +254,7 @@ class PowerPicker(private val market: MarketRepository) {
             symbol = q.symbol,
             name = q.name,
             score = score,
-            price = round2(q.price),
+            price = round2(livePrice),
             dayChangePct = round1(q.dayChangePct),
             r4Pct = round1(r4Pct),
             upDays = upDays,
@@ -239,7 +269,10 @@ class PowerPicker(private val market: MarketRepository) {
             techBullish = techBullish,
             techTotal = techTotal,
             techConfidence = techConfidence,
-            reason = reason
+            reason = reason,
+            newsScore = newsScore,
+            headline = headline,
+            headlineSource = headlineSource
         )
 
         private fun round1(v: Double): Double = Math.round(v * 10.0) / 10.0
@@ -254,12 +287,29 @@ class PowerPicker(private val market: MarketRepository) {
                 emptyList()
             }
             if (candles.size < 30) return null
-            val price = q.price
+            // The screener price is up to 20 minutes old and still yesterday's
+            // close after hours — for an overnight thesis, read the live print.
+            val ext = try {
+                market.getExtendedHours(q.symbol)
+            } catch (_: Exception) {
+                null
+            }
+            // The morning's pre-market print stays stale all session — the price must follow the live session.
+            val price = when (Dates.marketSessionNow()) {
+                Dates.MarketSession.REGULAR -> ext?.regularPrice?.takeIf { it > 0.0 }
+                Dates.MarketSession.PRE -> ext?.preMarketPrice?.takeIf { it > 0.0 }
+                else -> ext?.postMarketPrice?.takeIf { it > 0.0 }
+                    ?: ext?.regularPrice?.takeIf { it > 0.0 }
+            } ?: q.price
             if (price <= 0.0) return null
+
+            // An overnight hold is the trade most exposed to an after-hours
+            // print — a post-market slide is a warning the close can't show.
+            val postPct = ext?.postMarketPct ?: 0.0
 
             // The last 4 COMPLETED trading days; today's in-progress bar (when
             // present) is excluded from the base and measured live via price.
-            val lastIsToday = Dates.sameDay(candles.last().ts, System.currentTimeMillis())
+            val lastIsToday = Dates.sameEtDay(candles.last().ts, System.currentTimeMillis())
             val completed = if (lastIsToday) candles.dropLast(1) else candles
             if (completed.size < 25) return null
             val cCloses = completed.map { it.close }
@@ -287,10 +337,11 @@ class PowerPicker(private val market: MarketRepository) {
             if (atr <= 0.0) return null
             val atrPct = atr / price * 100.0
 
-            // 4-day volume vs the 20-day average, completed bars only.
+            // 4-day volume vs the PRIOR 20 days — excluding the 4 being
+            // measured, or a real surge dilutes its own denominator.
             val vols = completed.map { it.volume.toDouble() }
             val vol4 = vols.takeLast(4).average()
-            val vol20 = vols.takeLast(20).average()
+            val vol20 = vols.dropLast(4).takeLast(20).average()
             val volumeRatio = if (vol20 > 0.0) vol4 / vol20 else 1.0
 
             val high20 = Indicators.recentHigh(cCloses, 20) ?: price
@@ -303,9 +354,14 @@ class PowerPicker(private val market: MarketRepository) {
             val bullishCount = analysis?.outlook?.bullishCount ?: 0
             val techTotal = analysis?.results?.size ?: 0
 
+            // -1 = the screener sent no range today; the reason then says
+            // nothing about the close position instead of inventing "50%".
+            // The range is the regular session's, so it must be read with the
+            // screener's own price — an extended print can sit outside it.
             val closePos = if (q.dayHigh > q.dayLow && q.dayLow > 0.0) {
-                (price - q.dayLow) / (q.dayHigh - q.dayLow) * 100.0
-            } else 50.0
+                val pos = (q.price - q.dayLow) / (q.dayHigh - q.dayLow) * 100.0
+                if (pos in 0.0..100.0) pos else -1.0
+            } else -1.0
 
             val r4Score = (r4 * 1.5).coerceIn(0.0, 15.0)
             val consistencyScore = upDays * 2.5
@@ -313,21 +369,39 @@ class PowerPicker(private val market: MarketRepository) {
             val rsiScore = (10.0 - kotlin.math.abs(rsi - 66.0) / 2.5).coerceIn(0.0, 10.0)
             val volScore = ((volumeRatio - 1.0) * 8.0).coerceIn(0.0, 10.0)
             val breakoutScore = if (atBreakout) 7.0 else 0.0
-            val boardScore = when (direction) {
-                TechniqueVerdict.BULLISH -> confidence * 0.12
+            // A missing board is unknown, not a 2-point NEUTRAL.
+            val boardScore = when {
+                analysis == null -> 0.0
+                direction == TechniqueVerdict.BULLISH -> confidence * 0.12
                 else -> 2.0
             }
-            val finalScore = pre * 0.7 + r4Score + consistencyScore + accelScore +
-                rsiScore + volScore + breakoutScore + boardScore
+            // News: the overnight trade lives or dies on headlines the chart
+            // cannot see. Bad tone vetoes; good tone earns points.
+            val newsItems = if (news != null && q.symbol.length >= 2) {
+                try {
+                    news.getNews(q.symbol, candles)
+                } catch (_: Exception) {
+                    emptyList()
+                }
+            } else {
+                emptyList()
+            }
+            val newsScore = newsItems.sumOf { it.sentiment }.coerceIn(-3, 3)
+            if (newsScore <= -3) return null
+            val headlineItem = newsItems.firstOrNull { it.sentiment != 0 } ?: newsItems.firstOrNull()
 
-            // Honest next-day potential: volatility capacity stretched by the
-            // momentum evidence, never a promise.
+            val finalScore = pre * 0.7 + r4Score + consistencyScore + accelScore +
+                rsiScore + volScore + breakoutScore + boardScore +
+                newsScore * 2.5 + (postPct.coerceIn(-4.0, 4.0)) * 1.5
+
+            // Next-day potential straight from measured volatility — no
+            // manufactured floor: a quiet name shows a quiet range.
             val catalyst = (r4 * 0.15).coerceIn(0.0, 1.5) +
                 (if (atBreakout) 1.0 else 0.0) +
                 ((volumeRatio - 1.2).coerceAtLeast(0.0) * 0.8).coerceAtMost(1.5)
-            var hiPct = (atrPct * 1.6 + catalyst).coerceIn(2.0, 12.0)
-            var loPct = (atrPct * 0.7).coerceIn(1.0, 6.0)
-            if (hiPct - loPct < 1.0) hiPct = min(12.0, loPct + 1.0)
+            var hiPct = (atrPct * 1.6 + catalyst).coerceIn(0.5, 12.0)
+            var loPct = (atrPct * 0.7).coerceIn(0.2, 6.0)
+            if (hiPct - loPct < 0.5) hiPct = min(12.0, loPct + 0.5)
             loPct = round(loPct * 10.0) / 10.0
             hiPct = round(hiPct * 10.0) / 10.0
 
@@ -338,10 +412,16 @@ class PowerPicker(private val market: MarketRepository) {
             )
             if (stop >= price) return null
 
-            val reason = buildReason(
+            var reason = buildReason(
                 r4, upDays, closePos, volumeRatio, rsi, atBreakout,
                 accelerating, direction, bullishCount, techTotal
             )
+            if (newsScore != 0) {
+                reason += String.format(Locale.US, ", news tone %+d", newsScore)
+            }
+            if (kotlin.math.abs(postPct) >= 1.0) {
+                reason += String.format(Locale.US, ", after-hours %+.1f%%", postPct)
+            }
 
             Deep(
                 q = q,
@@ -359,7 +439,11 @@ class PowerPicker(private val market: MarketRepository) {
                 techBullish = bullishCount,
                 techTotal = techTotal,
                 techConfidence = confidence,
-                reason = reason
+                reason = reason,
+                newsScore = newsScore,
+                headline = headlineItem?.title ?: "",
+                headlineSource = headlineItem?.source ?: "",
+                livePrice = price
             )
         } catch (_: Exception) {
             null
@@ -381,7 +465,10 @@ class PowerPicker(private val market: MarketRepository) {
         val parts = mutableListOf<String>()
         parts += String.format(Locale.US, "%+.1f%% over the last 4 trading days (%d of 4 up)", r4, upDays)
         if (accelerating) parts += "accelerating into today"
-        parts += String.format(Locale.US, "closing at %.0f%% of today's range", closePos)
+        // Only claim a close position that was actually measured.
+        if (closePos >= 0.0) {
+            parts += String.format(Locale.US, "closing at %.0f%% of today's range", closePos)
+        }
         if (volumeRatio >= 1.2) {
             parts += String.format(Locale.US, "%.1fx volume", volumeRatio)
         }

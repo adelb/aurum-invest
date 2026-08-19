@@ -3,6 +3,7 @@ package com.aurum.invest.analytics
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.model.ScreenerQuote
 import com.aurum.invest.data.repo.MarketRepository
+import com.aurum.invest.data.repo.NewsRepository
 import java.util.Locale
 import kotlin.math.round
 import kotlinx.coroutines.async
@@ -51,6 +52,16 @@ data class IntradayPick(
     val techConfidence: Int,
     val reason: String,
     val caution: String,             // "" when nothing needs flagging
+    /** Summed 5-day headline sentiment, clamped to -3..+3. */
+    val newsScore: Int = 0,
+    /** The most loaded recent headline, "" when none. */
+    val headline: String = "",
+    val headlineSource: String = "",
+    val headlineSentiment: Int = 0,
+    /** Tracked theme this name belongs to, "" when untracked. */
+    val sectorLabel: String = "",
+    /** Set when the theme ranks top-3 this week, "" otherwise. */
+    val sectorNote: String = "",
     val asOf: Long = 0L
 )
 
@@ -60,7 +71,7 @@ data class IntradayPick(
  * from their current price before the close.
  *
  * Integrity rules — a name is proposed only when ALL of these hold:
- *  1. **The technique board confirms it** — the 15-technique outlook must be
+ *  1. **The technique board confirms it** — the 35-technique outlook must be
  *     BULLISH. A trending screener line with a bearish board is dropped.
  *  2. **The current move agrees** — the stock trades above its open. A name
  *     falling on the session is never proposed for a further gain.
@@ -73,7 +84,10 @@ data class IntradayPick(
  * Outside the regular session the scan returns empty rather than dressing
  * stale numbers as live ones — the screen says when it last ran.
  */
-class IntradayPicker(private val market: MarketRepository) {
+class IntradayPicker(
+    private val market: MarketRepository,
+    private val news: NewsRepository? = null
+) {
 
     companion object {
         private const val POOL_SCREENS_CHUNK = 4
@@ -115,6 +129,12 @@ class IntradayPicker(private val market: MarketRepository) {
                     put("techConfidence", p.techConfidence)
                     put("reason", p.reason)
                     put("caution", p.caution)
+                    put("newsScore", p.newsScore)
+                    put("headline", p.headline)
+                    put("headlineSource", p.headlineSource)
+                    put("headlineSentiment", p.headlineSentiment)
+                    put("sectorLabel", p.sectorLabel)
+                    put("sectorNote", p.sectorNote)
                     put("asOf", p.asOf)
                 })
             }
@@ -152,6 +172,12 @@ class IntradayPicker(private val market: MarketRepository) {
                         techConfidence = o.optInt("techConfidence", 0),
                         reason = o.optString("reason", ""),
                         caution = o.optString("caution", ""),
+                        newsScore = o.optInt("newsScore", 0),
+                        headline = o.optString("headline", ""),
+                        headlineSource = o.optString("headlineSource", ""),
+                        headlineSentiment = o.optInt("headlineSentiment", 0),
+                        sectorLabel = o.optString("sectorLabel", ""),
+                        sectorNote = o.optString("sectorNote", ""),
                         asOf = o.optLong("asOf", 0L)
                     )
                 )
@@ -210,11 +236,23 @@ class IntradayPicker(private val market: MarketRepository) {
             }.sortedByDescending { it.dayVolume }.take(SHORTLIST)
             if (tradeable.isEmpty()) return emptyList()
 
+            // Which themes are hot this week — one read shared by the whole
+            // scan; a failed read costs nothing but the boost.
+            val newsRepo = news
+            val trends = if (newsRepo != null) {
+                runCatching { SectorTrends(market, newsRepo).compute() }.getOrDefault(emptyList())
+            } else {
+                emptyList()
+            }
+            val rankByKey = trends.withIndex().associate { (i, t) -> t.key to i }
+
             // 3 — measure every shortlisted name against the goal.
             val measured = ArrayList<Pair<IntradayPick, Double>>()
             for (chunk in tradeable.chunked(DEEP_CHUNK)) {
                 val results = coroutineScope {
-                    chunk.map { q -> async { measure(q, target, dateIso) } }.awaitAll()
+                    chunk.map { q ->
+                        async { measure(q, target, dateIso, trends, rankByKey) }
+                    }.awaitAll()
                 }
                 results.filterNotNull().forEach { measured.add(it) }
             }
@@ -233,7 +271,9 @@ class IntradayPicker(private val market: MarketRepository) {
     private suspend fun measure(
         q: ScreenerQuote,
         target: Double,
-        dateIso: String
+        dateIso: String,
+        trends: List<SectorTrend>,
+        rankByKey: Map<String, Int>
     ): Pair<IntradayPick, Double>? {
         return try {
             val daily = market.getDailyCandles(q.symbol, HISTORY_DAYS)
@@ -242,7 +282,7 @@ class IntradayPicker(private val market: MarketRepository) {
 
             // Today's bar carries the session open; history excludes it so
             // no statistic is contaminated by the in-progress day.
-            val lastIsToday = Dates.sameDay(daily.last().ts, now)
+            val lastIsToday = Dates.sameEtDay(daily.last().ts, now)
             val history = if (lastIsToday) daily.dropLast(1) else daily
             if (history.size < 20) return null
 
@@ -250,7 +290,7 @@ class IntradayPicker(private val market: MarketRepository) {
             // last half hour of drift. Fetched fresh — this list is only as
             // honest as its prints are recent.
             val intraday = market.getIntraday(q.symbol, maxAgeMs = LIVE_MAX_AGE_MS)
-            val todayBars = intraday.filter { Dates.sameDay(it.ts, now) }
+            val todayBars = intraday.filter { Dates.sameEtDay(it.ts, now) }
 
             // The session open, from today's daily bar or the first live bar.
             // A name with no observable open is skipped, never guessed.
@@ -294,6 +334,43 @@ class IntradayPicker(private val market: MarketRepository) {
             val hits = reaches.count { it >= needed }
             val hitRate = hits * 100.0 / reaches.size
 
+            // News tone: summed 5-day headline sentiment, fetched only for
+            // names that cleared every gate. One-letter tickers pull garbage
+            // feeds, so they skip the lookup entirely.
+            val newsItems = if (news != null && q.symbol.length >= 2) {
+                try {
+                    news.getNews(q.symbol, daily)
+                } catch (_: Exception) {
+                    emptyList()
+                }
+            } else {
+                emptyList()
+            }
+            val newsScore = newsItems.sumOf { it.sentiment }.coerceIn(-3, 3)
+            val headline = newsItems.firstOrNull { it.sentiment != 0 } ?: newsItems.firstOrNull()
+
+            // Trending-theme read: a free lookup over the tracked watch names.
+            // Untracked symbols get no boost rather than a network call — this
+            // desk rescans every two minutes.
+            val theme = SectorTrends.SYMBOL_THEME[q.symbol]
+            val sectorLabel = theme?.second ?: ""
+            val themeRank = theme?.let { rankByKey[it.first] }
+            val sectorBoost = when (themeRank) {
+                0 -> 6.0
+                1 -> 4.0
+                2 -> 2.0
+                else -> 0.0
+            }
+            val sectorNote = if (themeRank != null && themeRank < 3) {
+                String.format(
+                    Locale.US,
+                    "%s is this week's #%d theme (%+.1f%% in 5 days)",
+                    sectorLabel, themeRank + 1, trends[themeRank].r5Pct
+                )
+            } else {
+                ""
+            }
+
             val atr = Indicators.atr(history) ?: return null
             val lastClose = history.last().close
             if (lastClose <= 0.0) return null
@@ -314,7 +391,10 @@ class IntradayPicker(private val market: MarketRepository) {
                 if (dayHigh > dayLow) (price - dayLow) / (dayHigh - dayLow) * 100.0 else 50.0
 
             val targetPrice = price * (1.0 + target / 100.0)
-            val stop = price - atr * 0.5
+            // ATR-based stop, floored so a wide ATR can never park the stop
+            // more than 10% under the price (or below zero on a cheap name).
+            val stop = (price - atr * 0.5).coerceAtLeast(price * 0.90)
+            val stopDistancePct = (price - stop) / price * 100.0
 
             val rangeUsed = if (atr > 0.0) (dayHigh - dayLow) / atr else 0.0
             val caution = buildString {
@@ -338,7 +418,23 @@ class IntradayPicker(private val market: MarketRepository) {
                     )
                 }
                 if (momentum30 < -0.3) {
-                    append("The last half hour has been fading rather than pushing.")
+                    append("The last half hour has been fading rather than pushing. ")
+                }
+                if (stopDistancePct > target) {
+                    append(
+                        String.format(
+                            Locale.US,
+                            "The stop risks %.1f%% against a %.1f%% goal — size the position " +
+                                "for the stop, not the target. ",
+                            stopDistancePct, target
+                        )
+                    )
+                }
+                if (newsScore <= -2) {
+                    append(
+                        "Negative news tone this week — read the headline before trusting " +
+                            "the move."
+                    )
                 }
             }.trim()
 
@@ -352,12 +448,15 @@ class IntradayPicker(private val market: MarketRepository) {
             )
 
             // Rank: the historical odds of the remaining move lead; live
-            // confirmation (volume, momentum, range position) breaks ties.
+            // confirmation (volume, momentum, range position), news tone and
+            // a trending theme break ties.
             val score = hitRate * 1.0 +
                 (relVol.coerceAtMost(4.0) * 6.0) +
                 (momentum30.coerceIn(-2.0, 2.0) * 5.0) +
                 (rangePos * 0.08) +
-                (confidence * 0.15)
+                (confidence * 0.15) +
+                newsScore * 2.5 +
+                sectorBoost
 
             val pick = IntradayPick(
                 date = dateIso,
@@ -384,6 +483,12 @@ class IntradayPicker(private val market: MarketRepository) {
                 techConfidence = confidence,
                 reason = reason,
                 caution = caution,
+                newsScore = newsScore,
+                headline = headline?.title ?: "",
+                headlineSource = headline?.source ?: "",
+                headlineSentiment = headline?.sentiment ?: 0,
+                sectorLabel = sectorLabel,
+                sectorNote = sectorNote,
                 asOf = now
             )
             pick to score

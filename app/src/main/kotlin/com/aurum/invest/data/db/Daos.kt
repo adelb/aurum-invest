@@ -35,6 +35,120 @@ interface TransactionDao {
 
     @Query("SELECT COUNT(*) FROM transactions WHERE symbol = :symbol")
     suspend fun countForSymbol(symbol: String): Int
+
+    /**
+     * Guard against double-importing the same broker alert: counts BANK rows
+     * that match this trade within a time window. Shares/price use small
+     * tolerances so a re-parsed duplicate still matches.
+     */
+    @Query(
+        "SELECT COUNT(*) FROM transactions WHERE source = 'BANK' AND symbol = :symbol " +
+            "AND side = :side AND ABS(shares - :shares) < 0.0001 AND ABS(price - :price) < 0.01 " +
+            "AND ts BETWEEN :tsFrom AND :tsTo"
+    )
+    suspend fun countBankDuplicates(
+        symbol: String,
+        side: String,
+        shares: Double,
+        price: Double,
+        tsFrom: Long,
+        tsTo: Long
+    ): Int
+
+    /**
+     * How many BANK rows already carry this broker reference for this symbol.
+     * The reference is the operation's identity — this is the precise
+     * duplicate check, with no time window and no shape matching.
+     */
+    @Query(
+        "SELECT COUNT(*) FROM transactions WHERE source = 'BANK' " +
+            "AND symbol = :symbol AND ref = :ref"
+    )
+    suspend fun countBankRef(symbol: String, ref: String): Int
+
+    /**
+     * Shape-matching BANK rows that carry NO broker reference. A ref is the
+     * operation's identity, but only against rows that HAVE one: the same
+     * execution imported earlier from a ref-less alert has nothing for
+     * [countBankRef] to match, so without this the ref-carrying copy of that
+     * one execution imports a second time and the ledger oversells. Rows with
+     * a DIFFERENT ref stay excluded — a different ref is a different
+     * operation, which is the whole point of reference identity.
+     */
+    @Query(
+        "SELECT COUNT(*) FROM transactions WHERE source = 'BANK' AND ref IS NULL " +
+            "AND symbol = :symbol AND side = :side AND ABS(shares - :shares) < 0.0001 " +
+            "AND ABS(price - :price) < 0.01 AND ts BETWEEN :tsFrom AND :tsTo"
+    )
+    suspend fun countRefLessBankDuplicates(
+        symbol: String,
+        side: String,
+        shares: Double,
+        price: Double,
+        tsFrom: Long,
+        tsTo: Long
+    ): Int
+}
+
+@Dao
+interface CashEventDao {
+    @Insert
+    suspend fun insert(e: CashEventEntity): Long
+
+    @Delete
+    suspend fun delete(e: CashEventEntity)
+
+    @Query("SELECT * FROM cash_events ORDER BY ts DESC, id DESC")
+    fun observeAll(): Flow<List<CashEventEntity>>
+
+    @Query("SELECT * FROM cash_events ORDER BY ts ASC, id ASC")
+    suspend fun getAllOrdered(): List<CashEventEntity>
+
+    @Query("SELECT COUNT(*) FROM cash_events")
+    suspend fun count(): Int
+}
+
+@Dao
+interface PriceAlertDao {
+    @Insert
+    suspend fun insert(a: PriceAlertEntity): Long
+
+    @Delete
+    suspend fun delete(a: PriceAlertEntity)
+
+    @Update
+    suspend fun update(a: PriceAlertEntity)
+
+    @Query("SELECT * FROM price_alerts ORDER BY active DESC, createdAt DESC")
+    fun observeAll(): Flow<List<PriceAlertEntity>>
+
+    @Query("SELECT * FROM price_alerts WHERE symbol = :symbol ORDER BY active DESC, createdAt DESC")
+    fun observeForSymbol(symbol: String): Flow<List<PriceAlertEntity>>
+
+    @Query("SELECT * FROM price_alerts WHERE active = 1")
+    suspend fun getActive(): List<PriceAlertEntity>
+}
+
+@Dao
+interface AdviceLogDao {
+    @Insert
+    suspend fun insert(e: AdviceLogEntity): Long
+
+    @Query("SELECT * FROM advice_log ORDER BY ts DESC LIMIT :limit")
+    fun observeRecent(limit: Int): Flow<List<AdviceLogEntity>>
+
+    @Query("SELECT * FROM advice_log ORDER BY ts DESC LIMIT :limit")
+    suspend fun getRecent(limit: Int): List<AdviceLogEntity>
+
+    /** One row per (engine, symbol, action, day): re-renders must not duplicate. */
+    @Query(
+        "SELECT COUNT(*) FROM advice_log WHERE engine = :engine AND symbol = :symbol " +
+            "AND action = :action AND day = :day"
+    )
+    suspend fun countForDay(engine: String, symbol: String, action: String, day: String): Int
+
+    @Query("DELETE FROM advice_log WHERE ts < :beforeTs")
+    suspend fun purgeOlderThan(beforeTs: Long): Int
 }
 
 @Dao
@@ -86,6 +200,13 @@ interface BankEventDao {
 
     @Query("SELECT COUNT(*) FROM bank_events WHERE pkg = :pkg AND title = :title AND text = :text AND postedAt > :sinceTs")
     suspend fun countRecentDuplicates(pkg: String, title: String, text: String, sinceTs: Long): Int
+
+    /** Retention: raw notification text is sensitive; old captures are deleted, not kept forever. */
+    @Query("DELETE FROM bank_events WHERE postedAt < :beforeTs")
+    suspend fun purgeOlderThan(beforeTs: Long): Int
+
+    @Query("DELETE FROM bank_events")
+    suspend fun deleteAll(): Int
 }
 
 @Dao

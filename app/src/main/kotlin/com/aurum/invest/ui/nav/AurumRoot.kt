@@ -8,12 +8,12 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ShowChart
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Savings
-import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
@@ -43,16 +43,18 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.aurum.invest.AurumApp
 import com.aurum.invest.ui.screens.AddTransactionScreen
+import com.aurum.invest.ui.screens.AdviceHistoryScreen
 import com.aurum.invest.ui.screens.AnalysisScreen
 import com.aurum.invest.ui.screens.BankFeedScreen
 import com.aurum.invest.ui.screens.DashboardScreen
+import com.aurum.invest.ui.screens.DisclosureScreen
 import com.aurum.invest.ui.screens.EditPositionScreen
 import com.aurum.invest.ui.screens.PicksScreen
 import com.aurum.invest.ui.screens.PositionDetailScreen
 import com.aurum.invest.ui.screens.PreMarketScreen
 import com.aurum.invest.ui.screens.ReportsScreen
 import com.aurum.invest.ui.screens.SettingsScreen
-import com.aurum.invest.ui.screens.WatchlistScreen
+import com.aurum.invest.ui.screens.StocksScreen
 import com.aurum.invest.ui.screens.WealthScreen
 import com.aurum.invest.ui.theme.AurumColors
 import kotlinx.coroutines.flow.SharingStarted
@@ -60,10 +62,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 
 object Routes {
-    const val DASHBOARD = "dashboard"; const val WATCHLIST = "watchlist"
+    const val DASHBOARD = "dashboard"; const val STOCKS = "stocks"
     const val PICKS = "picks"; const val WEALTH = "wealth"
     const val PREMARKET = "premarket"
     const val FEED = "feed"; const val SETTINGS = "settings"
+    const val DISCLOSURES = "disclosures"; const val ADVICE_HISTORY = "advicehistory"
     const val ADD = "add?symbol={symbol}&side={side}"; const val DETAIL = "detail/{symbol}"
     const val ANALYSIS = "analysis/{symbol}"; const val REPORTS = "reports"
     const val EDIT_POSITION = "edit/{symbol}"
@@ -96,7 +99,7 @@ fun AurumRoot() {
     val topDests = remember {
         listOf(
             TopDest(Routes.DASHBOARD, "Portfolio", Icons.Rounded.AccountBalanceWallet),
-            TopDest(Routes.WATCHLIST, "Watchlist", Icons.Rounded.Visibility),
+            TopDest(Routes.STOCKS, "Stocks", Icons.AutoMirrored.Rounded.ShowChart),
             TopDest(Routes.PICKS, "Picks", Icons.AutoMirrored.Rounded.TrendingUp),
             TopDest(Routes.WEALTH, "Wealth", Icons.Rounded.Savings),
             // The 2% desk (pre-market + open-session scans against the daily
@@ -185,8 +188,8 @@ fun AurumRoot() {
                     onAddTrade = { nav.navigate(Routes.add(it)) }
                 )
             }
-            composable(Routes.WATCHLIST) {
-                WatchlistScreen(
+            composable(Routes.STOCKS) {
+                StocksScreen(
                     onOpenDetail = { nav.navigate(Routes.detail(it)) },
                     onOpenAnalysis = { nav.navigate(Routes.analysis(it)) }
                 )
@@ -215,11 +218,21 @@ fun AurumRoot() {
             composable(Routes.SETTINGS) {
                 SettingsScreen(
                     onBack = { nav.popBackStack() },
-                    onOpenFeed = { nav.navigate(Routes.FEED) }
+                    onOpenFeed = { nav.navigate(Routes.FEED) },
+                    onOpenDisclosures = { nav.navigate(Routes.DISCLOSURES) }
                 )
             }
+            composable(Routes.DISCLOSURES) {
+                DisclosureScreen(onBack = { nav.popBackStack() })
+            }
+            composable(Routes.ADVICE_HISTORY) {
+                AdviceHistoryScreen(onBack = { nav.popBackStack() })
+            }
             composable(Routes.REPORTS) {
-                ReportsScreen(onBack = { nav.popBackStack() })
+                ReportsScreen(
+                    onBack = { nav.popBackStack() },
+                    onOpenAdviceHistory = { nav.navigate(Routes.ADVICE_HISTORY) }
+                )
             }
             composable(
                 route = Routes.ADD,

@@ -3,6 +3,7 @@ package com.aurum.invest.analytics
 import com.aurum.invest.data.model.Candle
 import com.aurum.invest.data.model.WeeklyPick
 import com.aurum.invest.data.repo.MarketRepository
+import com.aurum.invest.data.repo.NewsRepository
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.round
@@ -18,7 +19,10 @@ import kotlinx.coroutines.coroutineScope
  * (5-day vs 20-day average), and distance from the 20-day high.
  * Never throws — symbols that fail to fetch are skipped; total failure yields an empty list.
  */
-class WeeklyPicker(private val market: MarketRepository) {
+class WeeklyPicker(
+    private val market: MarketRepository,
+    private val news: NewsRepository? = null
+) {
 
     companion object {
         /** Yahoo saved screens that widen the weekly universe with live movers. */
@@ -158,6 +162,8 @@ class WeeklyPicker(private val market: MarketRepository) {
         private const val CANDLE_RANGE_DAYS = 60
         private const val CHUNK_SIZE = 10
         private const val TOP_N = 10
+        /** Fixed score denominator — the realistic max of raw + technique bonus. */
+        private const val SCORE_SCALE = 75.0
 
         /**
          * Pre-filter margin over maxPrice applied to the last close, so a symbol
@@ -197,7 +203,9 @@ class WeeklyPicker(private val market: MarketRepository) {
                 .asSequence()
                 .filter { it.avgVolume3M >= 1_000_000L }
                 .filter {
-                    if (maxPrice != null) it.price in 1.0..maxPrice
+                    // The budget scan keeps a market-cap floor too — cheap
+                    // must not mean micro-cap illiquid.
+                    if (maxPrice != null) it.price in 1.0..maxPrice && it.marketCap >= 300_000_000.0
                     else it.price >= 5.0 && it.marketCap >= 2_000_000_000.0
                 }
                 .distinctBy { it.symbol }
@@ -240,28 +248,39 @@ class WeeklyPicker(private val market: MarketRepository) {
             }
             if (scored.isEmpty()) return emptyList()
 
-            val minRaw = scored.minOf { it.raw }
-            val maxRaw = scored.maxOf { it.raw }
-            val span = maxRaw - minRaw
-
-            val top = scored.sortedByDescending { it.raw }.take(TOP_N)
-
-            // Live prices for the winners only; fall back to last close per symbol.
+            // Deep-read the leaders: the 35-technique board votes, bearish
+            // boards are OUT, and every survivor gets a stop and a first
+            // target appended — a pick without an exit is not a plan.
+            val leaders = scored.sortedByDescending { it.raw }.take(TOP_N + 5)
             val quotes = try {
-                market.getQuotes(top.map { it.symbol })
+                market.getQuotes(leaders.map { it.symbol })
             } catch (_: Exception) {
                 emptyMap()
             }
+            val enriched = ArrayList<Triple<Scored, Double, String>>()
+            for (chunk in leaders.chunked(5)) {
+                val results = coroutineScope {
+                    chunk.map { s ->
+                        async { enrich(s, quotes[s.symbol]?.price ?: s.lastClose) }
+                    }.awaitAll()
+                }
+                results.filterNotNull().forEach { enriched.add(it) }
+            }
+            // enrich() rejects only bearish boards — an empty result means every
+            // leader failed the vote, and the honest list is then empty.
+            if (enriched.isEmpty()) return emptyList()
+            val ranked = enriched.sortedByDescending { it.first.raw + it.second }.take(TOP_N)
 
-            top.mapIndexed { index, s ->
-                val scaled = if (span > 0.0) (s.raw - minRaw) / span * 100.0 else 50.0
+            ranked.mapIndexed { index, (s, bonus, suffix) ->
+                // Fixed scale — 80 means strong in any week, not "rank 2 of 10".
+                val scaled = ((s.raw + bonus) / SCORE_SCALE * 100.0).coerceIn(5.0, 98.0)
                 WeeklyPick(
                     weekStart = weekStart,
                     rank = index + 1,
                     symbol = s.symbol,
                     name = s.name,
                     score = round(scaled * 10.0) / 10.0,
-                    reason = s.reason,
+                    reason = s.reason + suffix,
                     priceAtPick = quotes[s.symbol]?.price ?: s.lastClose
                 )
             }
@@ -311,35 +330,98 @@ class WeeklyPicker(private val market: MarketRepository) {
             }
             if (scored.isEmpty()) return emptyList()
 
-            val minRaw = scored.minOf { it.raw }
-            val maxRaw = scored.maxOf { it.raw }
-            val span = maxRaw - minRaw
-
-            // Live-quote check on a pool of the best pre-filtered names only.
-            val pool = scored.sortedByDescending { it.raw }.take(count * 3)
+            // A wide pool (count*6), so the price filter can't empty the list
+            // while qualified names wait just below the cut.
+            val pool = scored.sortedByDescending { it.raw }.take(count * 6)
             val quotes = try {
                 market.getQuotes(pool.map { it.symbol })
             } catch (_: Exception) {
                 emptyMap()
             }
-
-            pool.map { s -> s to (quotes[s.symbol]?.price ?: s.lastClose) }
+            val priced = pool.map { s -> s to (quotes[s.symbol]?.price ?: s.lastClose) }
                 .filter { (_, price) -> price > 0.0 && price < maxPrice }
+            val prices = HashMap<String, Double>()
+            priced.forEach { (s, p) -> prices[s.symbol] = p }
+
+            // Same depth pass as the main list: board vote, stop, target.
+            val enriched = ArrayList<Triple<Scored, Double, String>>()
+            for (chunk in priced.chunked(5)) {
+                val results = coroutineScope {
+                    chunk.map { (s, price) -> async { enrich(s, price) } }.awaitAll()
+                }
+                results.filterNotNull().forEach { enriched.add(it) }
+                if (enriched.size >= count * 2) break
+            }
+
+            enriched.sortedByDescending { it.first.raw + it.second }
                 .take(count)
-                .mapIndexed { index, (s, price) ->
-                    val scaled = if (span > 0.0) (s.raw - minRaw) / span * 100.0 else 50.0
+                .mapIndexed { index, (s, bonus, suffix) ->
+                    val scaled = ((s.raw + bonus) / SCORE_SCALE * 100.0).coerceIn(5.0, 98.0)
                     WeeklyPick(
                         weekStart = weekStart,
                         rank = index + 1,
                         symbol = s.symbol,
                         name = s.name,
                         score = round(scaled * 10.0) / 10.0,
-                        reason = String.format(Locale.US, "$%.2f — %s", price, s.reason),
-                        priceAtPick = price
+                        reason = s.reason + suffix,
+                        priceAtPick = prices[s.symbol] ?: s.lastClose
                     )
                 }
         } catch (_: Exception) {
             emptyList()
+        }
+    }
+
+    /**
+     * The depth pass a week-long hold deserves: a year of candles so the
+     * 35-technique board can vote (a BEARISH board returns null and leaves
+     * the list entirely), an ATR/structure stop, a first target from the
+     * board's 5-day expected high (claimed only when the projection clears
+     * the live price), and the news tone. Returns the scored name, its
+     * score bonus, and a reason suffix carrying the exits.
+     */
+    private suspend fun enrich(s: Scored, price: Double): Triple<Scored, Double, String>? {
+        return try {
+            val candles = try {
+                market.getDailyCandles(s.symbol, 365)
+            } catch (_: Exception) {
+                emptyList()
+            }
+            if (candles.size < 30 || price <= 0.0) return Triple(s, 0.0, "")
+            val analysis = Techniques.analyze(s.symbol, candles) ?: return Triple(s, 0.0, "")
+            if (analysis.outlook.direction == TechniqueVerdict.BEARISH) return null
+
+            val atr = Indicators.atr(candles, 14) ?: return Triple(s, 0.0, "")
+            val support = analysis.srData.supports.filter { it < price }.maxOrNull()
+            val stop = (support?.let { it - 0.5 * atr } ?: (price - 1.8 * atr))
+                .coerceAtLeast(price * 0.92)
+            // A projection below the live price is not a target — the suffix
+            // then carries no target claim rather than a fabricated +1% floor.
+            val target = analysis.outlook.expectedHigh.takeIf { it > price }
+
+            val newsScore = if (news != null && s.symbol.length >= 2) {
+                try {
+                    news.getNews(s.symbol, candles).sumOf { it.sentiment }.coerceIn(-3, 3)
+                } catch (_: Exception) {
+                    0
+                }
+            } else 0
+
+            val bonus = (
+                if (analysis.outlook.direction == TechniqueVerdict.BULLISH)
+                    analysis.outlook.confidence * 0.12 else 0.0
+                ) + newsScore * 1.5
+            val suffix = String.format(
+                Locale.US,
+                "; %d of %d techniques bullish; stop %s (-%.1f%%)%s%s",
+                analysis.outlook.bullishCount, analysis.results.size,
+                com.aurum.invest.core.Fmt.money(stop), (1.0 - stop / price) * 100.0,
+                target?.let { ", first target " + com.aurum.invest.core.Fmt.money(it) } ?: "",
+                if (newsScore != 0) String.format(Locale.US, "; news tone %+d", newsScore) else ""
+            )
+            Triple(s, bonus, suffix)
+        } catch (_: Exception) {
+            Triple(s, 0.0, "")
         }
     }
 
@@ -357,14 +439,19 @@ class WeeklyPicker(private val market: MarketRepository) {
         val r20 = (last / close20Ago - 1.0) * 100.0
         val rsi = Indicators.rsi(closes) ?: return null
 
-        // Today's in-progress bar has partial volume — exclude it from the surge read.
+        // Today's in-progress bar has partial volume — exclude it from the
+        // surge read. The 20-day base also EXCLUDES the 5 days being
+        // measured, or a genuine surge dilutes its own denominator.
         val volumes = candles.map { it.volume.toDouble() }
-        val lastIsToday =
-            com.aurum.invest.core.Dates.sameDay(candles.last().ts, System.currentTimeMillis())
-        val volEnd = if (lastIsToday && volumes.size >= 2) volumes.size - 1 else volumes.size
+        val lastIsIncomplete =
+            com.aurum.invest.core.Dates.isCurrentEtDailyBarIncomplete(candles.last().ts)
+        val volEnd =
+            if (lastIsIncomplete && volumes.size >= 2) volumes.size - 1 else volumes.size
         val vol5 = volumes.subList((volEnd - 5).coerceAtLeast(0), volEnd).average()
-        val vol20 = volumes.subList((volEnd - 20).coerceAtLeast(0), volEnd).average()
-        val volRatio = if (vol20 > 0.0) vol5 / vol20 else 1.0
+        val volBase = volumes.subList((volEnd - 25).coerceAtLeast(0), (volEnd - 5).coerceAtLeast(1))
+        // Null = no measurable base; the reason then says nothing about
+        // volume instead of printing a fabricated 1.0x.
+        val volRatio = if (volBase.isNotEmpty() && volBase.average() > 0.0) vol5 / volBase.average() else null
 
         val high20 = Indicators.recentHigh(closes, 20) ?: last
         val distFromHigh = if (high20 > 0.0) (high20 - last) / high20 * 100.0 else 0.0
@@ -372,16 +459,20 @@ class WeeklyPicker(private val market: MarketRepository) {
         // Component scores.
         val momentumScore = (r5 * 1.5).coerceIn(-15.0, 20.0) + (r20 * 0.75).coerceIn(-10.0, 15.0)
         val rsiScore = (12.0 - abs(rsi - 52.5) / 2.5).coerceIn(0.0, 12.0) // peaks in the 40..65 band
-        val volScore = ((volRatio - 1.0) * 12.0).coerceIn(0.0, 12.0)
+        val volScore = volRatio?.let { ((it - 1.0) * 12.0).coerceIn(0.0, 12.0) } ?: 0.0
         val distScore = (10.0 - distFromHigh * 1.25).coerceIn(0.0, 10.0) // closer to the 20d high is better
         val raw = momentumScore + rsiScore + volScore + distScore
 
         val parts = mutableListOf<String>()
-        parts += String.format(
-            Locale.US,
-            "%+.1f%% in 5 days and %+.1f%% in 20 on %.1fx volume",
-            r5, r20, volRatio
-        )
+        parts += if (volRatio != null) {
+            String.format(
+                Locale.US,
+                "%+.1f%% in 5 days and %+.1f%% in 20 on %.1fx volume",
+                r5, r20, volRatio
+            )
+        } else {
+            String.format(Locale.US, "%+.1f%% in 5 days and %+.1f%% in 20", r5, r20)
+        }
         parts += String.format(Locale.US, "RSI %.0f", rsi)
         parts += if (distFromHigh <= 0.1) {
             "at its 20-day high"

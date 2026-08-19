@@ -9,9 +9,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -27,6 +30,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -70,7 +74,7 @@ internal fun EditTradeDialog(
     var sharesText by remember { mutableStateOf(Fmt.qty(tx.shares)) }
     var priceText by remember { mutableStateOf(trimZeros(tx.price)) }
     var feesText by remember { mutableStateOf(if (tx.fees > 0.0) trimZeros(tx.fees) else "") }
-    var ts by remember { mutableStateOf(tx.ts) }
+    var ts by remember { mutableLongStateOf(tx.ts) }
     var showDatePicker by remember { mutableStateOf(false) }
     // The pinned +/- outcome: a sign toggle plus an absolute amount, so the
     // keyboard never needs a minus key. Empty amount = automatic.
@@ -125,12 +129,13 @@ internal fun EditTradeDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        modifier = Modifier.imePadding(),
         containerColor = AurumColors.surface,
         titleContentColor = AurumColors.text,
         textContentColor = AurumColors.textDim,
         title = { Text("Edit ${tx.symbol} trade") },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     TradeSideOption("Buy", side == TradeSide.BUY, Modifier.weight(1f)) {
                         side = TradeSide.BUY

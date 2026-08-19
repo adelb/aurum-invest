@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -180,6 +181,12 @@ fun ZoomablePriceChart(
 ) {
     val viewport = rememberDiagramViewport(closes.size)
     val textMeasurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    // The axis strip must be sized in real px (density-aware), not a bare
+    // float constant — on high-density screens a fixed 28f left too little
+    // room, so date labels clipped past the canvas and visually collided
+    // with the "Pinch to zoom…" hint text drawn below this chart.
+    val axisReservedPx = with(density) { 22.dp.toPx() }
     val labelStyle = TextStyle(
         color = AurumColors.textDim,
         fontSize = 10.sp,
@@ -199,7 +206,7 @@ fun ZoomablePriceChart(
             if (timestamps.size == closes.size) timestamps.subList(start, start + count)
             else emptyList()
 
-        val axisH = if (ts.isEmpty()) 0f else 28f
+        val axisH = if (ts.isEmpty()) 0f else axisReservedPx
         val chartH = size.height - axisH
         val padY = 26f
         val c = color ?: if (win.last() >= win.first()) AurumColors.gain else AurumColors.loss
@@ -269,11 +276,18 @@ fun ZoomablePriceChart(
         )
 
         // Date axis: first / middle / last visible bar. Intraday windows get
-        // times, multi-day windows get dates.
+        // times; multi-day windows get dates; windows spanning a year or more
+        // (1Y, 5Y, Max) must show the year — otherwise labels like "Jan" /
+        // "Jun" / "Jan" repeat with no way to tell which year is which.
         if (ts.isNotEmpty()) {
-            val intraday = ts.last() - ts.first() <= 48L * 3_600_000L
-            fun axisLabel(t: Long): String =
-                if (intraday) Fmt.timeShort(t) else Fmt.dateShort(t)
+            val visibleSpanMs = ts.last() - ts.first()
+            val intraday = visibleSpanMs <= 48L * 3_600_000L
+            val yearsApart = visibleSpanMs >= 300L * 24 * 3_600_000L
+            fun axisLabel(t: Long): String = when {
+                intraday -> Fmt.timeShort(t)
+                yearsApart -> Fmt.dateWithYear(t)
+                else -> Fmt.dateShort(t)
+            }
             val slots = listOf(0, win.size / 2, win.size - 1).distinct()
             for (i in slots) {
                 val text = AnnotatedString(axisLabel(ts[i]))

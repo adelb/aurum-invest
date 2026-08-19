@@ -54,7 +54,12 @@ data class PositionView(
     val marketValue: Double,
     val unrealizedPl: Double,
     val unrealizedPlPct: Double,
-    val dayPl: Double
+    val dayPl: Double,
+    /**
+     * False when no quote could be fetched: [marketValue] is then the COST of
+     * the position, not a market price, and the UI must say so.
+     */
+    val priced: Boolean = true
 )
 
 data class PortfolioSummary(
@@ -63,7 +68,10 @@ data class PortfolioSummary(
     val unrealizedPl: Double,
     val realizedPl: Double,
     val totalPl: Double,
-    val dayPl: Double
+    val dayPl: Double,
+    /** Open positions with no live quote — carried at cost inside [marketValue]. */
+    val unpricedCount: Int = 0,
+    val unpricedCost: Double = 0.0
 )
 
 enum class AdviceAction { STRONG_BUY, BUY, WAIT, HOLD, TAKE_PROFIT, CUT_LOSS, SELL }
@@ -83,11 +91,67 @@ enum class GoldLink { WITH_GOLD, INVERSE_GOLD, NEUTRAL }
 
 /** How a stock's daily returns correlate with gold (GLD proxy). */
 data class GoldRelation(
-    val correlation: Double,
+    /** Pearson r; null when the relationship could not be measured — a 0.00 would read as a measured "no link". */
+    val correlation: Double?,
     val link: GoldLink,
     val description: String,
     val sampleDays: Int
 )
+
+/**
+ * Provenance of a served feed. "No data", "stale data", and "fetch failed"
+ * are different answers and must never be conflated: an empty FRESH news feed
+ * means verified-no-articles; an empty FAILED one means we simply don't know.
+ */
+enum class FeedStatus { FRESH, STALE, FAILED }
+
+/** Symbol news plus how much to trust it. [asOf] is when the items were actually fetched. */
+data class NewsFeed(
+    val items: List<NewsItem>,
+    val status: FeedStatus,
+    val asOf: Long
+) {
+    companion object {
+        val FAILED = NewsFeed(emptyList(), FeedStatus.FAILED, 0L)
+    }
+}
+
+/** Daily candles plus provenance — distinguishes "short listing history" from "fetch failed". */
+data class CandleFeed(
+    val candles: List<Candle>,
+    val status: FeedStatus,
+    val asOf: Long
+)
+
+/**
+ * Health of the screener universe behind a "market-wide" scan (H4): how many
+ * of the requested Yahoo screens were actually served live, from stale cache,
+ * or not at all. An empty pick list only means "no setup" when the screens
+ * were actually reachable.
+ */
+data class ScanCoverage(
+    val screensRequested: Int,
+    val screensLive: Int,
+    val screensStale: Int,
+    val screensMissing: Int,
+    val rowsSeen: Int,
+    /** Oldest fetch time among served screens; 0 when nothing was served. */
+    val oldestAsOf: Long
+) {
+    val healthy: Boolean get() = screensMissing == 0 && screensStale == 0
+    val reachable: Boolean get() = screensLive + screensStale > 0
+
+    fun summary(): String = buildString {
+        append("$screensRequested Yahoo screens · $rowsSeen rows")
+        if (screensLive == screensRequested) {
+            append(" · all live")
+        } else {
+            append(" · $screensLive live")
+            if (screensStale > 0) append(" · $screensStale stale")
+            if (screensMissing > 0) append(" · $screensMissing unreachable")
+        }
+    }
+}
 
 data class NewsItem(
     val id: String,
@@ -135,33 +199,6 @@ data class ExtendedHours(
         get() = preMarketPrice ?: postMarketPrice ?: regularPrice
 }
 
-/** One same-day pick: a stock the engine reads as capable of a 3-10%+ up-move today. */
-data class DailyPick(
-    val date: String,             // ISO local date the pick was computed for
-    val rank: Int,
-    val symbol: String,
-    val name: String,
-    val score: Double,            // 0..100
-    val expectedLowPct: Double,   // potential day move, low bound (>= 3)
-    val expectedHighPct: Double,  // potential day move, high bound
-    val reason: String,
-    val price: Double,            // price at pick time
-    val prevClose: Double,
-    val dayChangePct: Double,     // regular-session move at pick time
-    val preMarketPct: Double?,
-    val postMarketPct: Double?,
-    val marketState: String,
-    val techDirection: String,    // BULLISH / BEARISH / NEUTRAL from the technique board
-    val techBullish: Int,         // bullish technique count
-    val techTotal: Int,           // how many techniques voted (15 as of v1.4)
-    val techConfidence: Int,
-    val volumeRatio: Double,      // latest session volume vs 20-day average
-    val newsScore: Int,           // summed headline sentiment, clamped
-    val headline: String,         // newest related headline ("" when none)
-    val headlineSource: String,
-    val headlineSentiment: Int
-)
-
 /** One row from a Yahoo predefined screener — the market-wide candidate pool. */
 data class ScreenerQuote(
     val symbol: String,
@@ -193,7 +230,7 @@ data class PowerPick(
     val dayChangePct: Double,
     val r4Pct: Double,               // move over the last 4 trading days
     val upDays: Int,                 // up closes among those 4 days (0..4)
-    val closePosPct: Double,         // where price sits in today's range, 0..100
+    val closePosPct: Double,         // where price sits in today's range, 0..100; -1 = range unknown
     val volumeRatio: Double,         // 4-day avg volume vs 20-day average
     val expectedLowPct: Double,      // honest next-day potential, low bound
     val expectedHighPct: Double,
@@ -204,7 +241,10 @@ data class PowerPick(
     val techBullish: Int,
     val techTotal: Int,
     val techConfidence: Int,
-    val reason: String
+    val reason: String,
+    val newsScore: Int = 0,          // -3..+3 summed headline tone, 5 days
+    val headline: String = "",       // "" when the week had no headline worth citing
+    val headlineSource: String = ""
 )
 
 /** A stock the market-wide scan reads as sitting at a good entry price right now. */
@@ -241,7 +281,13 @@ data class ParsedTrade(
     val price: Double?,
     val amount: Double?,
     val currency: String?,
-    val confidence: Int
+    val confidence: Int,
+    /**
+     * The broker's own transaction reference when the alert carries one
+     * ("Ref: AB12345", "Order #98765"). Auto-import requires it — a unique
+     * broker id is what makes an unattended ledger write traceable.
+     */
+    val ref: String? = null
 )
 
 /** A captured bank notification with its parse result. */

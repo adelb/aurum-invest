@@ -45,8 +45,11 @@ object PortfolioLens {
 
     /**
      * SectorTrends themes -> Yahoo sector names, ONLY where the mapping is
-     * unambiguous. Cross-sector themes (AI, quantum, nuclear, solar) are
-     * deliberately unmapped — claiming alignment there would be a guess.
+     * unambiguous. Cross-sector themes (AI, drones, quantum, nuclear, solar)
+     * are deliberately unmapped — claiming alignment there would be a guess.
+     * Drones especially: the shelf runs from defense primes through Industrials
+     * automation to a surgical-robotics name in Healthcare, so no single Yahoo
+     * sector covers it and any pick would misreport the book's exposure.
      */
     private val THEME_SECTORS: Map<String, Set<String>> = mapOf(
         "semis" to setOf("Technology"),
@@ -60,8 +63,17 @@ object PortfolioLens {
         "defense" to setOf("Industrials"),
         "industrials" to setOf("Industrials"),
         "consumer" to setOf("Consumer Cyclical", "Consumer Defensive"),
+        "media" to setOf("Communication Services"),
         "utilities" to setOf("Utilities")
     )
+
+    /**
+     * Trend themes whose sector mapping includes [sector]. Several themes can
+     * map to the same Yahoo sector (Technology -> semis + software); callers
+     * must treat a multi-theme answer as ambiguous, never pick one silently.
+     */
+    fun themesForSector(sector: String): List<String> =
+        THEME_SECTORS.filterValues { sector in it }.keys.toList()
 
     /**
      * Share of the book sitting in [themeKey]'s sectors, or null when the

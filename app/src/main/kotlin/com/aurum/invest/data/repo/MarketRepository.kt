@@ -3,8 +3,11 @@ package com.aurum.invest.data.repo
 import com.aurum.invest.data.db.CacheDao
 import com.aurum.invest.data.db.CacheEntity
 import com.aurum.invest.data.model.Candle
+import com.aurum.invest.data.model.CandleFeed
 import com.aurum.invest.data.model.ExtendedHours
+import com.aurum.invest.data.model.FeedStatus
 import com.aurum.invest.data.model.Quote
+import com.aurum.invest.data.model.ScanCoverage
 import com.aurum.invest.data.model.ScreenerQuote
 import com.aurum.invest.data.remote.YahooClient
 import kotlinx.coroutines.async
@@ -36,12 +39,15 @@ class MarketRepository(
         if (cachedQuote != null && !cachedQuote.lite && now - cached.updatedAt <= maxAgeMs) {
             return cachedQuote
         }
+        if (now < quotesCooldownUntil) return cachedQuote
         val fresh = yahoo.fetchQuote(symbol)
         if (fresh != null) {
             writeCache(key, quoteToJson(fresh).toString())
             return fresh
         }
-        // Network failed — serve stale cache when available.
+        // Network failed — serve stale cache when available, and stop asking
+        // for a moment so a throttle is not fed by the screen's own timer.
+        quotesCooldownUntil = now + THROTTLE_COOLDOWN_MS
         return cachedQuote
     }
 
@@ -70,12 +76,24 @@ class MarketRepository(
             }
         }
         if (misses.isEmpty()) return out
+        if (now < quotesCooldownUntil) {
+            // Throttled a moment ago. Serve what we have rather than spending
+            // another request on a refusal — the quotes keep their own
+            // fetchedAt, so the screens still say how old these prices are.
+            misses.forEach { symbol -> stale[symbol]?.let { out[symbol] = it } }
+            return out
+        }
 
         val fetched = coroutineScope {
             misses.chunked(BATCH_SIZE)
                 .map { chunk -> async { yahoo.fetchQuotesBatch(chunk) } }
                 .awaitAll()
         }.fold(HashMap<String, Quote>()) { acc, map -> acc.apply { putAll(map) } }
+        // Nothing came back for anything asked for: that is a throttle or a
+        // dead connection, not a bad symbol. Back off, or the live screens'
+        // timers keep hammering and hold the throttle open — which is how a
+        // price sits unchanged for half an hour while the market trades.
+        if (fetched.isEmpty()) quotesCooldownUntil = now + THROTTLE_COOLDOWN_MS
 
         for (symbol in misses) {
             val fresh = fetched[symbol]
@@ -109,20 +127,111 @@ class MarketRepository(
         symbol: String,
         rangeDays: Int = 120,
         maxAgeMs: Long = 21_600_000L
-    ): List<Candle> {
+    ): List<Candle> = getDailyCandlesFeed(symbol, rangeDays, maxAgeMs).candles
+
+    /**
+     * Daily CLOSES for many symbols, in one request per [BATCH_SIZE] rather
+     * than one per symbol.
+     *
+     * The returned candles carry the close in their open/high/low too, and no
+     * volume at all — the spark endpoint simply does not send those. So they
+     * are cached under their OWN key and never touch `candles:`: anything
+     * reading a high or a volume must still go through [getDailyCandles], and
+     * a caller that mixed the two would silently read a zero volume as a
+     * genuine one.
+     *
+     * This is what a browse shelf loads. Reading a month of closes one request
+     * per symbol is what put the device over Yahoo's per-IP limit: eighteen
+     * shelves of twenty-odd names each is four hundred requests in a couple of
+     * minutes, and the edge starts refusing everything long before the end.
+     */
+    suspend fun getCloseSeries(
+        symbols: List<String>,
+        rangeDays: Int = 30,
+        maxAgeMs: Long = 21_600_000L
+    ): Map<String, List<Candle>> {
+        if (symbols.isEmpty()) return emptyMap()
+        val wanted = symbols.distinct()
+        val now = System.currentTimeMillis()
+        val out = HashMap<String, List<Candle>>(wanted.size)
+        val stale = HashMap<String, List<Candle>>()
+        val misses = ArrayList<String>()
+
+        for (symbol in wanted) {
+            val cached = readCache("closes:$symbol:$rangeDays")
+            val series = cached?.let { candlesFromJson(it.json) }.orEmpty()
+            if (series.isNotEmpty() && now - cached!!.updatedAt <= maxAgeMs) {
+                out[symbol] = series
+            } else {
+                if (series.isNotEmpty()) stale[symbol] = series
+                misses.add(symbol)
+            }
+        }
+        if (misses.isEmpty()) return out
+        if (now < quotesPausedUntil()) {
+            misses.forEach { symbol -> stale[symbol]?.let { out[symbol] = it } }
+            return out
+        }
+
+        val range = sparkRangeFor(rangeDays)
+        val fetched = coroutineScope {
+            misses.chunked(BATCH_SIZE)
+                .map { chunk -> async { yahoo.fetchSparkCloses(chunk, range) } }
+                .awaitAll()
+        }.fold(HashMap<String, List<Candle>>()) { acc, map -> acc.apply { putAll(map) } }
+
+        for (symbol in misses) {
+            val fresh = fetched[symbol]
+            if (fresh != null && fresh.isNotEmpty()) {
+                writeCache("closes:$symbol:$rangeDays", candlesToJson(fresh).toString())
+                out[symbol] = fresh
+            } else {
+                stale[symbol]?.let { out[symbol] = it }
+            }
+        }
+        return out
+    }
+
+    /** Spark takes the same range words the chart API does. */
+    private fun sparkRangeFor(rangeDays: Int): String = when {
+        rangeDays <= 7 -> "5d"
+        rangeDays <= 30 -> "1mo"
+        rangeDays <= 95 -> "3mo"
+        rangeDays <= 190 -> "6mo"
+        rangeDays <= 400 -> "1y"
+        else -> "2y"
+    }
+
+    /**
+     * Daily candles WITH provenance. An empty FRESH feed means the symbol was
+     * reached and genuinely has that little history (recent listing); FAILED
+     * means the fetch broke and nothing is cached — "not enough history" and
+     * "couldn't load history" are different diagnoses and screens must not
+     * collapse them.
+     */
+    suspend fun getDailyCandlesFeed(
+        symbol: String,
+        rangeDays: Int = 120,
+        maxAgeMs: Long = 21_600_000L
+    ): CandleFeed {
         val key = "candles:$symbol:$rangeDays"
         val now = System.currentTimeMillis()
         val cached = readCache(key)
         if (cached != null && now - cached.updatedAt <= maxAgeMs) {
             val parsed = candlesFromJson(cached.json)
-            if (parsed.isNotEmpty()) return parsed
+            if (parsed.isNotEmpty()) return CandleFeed(parsed, FeedStatus.FRESH, cached.updatedAt)
         }
         val fresh = yahoo.fetchDailyCandles(symbol, rangeDays)
         if (fresh.isNotEmpty()) {
             writeCache(key, candlesToJson(fresh).toString())
-            return fresh
+            return CandleFeed(fresh, FeedStatus.FRESH, now)
         }
-        return cached?.let { candlesFromJson(it.json) } ?: emptyList()
+        val stale = cached?.let { candlesFromJson(it.json) }.orEmpty()
+        return if (stale.isNotEmpty()) {
+            CandleFeed(stale, FeedStatus.STALE, cached!!.updatedAt)
+        } else {
+            CandleFeed(emptyList(), FeedStatus.FAILED, 0L)
+        }
     }
 
     /**
@@ -200,6 +309,47 @@ class MarketRepository(
             return fresh
         }
         return cached?.let { screenerFromJson(it.json) } ?: emptyList()
+    }
+
+    /**
+     * Post-scan health of the screener universe (H4): how many of [scrIds]
+     * are served live, from stale cache, or not at all — read from the cache
+     * entries the scan itself refreshed. An empty pick list only means
+     * "no qualifying setup" when the screens were actually reachable.
+     */
+    suspend fun screenerCoverage(
+        scrIds: List<String>,
+        liveWindowMs: Long = 2_400_000L
+    ): ScanCoverage {
+        val now = System.currentTimeMillis()
+        var live = 0
+        var stale = 0
+        var missing = 0
+        var rows = 0
+        var oldest = 0L
+        for (id in scrIds) {
+            val cached = readCache("screener:$id")
+            val parsed = cached?.let { screenerFromJson(it.json) }.orEmpty()
+            when {
+                cached == null || parsed.isEmpty() -> missing++
+                now - cached.updatedAt <= liveWindowMs -> {
+                    live++; rows += parsed.size
+                    if (oldest == 0L || cached.updatedAt < oldest) oldest = cached.updatedAt
+                }
+                else -> {
+                    stale++; rows += parsed.size
+                    if (oldest == 0L || cached.updatedAt < oldest) oldest = cached.updatedAt
+                }
+            }
+        }
+        return ScanCoverage(
+            screensRequested = scrIds.size,
+            screensLive = live,
+            screensStale = stale,
+            screensMissing = missing,
+            rowsSeen = rows,
+            oldestAsOf = oldest
+        )
     }
 
     suspend fun search(query: String): List<Pair<String, String>> =
@@ -418,8 +568,46 @@ class MarketRepository(
             emptyList()
         }
 
+    /**
+     * When to stop asking for quotes until, after a read came back with
+     * nothing. Yahoo throttles per IP and the live screens ask on a timer, so
+     * calling straight through a throttle is what KEEPS it in place. Shared
+     * across the single and batch reads because the throttle is per IP, not
+     * per endpoint. Nothing is concealed by it: cached quotes carry their own
+     * fetchedAt, so the screens still report how old the prices are.
+     */
+    @Volatile
+    private var quotesCooldownUntil: Long = 0L
+
+    /**
+     * When quotes will be asked for again, or 0 when nothing is holding them
+     * back. The live screens read this so they can say WHY a price stopped
+     * moving rather than only how long ago it was read — "the data provider is
+     * refusing us for another two minutes" is a fact the user can act on; a
+     * bare timestamp on a frozen number is a puzzle.
+     */
+    fun quotesPausedUntil(): Long = maxOf(quotesCooldownUntil, yahoo.throttledUntil())
+
+    /**
+     * How many market-data requests this app has made in the last hour, and
+     * how many of those the provider refused.
+     *
+     * A dozen engines fetch on their own schedules and none of them can see
+     * what the others spend, so when the feed starts refusing there is no way
+     * to tell an unlucky hour from a runaway sweep. This is the number that
+     * settles it, and it is shown in Settings rather than kept in a log the
+     * user cannot reach.
+     */
+    fun feedRequestsLastHour(): Int = yahoo.requestsLastHour()
+
+    /** How many of [feedRequestsLastHour] came back refused (HTTP 429). */
+    fun feedRefusalsLastHour(): Int = yahoo.refusalsLastHour()
+
     companion object {
         const val GOLD_SYMBOL = "GLD"
+
+        /** How long to leave Yahoo alone after a quote read returns nothing. */
+        private const val THROTTLE_COOLDOWN_MS = 45_000L
 
         /** Symbols per spark request. Yahoo handles this comfortably in one call. */
         private const val BATCH_SIZE = 40

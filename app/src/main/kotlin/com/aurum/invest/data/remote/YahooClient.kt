@@ -5,6 +5,9 @@ import com.aurum.invest.data.model.ExtendedHours
 import com.aurum.invest.data.model.Quote
 import com.aurum.invest.data.model.ScreenerQuote
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -18,6 +21,75 @@ import java.util.concurrent.TimeUnit
  * All calls run on [Dispatchers.IO] and never throw — failures return null/empty.
  */
 class YahooClient {
+
+    /**
+     * When Yahoo's edge should be asked again, after it refused this device
+     * with a 429. Zero when nothing is being refused. Shared by every call on
+     * this client — the limit is per IP, so one endpoint being refused means
+     * they all are.
+     */
+    @Volatile
+    private var throttledUntil: Long = 0L
+
+    /** Consecutive refusals, for how long to stay quiet. Reset by a success. */
+    @Volatile
+    private var strikes: Int = 0
+
+    /**
+     * Every Yahoo call goes through one pacing gate.
+     *
+     * Aurum has a dozen-odd engines that each fetch on their own schedule —
+     * five background workers plus every screen — and not one of them could
+     * see what the others were spending. Optimising them one at a time is
+     * whack-a-mole; the edge limits the DEVICE, so the budget has to be kept
+     * in one place. Requests are spaced [MIN_SPACING_MS] apart, which caps the
+     * burst rate no matter how many callers pile in at once.
+     */
+    private val paceLock = Mutex()
+
+    @Volatile
+    private var nextSlotAt: Long = 0L
+
+    /** Request and refusal times of the last hour — read by the Settings diagnostic. */
+    private val recent = ArrayDeque<Long>()
+    private val refusals = ArrayDeque<Long>()
+
+    /** How many Yahoo requests this app has made in the last hour. */
+    fun requestsLastHour(): Int = synchronized(recent) {
+        prune()
+        recent.size
+    }
+
+    /** How many of them were refused with a 429. */
+    fun refusalsLastHour(): Int = synchronized(recent) {
+        prune()
+        refusals.size
+    }
+
+    private fun prune() {
+        val cutoff = System.currentTimeMillis() - 3_600_000L
+        while (recent.isNotEmpty() && recent.first() < cutoff) recent.removeFirst()
+        while (refusals.isNotEmpty() && refusals.first() < cutoff) refusals.removeFirst()
+    }
+
+    /**
+     * Waits for this call's turn. Each request claims the next free slot, so a
+     * burst of fifty queues into a paced stream instead of arriving at once —
+     * an arrival burst is what edge protections punish hardest.
+     */
+    private suspend fun awaitSlot() {
+        val waitMs = paceLock.withLock {
+            val now = System.currentTimeMillis()
+            val slot = maxOf(now, nextSlotAt)
+            nextSlotAt = slot + MIN_SPACING_MS
+            slot - now
+        }
+        synchronized(recent) {
+            recent.addLast(System.currentTimeMillis() + waitMs)
+            prune()
+        }
+        if (waitMs > 0) delay(waitMs)
+    }
 
     /** v8 chart API, range=1d interval=1m — latest price + previous close from meta. */
     suspend fun fetchQuote(symbol: String): Quote? = withContext(Dispatchers.IO) {
@@ -62,7 +134,12 @@ class YahooClient {
                     .newBuilder()
                     .addQueryParameter("symbols", symbols.joinToString(","))
                     .addQueryParameter("range", "1d")
-                    .addQueryParameter("interval", "5m")
+                    // 1m, not 5m. This series IS the live price on every list
+                    // screen, so the interval is the finest the price can ever
+                    // move: at 5m a "live" figure re-read every second still
+                    // could not change more than twelve times an hour, and sat
+                    // visibly frozen between bars while the market traded.
+                    .addQueryParameter("interval", "1m")
                     .build()
                     .toString()
                 val root = getJson(url) ?: return@withContext emptyMap()
@@ -101,6 +178,67 @@ class YahooClient {
             }
         }
 
+    /**
+     * Daily CLOSES for many symbols in ONE request, from the same spark
+     * endpoint the batch quote uses.
+     *
+     * Close and timestamp only: spark carries no open, high, low or volume, so
+     * the candles returned here repeat the close in the OHL fields and leave
+     * volume at 0. Nothing that reads those fields may be given this series —
+     * [MarketRepository.getCloseSeries] caches it under its own key for that
+     * reason, well away from the real candle cache.
+     *
+     * It exists because a browse shelf needs a month of closes for every name
+     * on it, and asking one request per symbol is what got the device
+     * rate-limited: a 22-name shelf cost 22 requests and now costs one.
+     */
+    suspend fun fetchSparkCloses(
+        symbols: List<String>,
+        range: String,
+        interval: String = "1d"
+    ): Map<String, List<Candle>> = withContext(Dispatchers.IO) {
+        if (symbols.isEmpty()) return@withContext emptyMap()
+        try {
+            val url = "https://query1.finance.yahoo.com/v8/finance/spark".toHttpUrl()
+                .newBuilder()
+                .addQueryParameter("symbols", symbols.joinToString(","))
+                .addQueryParameter("range", range)
+                .addQueryParameter("interval", interval)
+                .build()
+                .toString()
+            val root = getJson(url) ?: return@withContext emptyMap()
+            val out = HashMap<String, List<Candle>>(symbols.size)
+            for (symbol in symbols) {
+                val o = root.optJSONObject(symbol) ?: continue
+                val stamps = o.optJSONArray("timestamp") ?: continue
+                val closes = o.optJSONArray("close") ?: continue
+                val n = minOf(stamps.length(), closes.length())
+                val series = ArrayList<Candle>(n)
+                for (i in 0 until n) {
+                    if (closes.isNull(i)) continue
+                    val close = closes.optDouble(i, Double.NaN)
+                    if (close.isNaN() || close <= 0.0) continue
+                    val ts = stamps.optLong(i, -1L)
+                    if (ts <= 0L) continue
+                    series.add(
+                        Candle(
+                            ts = ts * 1000L,
+                            open = close,
+                            high = close,
+                            low = close,
+                            close = close,
+                            volume = 0L
+                        )
+                    )
+                }
+                if (series.isNotEmpty()) out[symbol] = series
+            }
+            out
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
     /** v8 chart API, interval=1d; range picked from [rangeDays]. */
     suspend fun fetchDailyCandles(symbol: String, rangeDays: Int): List<Candle> =
         withContext(Dispatchers.IO) {
@@ -110,7 +248,8 @@ class YahooClient {
                     rangeDays <= 30 -> "1mo"
                     rangeDays <= 95 -> "3mo"
                     rangeDays <= 190 -> "6mo"
-                    else -> "1y"
+                    rangeDays <= 400 -> "1y"
+                    else -> "2y"
                 }
                 val root = getJson(chartUrl(symbol, range = range, interval = "1d"))
                     ?: return@withContext emptyList()
@@ -422,33 +561,52 @@ class YahooClient {
             .build()
             .toString()
 
+    /** When Yahoo's edge stops refusing this device, or 0 when it is not. */
+    fun throttledUntil(): Long = throttledUntil
+
     /**
      * Executes a GET and parses the body as JSON. Returns null on any failure.
-     * Yahoo answers 429 when a burst comes too fast from one IP; that case
-     * gets one backoff retry rather than surfacing as missing data.
+     *
+     * Yahoo's edge answers 429 "Too Many Requests" per IP, and it does not
+     * forgive quickly — a device that has been asking too often stays refused
+     * for minutes. So a 429 is not retried: the old code slept 700ms and asked
+     * again, which spent a second request on a refusal and counted against the
+     * very limit it was waiting out. Instead the whole client goes quiet for a
+     * spell that DOUBLES with each consecutive refusal, honouring Retry-After
+     * when the response carries one, and resets the moment a read succeeds.
+     * Every Yahoo call shares the gate, because the limit is per IP and not
+     * per endpoint.
      */
-    private fun getJson(url: String): JSONObject? {
-        repeat(2) { attempt ->
-            try {
-                val request = Request.Builder()
-                    .url(url)
-                    .header("User-Agent", USER_AGENT)
-                    .get()
-                    .build()
-                http.newCall(request).execute().use { response ->
-                    if (response.code == 429 && attempt == 0) {
-                        Thread.sleep(700L)
-                        return@use
-                    }
-                    if (!response.isSuccessful) return null
-                    val body = response.body?.string() ?: return null
-                    return JSONObject(body)
+    private suspend fun getJson(url: String): JSONObject? {
+        if (System.currentTimeMillis() < throttledUntil) return null
+        awaitSlot()
+        return try {
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", USER_AGENT)
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            http.newCall(request).execute().use { response ->
+                if (response.code == 429) {
+                    synchronized(recent) { refusals.addLast(System.currentTimeMillis()) }
+                    strikes = (strikes + 1).coerceAtMost(THROTTLE_MAX_STRIKES)
+                    val advised = response.header("Retry-After")?.trim()
+                        ?.toLongOrNull()?.times(1000L)
+                    val wait = (advised ?: (THROTTLE_BASE_MS shl (strikes - 1)))
+                        .coerceIn(THROTTLE_BASE_MS, THROTTLE_CEILING_MS)
+                    throttledUntil = System.currentTimeMillis() + wait
+                    return null
                 }
-            } catch (_: Exception) {
-                return null
+                if (!response.isSuccessful) return null
+                val body = response.body?.string() ?: return null
+                strikes = 0
+                throttledUntil = 0L
+                JSONObject(body)
             }
+        } catch (_: Exception) {
+            null
         }
-        return null
     }
 
     private fun chartResult(root: JSONObject): JSONObject? {
@@ -520,8 +678,32 @@ class YahooClient {
     }
 
     companion object {
+        /**
+         * A COMPLETE browser User-Agent. The string used to stop at
+         * "AppleWebKit/537.36", which is not a UA any browser sends — it names
+         * an engine and then trails off. Yahoo's edge is measurably harsher on
+         * requests that do not look like a browser, and there is no upside to
+         * sending a half-formed one.
+         */
         private const val USER_AGENT =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
+        /**
+         * Smallest gap between any two Yahoo requests, across the whole app.
+         * ~6 per second at full tilt: fast enough that a shelf still fills
+         * promptly, slow enough that no engine can arrive as a burst.
+         */
+        private const val MIN_SPACING_MS = 160L
+
+        /** First quiet spell after a 429; each consecutive refusal doubles it. */
+        private const val THROTTLE_BASE_MS = 30_000L
+
+        /** Longest that quiet spell ever gets. */
+        private const val THROTTLE_CEILING_MS = 300_000L
+
+        /** Doublings past this add nothing — the ceiling is already reached. */
+        private const val THROTTLE_MAX_STRIKES = 4
 
         private val US_EXCHANGES = setOf(
             "NYQ", "NMS", "NGM", "NCM", "ASE", "PCX", "BTS", "NAS", "NYSE"

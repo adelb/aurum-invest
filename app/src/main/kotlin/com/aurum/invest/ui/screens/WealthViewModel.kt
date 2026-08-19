@@ -5,41 +5,72 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
 import com.aurum.invest.analytics.BookContext
+import com.aurum.invest.analytics.LiquidityPlan
 import com.aurum.invest.analytics.MarketRating
+import com.aurum.invest.analytics.MoneyFlowReport
+import com.aurum.invest.analytics.NextSessionReport
 import com.aurum.invest.analytics.PortfolioLens
+import com.aurum.invest.analytics.PortfolioPerformance
+import com.aurum.invest.analytics.PortfolioReview
 import com.aurum.invest.analytics.WeeklyStrategy
-import com.aurum.invest.analytics.WealthPlan
 import com.aurum.invest.data.repo.PortfolioRepository
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 data class WealthState(
-    val loading: Boolean = true,
-    val computing: Boolean = false,
-    /** Null until the user provides the base amount + 4-month target. */
-    val baseAmount: Double? = null,
-    val targetProfit: Double? = null,
-    val plan: WealthPlan? = null,
-    /** True while the setup form is showing (first run or user editing). */
-    val editing: Boolean = false,
+    /** The portfolio-evaluation engine's answer; null while computing or with no book. */
+    val review: PortfolioReview? = null,
+    val reviewLoading: Boolean = true,
+    /** The user's book by sector — same math as the dashboard allocation. */
+    val book: BookContext = BookContext.EMPTY,
+    /** True once the first positions read landed (so "no book" is a fact, not a race). */
+    val bookLoaded: Boolean = false,
+    /**
+     * True when the ledger holds open positions — distinct from [book], which
+     * can be EMPTY on a quote outage even while positions exist. Only this
+     * flag may drive the "no positions yet" message.
+     */
+    val hasPositions: Boolean = false,
     /** Whole-market rating; null while loading or when the market is unreachable. */
     val pulse: MarketRating? = null,
     val pulseLoading: Boolean = true,
-    /** The user's book by sector — same math as the dashboard allocation. */
-    val book: BookContext = BookContext.EMPTY,
-    /** Sector classification for the pulse's suggested symbols. */
-    val pulseSectors: Map<String, String> = emptyMap(),
-    /** This week's sector gaps + deployment plan for this book. */
+    /** The standalone money-flow engine's sector report. */
+    val flow: MoneyFlowReport? = null,
+    val flowLoading: Boolean = true,
+    /** This week's sector gaps for this book. */
     val strategy: WeeklyStrategy? = null,
-    val strategyLoading: Boolean = true
+    val strategyLoading: Boolean = true,
+    /** The next-session engine's 10 picks with alert flags. */
+    val nextSession: NextSessionReport? = null,
+    val nextSessionLoading: Boolean = true,
+    /** Reconstructed performance & risk (H2); null when too little could be measured. */
+    val performance: PortfolioPerformance? = null,
+    val performanceLoading: Boolean = false,
+    /** How much of the uninvested wallet cash to deploy, and where. */
+    val liquidityPlan: LiquidityPlan? = null,
+    val liquidityPlanLoading: Boolean = true,
+    /** True while a pull-to-refresh recompute is in flight. */
+    val refreshing: Boolean = false
 )
 
 class WealthViewModel(app: Application) : AndroidViewModel(app) {
+
+    companion object {
+        /**
+         * The portfolio review re-runs on this cadence while the screen lives.
+         * Quotes are the only network cost of a re-run — candles, news, flow
+         * and sectors are all served from their own caches — so the verdicts
+         * track the live tape without hammering the market API.
+         */
+        private const val LIVE_REVIEW_MS = 120_000L
+    }
 
     private val container = (app as AurumApp).container
     private val wealth = container.wealth
@@ -48,122 +79,194 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<WealthState> = _state.asStateFlow()
 
     private var strategyJob: Job? = null
+    private var reviewJob: Job? = null
+    private var nextSessionJob: Job? = null
+    private var performanceJob: Job? = null
+    private var liquidityPlanJob: Job? = null
 
     init {
-        // The market pulse is independent of the user's plan inputs.
+        // The live loop: keeps the review current between manual refreshes.
+        // Paused whenever nothing collects the state (screen not visible).
+        viewModelScope.launch {
+            while (isActive) {
+                delay(LIVE_REVIEW_MS)
+                if (_state.subscriptionCount.value == 0) continue
+                val s = _state.value
+                if (s.refreshing || !s.hasPositions || reviewJob?.isActive == true) continue
+                val fresh = wealth.getPortfolioReview(maxAgeMs = LIVE_REVIEW_MS)
+                if (fresh != null) {
+                    _state.update { it.copy(review = fresh, reviewLoading = false) }
+                }
+            }
+        }
+        // The money-flow report first — the strategy and review lean on it.
+        viewModelScope.launch {
+            val flow = wealth.getMoneyFlow()
+            _state.update { it.copy(flow = flow, flowLoading = false) }
+        }
         viewModelScope.launch {
             val pulse = wealth.getMarketPulse()
             _state.update { it.copy(pulse = pulse, pulseLoading = false) }
-            classifyPulse(pulse)
         }
-        // The user's book, kept live so exposure reads survive new trades.
+        // The user's book, kept live so the review survives new trades.
         viewModelScope.launch {
             container.portfolio.observePositions().collectLatest { positions ->
                 val open = positions.filter { PortfolioRepository.isOpen(it) }
                 if (open.isEmpty()) {
-                    _state.update { it.copy(book = BookContext.EMPTY) }
+                    _state.update {
+                        it.copy(
+                            book = BookContext.EMPTY, bookLoaded = true,
+                            hasPositions = false,
+                            review = null, reviewLoading = false,
+                            strategy = null,
+                            nextSession = null
+                        )
+                    }
+                    refreshStrategy()
+                    refreshNextSession()
+                    refreshLiquidityPlan()
                     return@collectLatest
                 }
                 val quotes = container.market.getQuotes(open.map { it.symbol })
                 val views = open.map { PortfolioRepository.toView(it, quotes[it.symbol]) }
                 val sectors = container.market.getSectors(open.map { it.symbol })
-                _state.update { it.copy(book = PortfolioLens.build(views, sectors)) }
+                _state.update {
+                    it.copy(
+                        book = PortfolioLens.build(views, sectors),
+                        bookLoaded = true,
+                        hasPositions = true,
+                        // A ledger change invalidates every portfolio-aware
+                        // output. Never leave the prior book's advice visible.
+                        review = null,
+                        reviewLoading = true,
+                        strategy = null,
+                        nextSession = null
+                    )
+                }
                 refreshStrategy()
+                refreshReview()
+                refreshNextSession()
+                refreshPerformance()
+                refreshLiquidityPlan()
             }
-        }
-        viewModelScope.launch {
-            val inputs = wealth.getInputs()
-            if (inputs == null) {
-                _state.update { it.copy(loading = false, editing = true) }
-                refreshStrategy()
-                return@launch
-            }
-            _state.update {
-                it.copy(baseAmount = inputs.first, targetProfit = inputs.second)
-            }
-            refreshStrategy()
-            // Serve the stored plan instantly, then freshen if the week rolled.
-            val stored = wealth.getPlan()
-            if (stored != null) {
-                _state.update { it.copy(loading = false, plan = stored) }
-            }
-            val fresh = wealth.ensurePlan()
-            _state.update { it.copy(loading = false, plan = fresh ?: stored) }
         }
     }
 
-    /** Saves the inputs and builds the first plan (or rebuilds after an edit). */
-    fun save(base: Double, target: Double) {
-        if (base <= 0.0 || target <= 0.0 || _state.value.computing) return
-        viewModelScope.launch {
-            _state.update {
-                it.copy(
-                    computing = true,
-                    editing = false,
-                    baseAmount = base,
-                    targetProfit = target
-                )
-            }
-            wealth.setInputs(base, target)
-            val plan = wealth.recompute()
-            _state.update { it.copy(computing = false, loading = false, plan = plan) }
-            refreshStrategy()
+    /** The reconstructed equity curve + risk stats; heavy, so cache-backed. */
+    private fun refreshPerformance() {
+        performanceJob?.cancel()
+        performanceJob = viewModelScope.launch {
+            _state.update { it.copy(performanceLoading = true) }
+            val perf = wealth.getPerformance()
+            _state.update { it.copy(performance = perf ?: it.performance, performanceLoading = false) }
         }
     }
 
     /**
-     * Recomputes this week's sector gaps + deployment split for the current
-     * book and budget. Cheap on repeat — its inputs are cached — so it can
-     * re-run whenever the portfolio changes.
+     * How much of the stated wallet's uninvested cash to deploy, and where.
+     * Liquidity comes from [com.aurum.invest.data.repo.WalletRepository.liquidityNow]
+     * — the one cash identity (total − invested + realized P/L) the dashboard
+     * and the reports card also read — so a wallet top-up, a new buy, and the
+     * proceeds of a sell all recompute this the same way a ledger change
+     * recomputes the portfolio review.
      */
+    private fun refreshLiquidityPlan() {
+        liquidityPlanJob?.cancel()
+        liquidityPlanJob = viewModelScope.launch {
+            _state.update { it.copy(liquidityPlanLoading = true) }
+            // Null wallet = unknown cash, which the engine reads as nothing to
+            // deploy — never as free money.
+            val liquidity = try {
+                container.wallet.liquidityNow() ?: 0.0
+            } catch (_: Exception) {
+                0.0
+            }
+            val plan = wealth.getLiquidityPlan(liquidity, _state.value.book)
+            _state.update {
+                it.copy(liquidityPlan = plan ?: it.liquidityPlan, liquidityPlanLoading = false)
+            }
+        }
+    }
+
+    /** The portfolio review — fingerprinted, so a new trade recomputes it. */
+    private fun refreshReview() {
+        reviewJob?.cancel()
+        reviewJob = viewModelScope.launch {
+            _state.update { it.copy(reviewLoading = true) }
+            val review = wealth.getPortfolioReview()
+            _state.update { it.copy(review = review ?: it.review, reviewLoading = false) }
+        }
+    }
+
+    /** This week's sector gaps for the current book. Cheap on repeat — inputs cached. */
     private fun refreshStrategy() {
         strategyJob?.cancel()
         strategyJob = viewModelScope.launch {
             _state.update { it.copy(strategyLoading = true) }
-            val st = _state.value
-            val strategy = wealth.getStrategy(st.book, st.baseAmount ?: 0.0)
+            val strategy = wealth.getStrategy(_state.value.book)
             _state.update {
                 it.copy(strategy = strategy ?: it.strategy, strategyLoading = false)
             }
         }
     }
 
-    /** Sector lookups for the pulse's suggested stocks (cached 30 days). */
-    private suspend fun classifyPulse(pulse: MarketRating?) {
-        if (pulse == null) return
-        val symbols = (pulse.bestYesterday.map { it.symbol } +
-            pulse.nextDay.map { it.symbol }).distinct()
-        if (symbols.isEmpty()) return
-        val sectors = container.market.getSectors(symbols)
-        if (sectors.isNotEmpty()) {
-            _state.update { it.copy(pulseSectors = it.pulseSectors + sectors) }
+    /** Re-applies current holdings to the cached market scan without stale tags. */
+    private fun refreshNextSession() {
+        nextSessionJob?.cancel()
+        nextSessionJob = viewModelScope.launch {
+            _state.update { it.copy(nextSessionLoading = true) }
+            val nextSession = wealth.getNextSession()
+            _state.update {
+                it.copy(nextSession = nextSession ?: it.nextSession, nextSessionLoading = false)
+            }
         }
     }
 
-    /** Re-runs this week's full market scan — the plan AND the market pulse. */
+    /** Re-runs every engine from live data. */
     fun refresh() {
-        if (_state.value.computing) return
+        if (_state.value.refreshing) return
+        _state.update { it.copy(refreshing = true) }
+        strategyJob?.cancel()
+        reviewJob?.cancel()
+        nextSessionJob?.cancel()
+        liquidityPlanJob?.cancel()
         viewModelScope.launch {
-            _state.update { it.copy(pulseLoading = true) }
-            val pulse = wealth.recomputeMarketPulse()
-            _state.update { it.copy(pulse = pulse ?: it.pulse, pulseLoading = false) }
-            classifyPulse(pulse)
-        }
-        viewModelScope.launch {
-            _state.update { it.copy(computing = true) }
-            val plan = wealth.recompute()
-            _state.update { it.copy(computing = false, plan = plan ?: it.plan) }
-            refreshStrategy()
-        }
-    }
+            try {
+                _state.update { it.copy(flowLoading = true, pulseLoading = true) }
+                val flow = wealth.recomputeMoneyFlow()
+                _state.update { it.copy(flow = flow ?: it.flow, flowLoading = false) }
+                val pulse = wealth.recomputeMarketPulse()
+                _state.update { it.copy(pulse = pulse ?: it.pulse, pulseLoading = false) }
 
-    fun startEditing() {
-        _state.update { it.copy(editing = true) }
-    }
+                _state.update { it.copy(strategyLoading = true) }
+                val strategy = wealth.getStrategy(_state.value.book)
+                _state.update {
+                    it.copy(strategy = strategy ?: it.strategy, strategyLoading = false)
+                }
 
-    fun cancelEditing() {
-        if (_state.value.plan != null) {
-            _state.update { it.copy(editing = false) }
+                _state.update { it.copy(reviewLoading = true) }
+                val review = wealth.recomputePortfolioReview()
+                _state.update { it.copy(review = review ?: it.review, reviewLoading = false) }
+
+                _state.update { it.copy(nextSessionLoading = true) }
+                val ns = wealth.recomputeNextSession()
+                _state.update {
+                    it.copy(nextSession = ns ?: it.nextSession, nextSessionLoading = false)
+                }
+
+                _state.update { it.copy(liquidityPlanLoading = true) }
+                val liquidity = try {
+                    container.wallet.liquidityNow() ?: 0.0
+                } catch (_: Exception) {
+                    0.0
+                }
+                val plan = wealth.recomputeLiquidityPlan(liquidity, _state.value.book)
+                _state.update {
+                    it.copy(liquidityPlan = plan ?: it.liquidityPlan, liquidityPlanLoading = false)
+                }
+            } finally {
+                _state.update { it.copy(refreshing = false) }
+            }
         }
     }
 }
