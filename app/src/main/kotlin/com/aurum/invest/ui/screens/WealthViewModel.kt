@@ -242,8 +242,8 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun cancelEditing() {
-        if (_state.value.plan != null) {
-            _state.update { it.copy(editing = false) }
-        }
+        // The goal is offered, never forced — closing the form always works,
+        // plan or no plan; the Wealth tab stands on the portfolio alone.
+        _state.update { it.copy(editing = false) }
     }
 }
