@@ -164,6 +164,71 @@ class MarketRepository(
         }
     }
 
+    /**
+     * Daily CLOSES for many symbols, in one request per [BATCH_SIZE] rather
+     * than one per symbol. The returned candles carry the close in their
+     * open/high/low too, and no volume at all — the spark endpoint simply
+     * does not send those. So they are cached under their OWN key and never
+     * touch `candles:`: anything reading a high or a volume must still go
+     * through [getDailyCandles], and a caller that mixed the two would
+     * silently read a zero volume as a genuine one.
+     *
+     * This is what a browse shelf loads. Reading a month of closes one
+     * request per symbol is what puts a device over Yahoo's per-IP limit.
+     */
+    suspend fun getCloseSeries(
+        symbols: List<String>,
+        rangeDays: Int = 30,
+        maxAgeMs: Long = 21_600_000L
+    ): Map<String, List<Candle>> {
+        if (symbols.isEmpty()) return emptyMap()
+        val wanted = symbols.distinct()
+        val now = System.currentTimeMillis()
+        val out = HashMap<String, List<Candle>>(wanted.size)
+        val stale = HashMap<String, List<Candle>>()
+        val misses = ArrayList<String>()
+
+        for (symbol in wanted) {
+            val cached = readCache("closes:$symbol:$rangeDays")
+            val series = cached?.let { candlesFromJson(it.json) }.orEmpty()
+            if (series.isNotEmpty() && now - cached!!.updatedAt <= maxAgeMs) {
+                out[symbol] = series
+            } else {
+                if (series.isNotEmpty()) stale[symbol] = series
+                misses.add(symbol)
+            }
+        }
+        if (misses.isEmpty()) return out
+
+        val range = sparkRangeFor(rangeDays)
+        val fetched = coroutineScope {
+            misses.chunked(BATCH_SIZE)
+                .map { chunk -> async { yahoo.fetchSparkCloses(chunk, range) } }
+                .awaitAll()
+        }.fold(HashMap<String, List<Candle>>()) { acc, map -> acc.apply { putAll(map) } }
+
+        for (symbol in misses) {
+            val fresh = fetched[symbol]
+            if (fresh != null && fresh.isNotEmpty()) {
+                writeCache("closes:$symbol:$rangeDays", candlesToJson(fresh).toString())
+                out[symbol] = fresh
+            } else {
+                stale[symbol]?.let { out[symbol] = it }
+            }
+        }
+        return out
+    }
+
+    /** Spark takes the same range words the chart API does. */
+    private fun sparkRangeFor(rangeDays: Int): String = when {
+        rangeDays <= 7 -> "5d"
+        rangeDays <= 30 -> "1mo"
+        rangeDays <= 95 -> "3mo"
+        rangeDays <= 190 -> "6mo"
+        rangeDays <= 400 -> "1y"
+        else -> "2y"
+    }
+
     /** The canonical per-symbol store: the depth it was fetched at, plus the bars. */
     private fun candleStoreToJson(rangeDays: Int, candles: List<Candle>): String =
         JSONObject().apply {

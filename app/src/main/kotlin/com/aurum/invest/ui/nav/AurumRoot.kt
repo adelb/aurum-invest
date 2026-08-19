@@ -7,16 +7,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.TrendingUp
-import androidx.compose.material.icons.rounded.AccountBalanceWallet
-import androidx.compose.material.icons.rounded.Bolt
-import androidx.compose.material.icons.rounded.Notifications
-import androidx.compose.material.icons.rounded.Savings
-import androidx.compose.material.icons.rounded.Visibility
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -28,7 +18,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -52,7 +42,7 @@ import com.aurum.invest.ui.screens.PositionDetailScreen
 import com.aurum.invest.ui.screens.PreMarketScreen
 import com.aurum.invest.ui.screens.ReportsScreen
 import com.aurum.invest.ui.screens.SettingsScreen
-import com.aurum.invest.ui.screens.WatchlistScreen
+import com.aurum.invest.ui.screens.StocksScreen
 import com.aurum.invest.ui.screens.WealthScreen
 import com.aurum.invest.ui.theme.AurumColors
 import kotlinx.coroutines.flow.SharingStarted
@@ -60,7 +50,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 
 object Routes {
-    const val DASHBOARD = "dashboard"; const val WATCHLIST = "watchlist"
+    const val DASHBOARD = "dashboard"; const val STOCKS = "stocks"
     const val PICKS = "picks"; const val WEALTH = "wealth"
     const val PREMARKET = "premarket"
     const val FEED = "feed"; const val SETTINGS = "settings"
@@ -85,7 +75,7 @@ class RootViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 }
 
-private data class TopDest(val route: String, val label: String, val icon: ImageVector)
+private data class TopDest(val route: String, val label: String)
 
 @Composable
 fun AurumRoot() {
@@ -95,14 +85,14 @@ fun AurumRoot() {
 
     val topDests = remember {
         listOf(
-            TopDest(Routes.DASHBOARD, "Portfolio", Icons.Rounded.AccountBalanceWallet),
-            TopDest(Routes.WATCHLIST, "Watchlist", Icons.Rounded.Visibility),
-            TopDest(Routes.PICKS, "Picks", Icons.AutoMirrored.Rounded.TrendingUp),
-            TopDest(Routes.WEALTH, "Wealth", Icons.Rounded.Savings),
+            TopDest(Routes.DASHBOARD, "Portfolio"),
+            TopDest(Routes.STOCKS, "Stocks"),
+            TopDest(Routes.PICKS, "Picks"),
+            TopDest(Routes.WEALTH, "Wealth"),
             // The 2% desk (pre-market + open-session scans against the daily
             // target) replaces the bank Feed in the bar; the feed itself
             // stays reachable from Settings.
-            TopDest(Routes.PREMARKET, "2%", Icons.Rounded.Bolt)
+            TopDest(Routes.PREMARKET, "2%")
         )
     }
 
@@ -133,21 +123,19 @@ fun AurumRoot() {
                                     restoreState = true
                                 }
                             },
+                            // Text-only bar: the label IS the destination —
+                            // five words read faster than five glyphs decoded.
                             icon = {
-                                if (dest.route == Routes.FEED && pending > 0) {
-                                    BadgedBox(badge = {
-                                        Badge(
-                                            containerColor = AurumColors.gold,
-                                            contentColor = AurumColors.bg
-                                        ) { Text("$pending") }
-                                    }) {
-                                        Icon(dest.icon, contentDescription = dest.label)
+                                Text(
+                                    text = dest.label,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = if (currentRoute == dest.route) {
+                                        FontWeight.SemiBold
+                                    } else {
+                                        FontWeight.Normal
                                     }
-                                } else {
-                                    Icon(dest.icon, contentDescription = dest.label)
-                                }
+                                )
                             },
-                            label = { Text(dest.label, style = MaterialTheme.typography.labelMedium) },
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = AurumColors.gold,
                                 selectedTextColor = AurumColors.gold,
@@ -185,8 +173,8 @@ fun AurumRoot() {
                     onAddTrade = { nav.navigate(Routes.add(it)) }
                 )
             }
-            composable(Routes.WATCHLIST) {
-                WatchlistScreen(
+            composable(Routes.STOCKS) {
+                StocksScreen(
                     onOpenDetail = { nav.navigate(Routes.detail(it)) },
                     onOpenAnalysis = { nav.navigate(Routes.analysis(it)) }
                 )

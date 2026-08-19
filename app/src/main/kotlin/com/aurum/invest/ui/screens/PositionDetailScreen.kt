@@ -5,6 +5,8 @@ import android.net.Uri
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -197,21 +199,29 @@ fun PositionDetailScreen(
 
                 // chart + range chips
                 item {
+                    LaunchedEffect(range) { vm.ensureRange(range) }
                     val series = when (range) {
                         "1D" -> state.chart1D
                         "1W" -> state.chart1W
                         "1M" -> state.chart1M
-                        else -> state.chart3M
+                        "3M" -> state.chart3M
+                        "1Y" -> state.chart1Y
+                        else -> state.chartMax
                     }
                     val baseline =
                         if (range == "1D") state.quote?.prevClose
                         else state.position?.avgCost
                     AurumCard(contentPadding = PaddingValues(14.dp)) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
                             RangeChip(label = "1D", selected = range == "1D") { range = "1D" }
                             RangeChip(label = "1W", selected = range == "1W") { range = "1W" }
                             RangeChip(label = "1M", selected = range == "1M") { range = "1M" }
                             RangeChip(label = "3M", selected = range == "3M") { range = "3M" }
+                            RangeChip(label = "1Y", selected = range == "1Y") { range = "1Y" }
+                            RangeChip(label = "All", selected = range == "All") { range = "All" }
                         }
                         Spacer(Modifier.height(14.dp))
                         if (series.closes.size >= 2) {
@@ -236,7 +246,11 @@ fun PositionDetailScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = "No chart data",
+                                    // The long ranges load on first visit; a
+                                    // moment of "loading" must not read as a
+                                    // verdict of missing history.
+                                    text = if (range == "1Y" || range == "All") "Loading chart…"
+                                    else "No chart data",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = AurumColors.textDim
                                 )

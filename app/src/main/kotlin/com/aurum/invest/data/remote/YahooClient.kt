@@ -124,6 +124,67 @@ class YahooClient {
         }
 
     /**
+     * Daily CLOSES for many symbols in ONE request, from the same spark
+     * endpoint the batch quote uses.
+     *
+     * Close and timestamp only: spark carries no open, high, low or volume, so
+     * the candles returned here repeat the close in the OHL fields and leave
+     * volume at 0. Nothing that reads those fields may be given this series —
+     * [MarketRepository.getCloseSeries] caches it under its own key for that
+     * reason, well away from the real candle cache.
+     *
+     * It exists because a browse shelf needs a month of closes for every name
+     * on it, and asking one request per symbol is what got the device
+     * rate-limited: a 22-name shelf cost 22 requests and now costs one.
+     */
+    suspend fun fetchSparkCloses(
+        symbols: List<String>,
+        range: String,
+        interval: String = "1d"
+    ): Map<String, List<Candle>> = withContext(Dispatchers.IO) {
+        if (symbols.isEmpty()) return@withContext emptyMap()
+        try {
+            val url = "https://query1.finance.yahoo.com/v8/finance/spark".toHttpUrl()
+                .newBuilder()
+                .addQueryParameter("symbols", symbols.joinToString(","))
+                .addQueryParameter("range", range)
+                .addQueryParameter("interval", interval)
+                .build()
+                .toString()
+            val root = getJson(url) ?: return@withContext emptyMap()
+            val out = HashMap<String, List<Candle>>(symbols.size)
+            for (symbol in symbols) {
+                val o = root.optJSONObject(symbol) ?: continue
+                val stamps = o.optJSONArray("timestamp") ?: continue
+                val closes = o.optJSONArray("close") ?: continue
+                val n = minOf(stamps.length(), closes.length())
+                val series = ArrayList<Candle>(n)
+                for (i in 0 until n) {
+                    if (closes.isNull(i)) continue
+                    val close = closes.optDouble(i, Double.NaN)
+                    if (close.isNaN() || close <= 0.0) continue
+                    val ts = stamps.optLong(i, -1L)
+                    if (ts <= 0L) continue
+                    series.add(
+                        Candle(
+                            ts = ts * 1000L,
+                            open = close,
+                            high = close,
+                            low = close,
+                            close = close,
+                            volume = 0L
+                        )
+                    )
+                }
+                if (series.isNotEmpty()) out[symbol] = series
+            }
+            out
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    /**
      * v8 chart API with an explicit Yahoo [range] ("5d", "1mo", ...) and
      * [interval] ("30m", "60m", "1d", ...) — the chart-screen ranges that
      * don't fit the daily/intraday helpers.

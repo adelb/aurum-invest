@@ -44,6 +44,10 @@ data class DetailState(
     val chart1W: ChartSeries = ChartSeries(),
     val chart1M: ChartSeries = ChartSeries(),
     val chart3M: ChartSeries = ChartSeries(),
+    /** Loaded lazily on first visit to their chips — a year of dailies. */
+    val chart1Y: ChartSeries = ChartSeries(),
+    /** The full listed history, weekly bars. */
+    val chartMax: ChartSeries = ChartSeries(),
     val ext: ExtendedHours? = null,
     val position: Position? = null,
     val view: PositionView? = null,
@@ -77,6 +81,41 @@ class PositionDetailViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refresh() = reload()
+
+    /**
+     * Lazily loads the long ranges the first time their chip is visited —
+     * a year of dailies (served from the superset store when any deep caller
+     * already fetched it) and the full listed history in weekly bars. The
+     * short ranges load eagerly with the screen, as before.
+     */
+    fun ensureRange(range: String) {
+        if (symbol.isBlank()) return
+        when (range) {
+            "1Y" -> if (_state.value.chart1Y.closes.isEmpty()) {
+                viewModelScope.launch {
+                    val candles = runCatching { container.market.getDailyCandles(symKey, 365) }
+                        .getOrDefault(emptyList())
+                    _state.update { st ->
+                        if (st.symbol != symKey) st else st.copy(chart1Y = ChartSeries.of(candles))
+                    }
+                }
+            }
+            "All" -> if (_state.value.chartMax.closes.isEmpty()) {
+                viewModelScope.launch {
+                    // Everything Yahoo has for the listing, one bar per week —
+                    // cached a day: decade-old bars do not move intraday.
+                    val candles = runCatching {
+                        container.market.getRangeCandles(
+                            symKey, range = "max", interval = "1wk", maxAgeMs = 86_400_000L
+                        )
+                    }.getOrDefault(emptyList())
+                    _state.update { st ->
+                        if (st.symbol != symKey) st else st.copy(chartMax = ChartSeries.of(candles))
+                    }
+                }
+            }
+        }
+    }
 
     private fun reload() {
         if (symbol.isBlank()) return

@@ -135,4 +135,25 @@ object Dates {
         }
         return Triple(state, start, end)
     }
+    /**
+     * True when [barTs] is TODAY's US daily bar and the regular session has
+     * not closed yet. Volume engines use this to exclude a genuinely partial
+     * bar without throwing away today's completed volume after 4:00 PM ET.
+     */
+    fun isCurrentEtDailyBarIncomplete(
+        barTs: Long,
+        nowMs: Long = System.currentTimeMillis()
+    ): Boolean {
+        val et = ZoneId.of("America/New_York")
+        val now = Instant.ofEpochMilli(nowMs).atZone(et)
+        val barDate = Instant.ofEpochMilli(barTs).atZone(et).toLocalDate()
+        if (barDate != now.toLocalDate()) return false
+        if (now.dayOfWeek == java.time.DayOfWeek.SATURDAY ||
+            now.dayOfWeek == java.time.DayOfWeek.SUNDAY
+        ) {
+            return false
+        }
+        return now.toLocalTime().isBefore(java.time.LocalTime.of(16, 0))
+    }
+
 }

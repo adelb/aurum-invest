@@ -60,7 +60,15 @@ object PortfolioLens {
         "defense" to setOf("Industrials"),
         "industrials" to setOf("Industrials"),
         "consumer" to setOf("Consumer Cyclical", "Consumer Defensive"),
-        "utilities" to setOf("Utilities")
+        "utilities" to setOf("Utilities"),
+        "media" to setOf("Communication Services"),
+        "autos" to setOf("Consumer Cyclical"),
+        "cyber" to setOf("Technology"),
+        "reits" to setOf("Real Estate"),
+        "transport" to setOf("Industrials"),
+        "staples" to setOf("Consumer Defensive")
+        // drones / crypto / space stay unmapped on purpose: cross-sector
+        // themes can only claim coverage from exact holdings membership.
     )
 
     /**
