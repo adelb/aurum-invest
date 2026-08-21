@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Flag
+import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
@@ -91,7 +92,8 @@ fun DashboardScreen(
     onAdd: () -> Unit,
     onSettings: () -> Unit,
     onReports: () -> Unit,
-    onEditPosition: (String) -> Unit
+    onEditPosition: (String) -> Unit,
+    onReview: () -> Unit
 ) {
     val vm: DashboardViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
@@ -168,7 +170,8 @@ fun DashboardScreen(
                         loading = state.loading,
                         onRefresh = vm::refresh,
                         onSettings = onSettings,
-                        onReports = onReports
+                        onReports = onReports,
+                        onReview = onReview
                     )
                 }
 
@@ -435,7 +438,8 @@ private fun HeaderRow(
     loading: Boolean,
     onRefresh: () -> Unit,
     onSettings: () -> Unit,
-    onReports: () -> Unit
+    onReports: () -> Unit,
+    onReview: () -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -458,6 +462,13 @@ private fun HeaderRow(
             Icon(
                 Icons.Rounded.Refresh,
                 contentDescription = "Refresh",
+                tint = AurumColors.textDim
+            )
+        }
+        IconButton(onClick = onReview) {
+            Icon(
+                Icons.Rounded.Insights,
+                contentDescription = "Portfolio review",
                 tint = AurumColors.textDim
             )
         }

@@ -94,8 +94,8 @@ import com.aurum.invest.ui.components.WilliamsRDiagram
 import com.aurum.invest.ui.components.rememberDiagramViewport
 import com.aurum.invest.ui.theme.AurumColors
 
-/** Which of the two analysis views is showing. */
-private enum class AnalysisTab { TECHNIQUES, PLAN }
+/** Which of the three analysis views is showing. */
+private enum class AnalysisTab { TECHNIQUES, PLAN, SPY }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -130,9 +130,13 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
                 )
                 val techCount = state.analysis?.results?.size
                 Text(
-                    text = if (tab == AnalysisTab.TECHNIQUES) {
-                        if (techCount != null) "$techCount-technique analysis" else "Technique analysis"
-                    } else "$3,000 five-day plan",
+                    text = when (tab) {
+                        AnalysisTab.TECHNIQUES ->
+                            if (techCount != null) "$techCount-technique analysis"
+                            else "Technique analysis"
+                        AnalysisTab.PLAN -> "$3,000 five-day plan"
+                        AnalysisTab.SPY -> "the same dollars, raced against the index"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
@@ -182,14 +186,26 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
                 ) {
                     item {
                         SegmentedToggle(
-                            options = listOf("${analysis.results.size} techniques", "$3,000 plan"),
-                            selected = if (tab == AnalysisTab.TECHNIQUES) 0 else 1,
-                            onSelect = { tab = if (it == 0) AnalysisTab.TECHNIQUES else AnalysisTab.PLAN }
+                            options = listOf("Techniques", "Plan", "Beat SPY"),
+                            selected = when (tab) {
+                                AnalysisTab.TECHNIQUES -> 0
+                                AnalysisTab.PLAN -> 1
+                                AnalysisTab.SPY -> 2
+                            },
+                            onSelect = {
+                                tab = when (it) {
+                                    0 -> AnalysisTab.TECHNIQUES
+                                    1 -> AnalysisTab.PLAN
+                                    else -> AnalysisTab.SPY
+                                }
+                            }
                         )
                         Spacer(Modifier.height(14.dp))
                     }
 
-                    if (tab == AnalysisTab.TECHNIQUES) {
+                    if (tab == AnalysisTab.SPY) {
+                        beatSpyItems(state)
+                    } else if (tab == AnalysisTab.TECHNIQUES) {
                         item {
                             OutlookCard(analysis = analysis, price = state.price)
                             Spacer(Modifier.height(14.dp))

@@ -4,8 +4,10 @@ import android.app.Application
 import com.aurum.invest.data.db.AurumDatabase
 import com.aurum.invest.data.remote.YahooClient
 import com.aurum.invest.data.repo.BankFeedRepository
+import com.aurum.invest.data.repo.EvaluationStore
 import com.aurum.invest.data.repo.MarketRepository
 import com.aurum.invest.data.repo.NewsRepository
+import com.aurum.invest.data.repo.ReviewRepository
 import com.aurum.invest.data.repo.PicksRepository
 import com.aurum.invest.data.repo.PortfolioRepository
 import com.aurum.invest.data.repo.RecordRepository
@@ -50,4 +52,6 @@ class AppContainer(app: Application) {
     val wealth = WealthRepository(db.cacheDao(), market, news, settings, picks, record)
     val study = StudyRepository(market, news, wealth, portfolio)
     val targets = TargetsRepository(db.cacheDao())
+    val evaluations = EvaluationStore(db.cacheDao())
+    val review = ReviewRepository(market, portfolio, news, evaluations)
 }

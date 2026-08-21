@@ -4,13 +4,14 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
+import com.aurum.invest.analytics.BeatSpyEngine
+import com.aurum.invest.analytics.BeatSpyReport
 import com.aurum.invest.analytics.BuyPlan
 import com.aurum.invest.analytics.BuyPlanEngine
 import com.aurum.invest.analytics.TechniqueAnalysis
 import com.aurum.invest.analytics.TechniqueEvaluation
 import com.aurum.invest.analytics.TechniqueEvaluator
 import com.aurum.invest.analytics.Techniques
-import com.aurum.invest.data.db.CacheEntity
 import com.aurum.invest.data.model.FeedStatus
 import com.aurum.invest.data.repo.InvestorProfile
 import com.aurum.invest.data.repo.PortfolioRepository
@@ -40,14 +41,17 @@ data class AnalysisState(
      * screen must say the right one.
      */
     val historyStatus: FeedStatus = FeedStatus.FRESH,
-    val historyAsOf: Long = 0L
+    val historyAsOf: Long = 0L,
+    /** The stock raced against SPY; null while it computes or when unmeasurable. */
+    val beatSpy: BeatSpyReport? = null,
+    val beatSpyLoading: Boolean = false
 )
 
 class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
 
     private val container = (app as AurumApp).container
     private val market = container.market
-    private val cacheDao = container.db.cacheDao()
+    private val evaluations = container.evaluations
 
     private val _state = MutableStateFlow(AnalysisState())
     val state: StateFlow<AnalysisState> = _state.asStateFlow()
@@ -55,18 +59,15 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
     private var job: Job? = null
 
     companion object {
-        /** Versioned: a grade stored for an older board must never score this one. */
-        private const val EVAL_KEY_PREFIX = "techeval:v6:"
-
-        /** The back-test replays daily closes; a run stays valid for a session. */
-        private const val EVAL_MAX_AGE_MS = 6L * 3_600_000L
-
         /**
          * Two years of dailies: the last 252 sessions feed the 1-year
          * integrity replay, and the sessions before them give every replayed
          * day a real indicator warm-up.
          */
         private const val CANDLE_DAYS = 550
+
+        /** Five years of dailies for the SPY race — the long horizons' analog pool. */
+        private const val BEAT_SPY_DAYS = 1825
     }
 
     fun start(symbol: String) {
@@ -86,7 +87,10 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
         job?.cancel()
         job = viewModelScope.launch {
             _state.update {
-                it.copy(loading = true, evaluation = null, evaluationLoading = false)
+                it.copy(
+                    loading = true, evaluation = null, evaluationLoading = false,
+                    beatSpy = null, beatSpyLoading = false
+                )
             }
             // Two years of dailies: the 200-day average, plus a full-year
             // integrity replay with honest warm-up for every replayed day.
@@ -154,8 +158,14 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
                     historyAsOf = candleFeed.asOf,
                     evaluationLoading =
                         analysis != null &&
-                            candles.size >= TechniqueEvaluator.MIN_CANDLES_FOR_FULL_REPLAY
+                            candles.size >= TechniqueEvaluator.MIN_CANDLES_FOR_FULL_REPLAY,
+                    beatSpyLoading = sym != "SPY"
                 )
+            }
+
+            // The SPY race runs beside the integrity replay, never blocking it.
+            if (sym != "SPY") {
+                launch { loadBeatSpy(sym, price) }
             }
 
             // The integrity engine: replay the last year of sessions and grade
@@ -191,40 +201,30 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Cached 12-month evaluation, recomputed off the main thread when stale. */
+    /** Cached 12-month evaluation via the store shared with the portfolio review. */
     private suspend fun loadEvaluation(
         sym: String,
         candles: List<com.aurum.invest.data.model.Candle>
-    ): TechniqueEvaluation? {
-        val key = EVAL_KEY_PREFIX + sym
-        val cached = try {
-            cacheDao.get(key)
-        } catch (_: Exception) {
-            null
+    ): TechniqueEvaluation? = evaluations.get(sym, candles)
+
+    /**
+     * The SPY race: five years of the stock and the index, date-aligned and
+     * replayed as paired windows. Runs beside the main load; a result that
+     * raced a newer symbol is dropped.
+     */
+    private suspend fun loadBeatSpy(sym: String, price: Double?) {
+        val stock = runCatching { market.getDailyCandles(sym, BEAT_SPY_DAYS) }
+            .getOrDefault(emptyList())
+        val spy = runCatching { market.getDailyCandles("SPY", BEAT_SPY_DAYS) }
+            .getOrDefault(emptyList())
+        val spyQuote = runCatching { market.getQuote("SPY") }.getOrNull()
+        val report = withContext(Dispatchers.Default) {
+            runCatching {
+                BeatSpyEngine.build(sym, stock, spy, price, spyQuote?.price)
+            }.getOrNull()
         }
-        if (cached != null && System.currentTimeMillis() - cached.updatedAt <= EVAL_MAX_AGE_MS) {
-            TechniqueEvaluator.fromJson(cached.json)
-                ?.takeIf { TechniqueEvaluator.isComplete(it, sym) }
-                ?.let { return it }
+        _state.update { st ->
+            if (st.symbol != sym) st else st.copy(beatSpy = report, beatSpyLoading = false)
         }
-        val fresh = withContext(Dispatchers.Default) {
-            runCatching { TechniqueEvaluator.evaluate(sym, candles) }.getOrNull()
-        }
-        if (fresh != null) {
-            try {
-                cacheDao.put(
-                    CacheEntity(
-                        key = key,
-                        json = TechniqueEvaluator.toJson(fresh),
-                        updatedAt = System.currentTimeMillis()
-                    )
-                )
-            } catch (_: Exception) {
-                // Cache write failure is non-fatal.
-            }
-            return fresh
-        }
-        // Never present an expired grade as if it measured the current board.
-        return null
     }
 }

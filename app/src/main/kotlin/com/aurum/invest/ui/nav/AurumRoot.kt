@@ -65,6 +65,7 @@ import com.aurum.invest.ui.screens.BankFeedScreen
 import com.aurum.invest.ui.screens.DashboardScreen
 import com.aurum.invest.ui.screens.EditPositionScreen
 import com.aurum.invest.ui.screens.PicksScreen
+import com.aurum.invest.ui.screens.PortfolioReviewScreen
 import com.aurum.invest.ui.screens.PositionDetailScreen
 import com.aurum.invest.ui.screens.PreMarketScreen
 import com.aurum.invest.ui.screens.ReportsScreen
@@ -84,7 +85,7 @@ object Routes {
     const val FEED = "feed"; const val SETTINGS = "settings"
     const val ADD = "add?symbol={symbol}&side={side}"; const val DETAIL = "detail/{symbol}"
     const val ANALYSIS = "analysis/{symbol}"; const val REPORTS = "reports"
-    const val EDIT_POSITION = "edit/{symbol}"
+    const val EDIT_POSITION = "edit/{symbol}"; const val REVIEW = "review"
     fun detail(symbol: String) = "detail/$symbol"
     fun analysis(symbol: String) = "analysis/$symbol"
     fun editPosition(symbol: String) = "edit/$symbol"
@@ -194,7 +195,14 @@ fun AurumRoot() {
                         onAdd = { nav.navigate(Routes.add()) },
                         onSettings = { nav.navigate(Routes.SETTINGS) },
                         onReports = { nav.navigate(Routes.REPORTS) },
-                        onEditPosition = { nav.navigate(Routes.editPosition(it)) }
+                        onEditPosition = { nav.navigate(Routes.editPosition(it)) },
+                        onReview = { nav.navigate(Routes.REVIEW) }
+                    )
+                }
+                composable(Routes.REVIEW) {
+                    PortfolioReviewScreen(
+                        onBack = { nav.popBackStack() },
+                        onOpenAnalysis = { nav.navigate(Routes.analysis(it)) }
                     )
                 }
                 composable(
