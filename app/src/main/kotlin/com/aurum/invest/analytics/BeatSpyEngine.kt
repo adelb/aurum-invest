@@ -114,6 +114,19 @@ object BeatSpyEngine {
     private const val WARMUP = 60
     private const val DAY_MS = 86_400_000L
 
+    /** The buy decision's horizon ([BUY_HORIZON_SESSIONS]), or the nearest raced one. */
+    fun buyHorizon(report: BeatSpyReport): BeatSpyHorizon? =
+        report.horizons.firstOrNull { it.horizonSessions == BUY_HORIZON_SESSIONS }
+            ?: report.horizons.firstOrNull()
+
+    /**
+     * True when [price] sits in the GREEN entry zone of [h]: at or under the
+     * soft-quartile edge, where even the stock's soft (Q1) measured outcome
+     * beats SPY's median over the same days.
+     */
+    fun inGreenZone(price: Double, h: BeatSpyHorizon): Boolean =
+        price > 0.0 && h.edgeEntry > 0.0 && price <= h.edgeEntry
+
     /**
      * Null only when either side has no candles at all, or no session could
      * be date-aligned — with any shared history a report is produced, even if

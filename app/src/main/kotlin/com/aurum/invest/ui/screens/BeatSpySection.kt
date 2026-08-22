@@ -77,9 +77,7 @@ fun LazyListScope.beatSpyItems(state: AnalysisState) {
                 VerdictCard(report)
                 Spacer(Modifier.height(14.dp))
             }
-            val buy = report.horizons.firstOrNull {
-                it.horizonSessions == BeatSpyEngine.BUY_HORIZON_SESSIONS
-            } ?: report.horizons.firstOrNull()
+            val buy = BeatSpyEngine.buyHorizon(report)
             if (buy != null) {
                 item {
                     EntryRangeCard(buy, report.price)
@@ -147,9 +145,7 @@ private fun VerdictCard(report: BeatSpyReport) {
             style = MaterialTheme.typography.bodyMedium,
             color = AurumColors.text
         )
-        val buy = report.horizons.firstOrNull {
-            it.horizonSessions == BeatSpyEngine.BUY_HORIZON_SESSIONS
-        } ?: report.horizons.firstOrNull()
+        val buy = BeatSpyEngine.buyHorizon(report)
         if (buy != null) {
             Spacer(Modifier.height(14.dp))
             BeatShareBar(buy.beatSharePct)
@@ -203,7 +199,7 @@ private fun EntryRangeCard(h: BeatSpyHorizon, price: Double) {
             color = AurumColors.textDim
         )
         Spacer(Modifier.height(12.dp))
-        EntryZoneBar(h, price)
+        EntryZoneBar(h.edgeEntry, h.breakevenEntry, price)
         Spacer(Modifier.height(12.dp))
         Row {
             StatTile(
@@ -256,11 +252,12 @@ private fun EntryRangeCard(h: BeatSpyHorizon, price: Double) {
 
 /**
  * The three entry zones on one bar — soft-quartile edge, median edge, SPY's —
- * with today's price as the marker.
+ * with today's price as the marker. Shared with the Picks screen's SPY tab,
+ * which renders the same zones for every green pick.
  */
 @Composable
-private fun EntryZoneBar(h: BeatSpyHorizon, price: Double) {
-    val points = listOf(h.edgeEntry, h.breakevenEntry, price).filter { it > 0.0 }
+internal fun EntryZoneBar(edgeEntry: Double, breakevenEntry: Double, price: Double) {
+    val points = listOf(edgeEntry, breakevenEntry, price).filter { it > 0.0 }
     if (points.isEmpty()) return
     val lo = points.min() * 0.96
     val hi = points.max() * 1.04
@@ -269,8 +266,8 @@ private fun EntryZoneBar(h: BeatSpyHorizon, price: Double) {
         fun x(v: Double): Float = ((v - lo) / span).toFloat() * size.width
         val barTop = size.height / 2f - 4.dp.toPx() / 2f
         val barH = 4.dp.toPx()
-        val xEdge = x(h.edgeEntry).coerceIn(0f, size.width)
-        val xBreak = x(h.breakevenEntry).coerceIn(0f, size.width)
+        val xEdge = x(edgeEntry).coerceIn(0f, size.width)
+        val xBreak = x(breakevenEntry).coerceIn(0f, size.width)
         // Below the soft-quartile level: the stock's side even on a soft draw.
         drawRoundRect(
             color = AurumColors.gain,

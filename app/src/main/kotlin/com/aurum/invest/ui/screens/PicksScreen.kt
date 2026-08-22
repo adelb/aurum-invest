@@ -47,6 +47,7 @@ import com.aurum.invest.data.model.PowerPick
 import com.aurum.invest.analytics.NoteKind
 import com.aurum.invest.analytics.PickNote
 import com.aurum.invest.analytics.PortfolioLens
+import com.aurum.invest.analytics.TechniqueVerdict
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.DeltaPct
@@ -66,7 +67,8 @@ private enum class PicksTab(val key: String) {
     DAILY(PicksViewModel.TAB_DAILY),
     ENTRIES(PicksViewModel.TAB_ENTRIES),
     POWER(PicksViewModel.TAB_POWER),
-    WEEKLY(PicksViewModel.TAB_WEEKLY)
+    WEEKLY(PicksViewModel.TAB_WEEKLY),
+    SPY(PicksViewModel.TAB_SPY)
 }
 
 @Composable
@@ -97,6 +99,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                         PicksTab.ENTRIES -> "Best Entries"
                         PicksTab.POWER -> "Power Hour"
                         PicksTab.WEEKLY -> "Weekly Picks"
+                        PicksTab.SPY -> "Green vs SPY"
                     },
                     style = MaterialTheme.typography.headlineMedium,
                     color = AurumColors.text
@@ -107,6 +110,15 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                         PicksTab.ENTRIES -> "Market-wide entry-price scan"
                         PicksTab.POWER -> "Buy 2:30–4:00 PM ET · sell into tomorrow"
                         PicksTab.WEEKLY -> state.weekLabel
+                        PicksTab.SPY -> when {
+                            state.spyLoading || state.spyRefreshing ->
+                                if (state.spyTotal > 0) {
+                                    "Racing today's picks — ${state.spyScanned} of ${state.spyTotal}"
+                                } else "Racing today's picks against SPY"
+                            state.spyTotal > 0 ->
+                                "${state.spyRows.size} of ${state.spyTotal} picks priced in the green"
+                            else -> "Every current pick raced against the index"
+                        }
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = AurumColors.textDim
@@ -117,6 +129,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 PicksTab.ENTRIES -> state.entryRefreshing
                 PicksTab.POWER -> state.powerRefreshing
                 PicksTab.WEEKLY -> state.refreshing
+                PicksTab.SPY -> state.spyRefreshing || state.spyLoading
             }
             // Fixed 48dp slot so the header doesn't shift when the
             // refresh button swaps to the busy spinner and back.
@@ -135,6 +148,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                                 PicksTab.ENTRIES -> vm.refreshEntries()
                                 PicksTab.POWER -> vm.refreshPower()
                                 PicksTab.WEEKLY -> vm.refresh()
+                                PicksTab.SPY -> vm.refreshSpy()
                             }
                         }
                     ) {
@@ -149,19 +163,21 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
         }
 
         SegmentedToggle(
-            options = listOf("Today", "Entries", "Power", "Weekly"),
+            options = listOf("Today", "Entries", "Power", "Weekly", "SPY"),
             selected = when (tab) {
                 PicksTab.DAILY -> 0
                 PicksTab.ENTRIES -> 1
                 PicksTab.POWER -> 2
                 PicksTab.WEEKLY -> 3
+                PicksTab.SPY -> 4
             },
             onSelect = {
                 tab = when (it) {
                     0 -> PicksTab.DAILY
                     1 -> PicksTab.ENTRIES
                     2 -> PicksTab.POWER
-                    else -> PicksTab.WEEKLY
+                    3 -> PicksTab.WEEKLY
+                    else -> PicksTab.SPY
                 }
             },
             compact = true,
@@ -174,6 +190,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 PicksTab.ENTRIES -> state.entryRefreshing
                 PicksTab.POWER -> state.powerRefreshing
                 PicksTab.WEEKLY -> state.refreshing
+                PicksTab.SPY -> state.spyRefreshing
             },
             onRefresh = {
                 when (tab) {
@@ -181,6 +198,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                     PicksTab.ENTRIES -> vm.refreshEntries()
                     PicksTab.POWER -> vm.refreshPower()
                     PicksTab.WEEKLY -> vm.refresh()
+                    PicksTab.SPY -> vm.refreshSpy()
                 }
             },
             modifier = Modifier.fillMaxSize()
@@ -195,6 +213,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 PicksTab.ENTRIES -> entryItems(state, onOpenDetail, onOpenAnalysis, vm::refreshEntries)
                 PicksTab.POWER -> powerItems(state, onOpenDetail, onOpenAnalysis, vm::refreshPower)
                 PicksTab.WEEKLY -> weeklyItems(state, onOpenDetail, onOpenAnalysis, vm::refresh)
+                PicksTab.SPY -> spyGreenItems(state, onOpenDetail, onOpenAnalysis, vm::refreshSpy)
             }
         }
         }
@@ -1070,6 +1089,233 @@ private fun PickCard(
                     )
                 }
             }
+        }
+        PortfolioNoteTag(note)
+    }
+}
+
+// ---------------------------------------------------------------- spy tab
+
+private fun androidx.compose.foundation.lazy.LazyListScope.spyGreenItems(
+    state: PicksState,
+    onOpenDetail: (String) -> Unit,
+    onOpenAnalysis: (String) -> Unit,
+    onRefresh: () -> Unit
+) {
+    when {
+        state.spyRows.isEmpty() && (state.spyLoading || state.spyRefreshing) -> item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 56.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = AurumColors.gold)
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "Racing today's picks against SPY — five years of " +
+                            "paired windows each…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AurumColors.textDim
+                    )
+                    if (state.spyTotal > 0) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "${state.spyScanned} of ${state.spyTotal} raced",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AurumColors.textDim
+                        )
+                    }
+                }
+            }
+        }
+        state.spyRows.isEmpty() && state.spyTotal == 0 -> item {
+            EmptyState(
+                title = "No picks to race",
+                message = "No pick list holds anything today, so there is nothing to " +
+                    "put against the index yet.",
+                actionLabel = "Race now",
+                onAction = onRefresh
+            )
+        }
+        state.spyRows.isEmpty() && state.spyUnraced == state.spyTotal -> item {
+            EmptyState(
+                title = "The race couldn't run",
+                message = "None of the ${state.spyTotal} picks could be raced — the " +
+                    "history didn't load this run, or every listing is too young to " +
+                    "share enough sessions with SPY. Race again once the connection " +
+                    "is back.",
+                actionLabel = "Race again",
+                onAction = onRefresh
+            )
+        }
+        state.spyRows.isEmpty() -> item {
+            EmptyState(
+                title = "Nothing in the green today",
+                message = "Every current pick trades above its soft-quartile edge " +
+                    "against SPY — at these prices the index keeps the ticket. " +
+                    "Race again after prices move.",
+                actionLabel = "Race again",
+                onAction = onRefresh
+            )
+        }
+        else -> {
+            item {
+                Text(
+                    text = "The stocks now in the picks, raced against SPY over five " +
+                        "years of paired windows — listed only when today's price sits " +
+                        "in the GREEN entry zone, where even a soft (Q1) measured month " +
+                        "beats the index's median over the same days.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+            }
+            items(state.spyRows, key = { "spy-${it.symbol}" }) { row ->
+                SpyGreenCard(
+                    row = row,
+                    onOpen = { onOpenDetail(row.symbol) },
+                    onAnalyze = { onOpenAnalysis(row.symbol) },
+                    note = noteFor(state, row.symbol)
+                )
+            }
+            if (state.spyLoading || state.spyRefreshing) {
+                item {
+                    Text(
+                        text = "Still racing — ${state.spyScanned} of ${state.spyTotal} " +
+                            "picks raced…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
+            item {
+                Text(
+                    text = "Raced ${state.spyScanned} picks: ${state.spyRows.size} in " +
+                        "the green" +
+                        (if (state.spyUnraced > 0) {
+                            ", ${state.spyUnraced} without enough shared history to race"
+                        } else "") +
+                        ". Every level is a percentile of the stock's own paired past " +
+                        "windows against SPY — a measured record, never a promise. " +
+                        "Decision support, not financial advice.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SpyGreenCard(
+    row: SpyGreenRow,
+    onOpen: () -> Unit,
+    onAnalyze: () -> Unit,
+    note: PickNote? = null
+) {
+    AurumCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(),
+        onClick = onOpen
+    ) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                text = row.symbol,
+                style = MaterialTheme.typography.titleMedium,
+                color = AurumColors.text
+            )
+            if (row.name.isNotBlank()) {
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = row.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            PillTag(
+                text = String.format(Locale.US, "+%.1f%% room in the green", row.headroomPct),
+                color = AurumColors.gain
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            PillTag(
+                text = String.format(
+                    Locale.US, "%.0f%% beat share · %s", row.beatSharePct, row.horizonLabel
+                ),
+                color = when (row.verdict) {
+                    TechniqueVerdict.BULLISH -> AurumColors.gain
+                    TechniqueVerdict.BEARISH -> AurumColors.loss
+                    TechniqueVerdict.NEUTRAL -> AurumColors.textDim
+                }
+            )
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        EntryZoneBar(row.edgeEntry, row.breakevenEntry, row.price)
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            StatTile(
+                label = "Soft-quartile edge",
+                value = "≤ " + Fmt.money(row.edgeEntry),
+                valueColor = AurumColors.gain,
+                modifier = Modifier.weight(1f),
+                maxLines = 1
+            )
+            StatTile(
+                label = "Median edge",
+                value = "≤ " + Fmt.money(row.breakevenEntry),
+                valueColor = AurumColors.gold,
+                modifier = Modifier.weight(1f),
+                maxLines = 1
+            )
+            StatTile(
+                label = "Price now",
+                value = Fmt.money(row.price),
+                modifier = Modifier.weight(1f),
+                maxLines = 1
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = String.format(
+                Locale.US,
+                "Median measured %s: %+.1f%% vs SPY %+.1f%% over %d paired windows.",
+                row.horizonLabel, row.stockMedianPct, row.spyMedianPct, row.analogCount
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = AurumColors.textDim
+        )
+        if (row.sources.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "In the picks: " + row.sources.joinToString(" · "),
+                style = MaterialTheme.typography.labelSmall,
+                color = AurumColors.textDim
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.heightIn(min = 40.dp).clickable { onAnalyze() }
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.QueryStats,
+                contentDescription = null,
+                tint = AurumColors.gold,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "Full SPY race",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.gold
+            )
         }
         PortfolioNoteTag(note)
     }

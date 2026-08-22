@@ -159,6 +159,51 @@ class BeatSpyEngineTest {
         }
     }
 
+    // ---- the green entry zone ---------------------------------------------
+
+    @Test
+    fun buyHorizonPrefersTheMonthOverTheNearestRaced() {
+        val report = BeatSpyEngine.build(
+            "TST", candles(compound(400, 1.003)), candles(compound(400, 1.0005))
+        )!!
+        assertEquals(
+            BeatSpyEngine.BUY_HORIZON_SESSIONS,
+            BeatSpyEngine.buyHorizon(report)!!.horizonSessions
+        )
+    }
+
+    @Test
+    fun fasterCompounderSitsInTheGreenZoneToday() {
+        // Every window compounds identically, so Q1 == median and the
+        // soft-quartile edge lands above today's price: the buy is green now.
+        val report = BeatSpyEngine.build(
+            "TST", candles(compound(400, 1.003)), candles(compound(400, 1.0005))
+        )!!
+        val month = BeatSpyEngine.buyHorizon(report)!!
+        assertTrue(month.edgeEntry > report.price)
+        assertTrue(BeatSpyEngine.inGreenZone(report.price, month))
+    }
+
+    @Test
+    fun slowerCompounderIsNeverGreenAtTodaysPrice() {
+        val report = BeatSpyEngine.build(
+            "TST", candles(compound(400, 1.0005)), candles(compound(400, 1.003))
+        )!!
+        val month = BeatSpyEngine.buyHorizon(report)!!
+        assertTrue(month.edgeEntry < report.price)
+        assertTrue(!BeatSpyEngine.inGreenZone(report.price, month))
+    }
+
+    @Test
+    fun greenZoneRejectsUnpricedInputs() {
+        val report = BeatSpyEngine.build(
+            "TST", candles(compound(400, 1.003)), candles(compound(400, 1.0005))
+        )!!
+        val month = BeatSpyEngine.buyHorizon(report)!!
+        assertTrue(!BeatSpyEngine.inGreenZone(0.0, month))
+        assertTrue(!BeatSpyEngine.inGreenZone(report.price, month.copy(edgeEntry = 0.0)))
+    }
+
     @Test
     fun livePriceAnchorsTheEntryLevels() {
         val report = BeatSpyEngine.build(
