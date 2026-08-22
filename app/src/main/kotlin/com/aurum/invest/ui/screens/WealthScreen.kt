@@ -81,10 +81,14 @@ import com.aurum.invest.analytics.WealthReport
 import com.aurum.invest.analytics.LiquidityPlanner
 import com.aurum.invest.analytics.MarketPulse
 import com.aurum.invest.analytics.SectorDeployment
+import com.aurum.invest.analytics.CheckState
 import com.aurum.invest.analytics.GapStatus
 import com.aurum.invest.analytics.MarketCall
 import com.aurum.invest.analytics.MarketMover
 import com.aurum.invest.analytics.MarketRating
+import com.aurum.invest.analytics.MustBuyCheck
+import com.aurum.invest.analytics.MustBuyEngine
+import com.aurum.invest.analytics.MustBuyRow
 import com.aurum.invest.analytics.NoteKind
 import com.aurum.invest.analytics.PickNote
 import com.aurum.invest.analytics.PortfolioLens
@@ -202,6 +206,23 @@ private fun WealthContent(
         }
         if (open("pulse")) {
             item { MarketPulseCard(pulse = state.pulse, loading = state.pulseLoading) }
+        }
+
+        // 1a — the must-buy convergence: today's picks through every check.
+        item {
+            WealthSectionHeader(
+                title = "Must buy",
+                expanded = open("mustbuy"),
+                trailing = when {
+                    state.mustBuyLoading -> "scanning"
+                    state.mustBuy != null ->
+                        "${state.mustBuy.rows.size} of ${MustBuyEngine.SEATS} seats"
+                    else -> null
+                }
+            ) { toggle("mustbuy") }
+        }
+        if (open("mustbuy")) {
+            mustBuyItems(state, onOpenAnalysis, onOpenDetail)
         }
 
         // 1b — the verdict: the user's ACTUAL trading measured against SPY.
@@ -515,6 +536,239 @@ private fun WealthSectionHeader(
             contentDescription = if (expanded) "Collapse $title" else "Expand $title",
             tint = AurumColors.textDim,
             modifier = Modifier.size(20.dp)
+        )
+    }
+}
+
+// ---------------------------------------------------------------- must buy
+
+private fun androidx.compose.foundation.lazy.LazyListScope.mustBuyItems(
+    state: WealthState,
+    onOpenAnalysis: (String) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
+    val report = state.mustBuy
+    when {
+        report == null && state.mustBuyLoading -> item {
+            AurumCard {
+                Text(
+                    text = if (state.mustBuyTotal > 0) {
+                        "Putting today's picks through every measured check — " +
+                            "${state.mustBuyScanned} of ${state.mustBuyTotal} raced " +
+                            "against SPY…"
+                    } else {
+                        "Gathering today's pick lists, then racing each name through " +
+                            "the board, the SPY race, earnings, and your book…"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        report == null -> item {
+            AurumCard {
+                Text(
+                    text = "The must-buy scan needs the pick lists and market data. " +
+                        "Pull down to retry.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        report.rows.isEmpty() -> item {
+            AurumCard {
+                Text(
+                    text = "No seats filled today",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "Of ${report.scanned} scanned picks, none passes " +
+                        "${MustBuyEngine.MIN_PASSES} of the ${MustBuyEngine.CHECK_COUNT} " +
+                        "checks without a measured negative. The bar does not bend — " +
+                        "an empty list is the honest answer.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+                report.notes.forEach { note ->
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = note,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
+        }
+        else -> {
+            item {
+                Text(
+                    text = "Every stock in today's picks, judged on all " +
+                        "${MustBuyEngine.CHECK_COUNT} measured checks at once. A seat " +
+                        "needs ${MustBuyEngine.MIN_PASSES}+ green and not one measured " +
+                        "negative — the evidence is laid open on every card.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+            }
+            items(report.rows.size) { i ->
+                MustBuyCard(
+                    row = report.rows[i],
+                    onOpen = { onOpenDetail(report.rows[i].symbol) },
+                    onAnalyze = { onOpenAnalysis(report.rows[i].symbol) }
+                )
+            }
+            if (state.mustBuyLoading) {
+                item {
+                    Text(
+                        text = "Still scanning — ${state.mustBuyScanned} of " +
+                            "${state.mustBuyTotal} raced…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+                }
+            }
+            item {
+                Column(modifier = Modifier.padding(horizontal = 4.dp)) {
+                    report.notes.forEach { note ->
+                        Text(
+                            text = note,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AurumColors.textDim
+                        )
+                        Spacer(Modifier.height(4.dp))
+                    }
+                    Text(
+                        text = report.caveat,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AurumColors.textDim
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MustBuyCard(
+    row: MustBuyRow,
+    onOpen: () -> Unit,
+    onAnalyze: () -> Unit
+) {
+    AurumCard(onClick = onOpen) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "%02d".format(row.rank),
+                style = MaterialTheme.typography.headlineMedium,
+                color = AurumColors.gold
+            )
+            Spacer(Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = row.symbol,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AurumColors.text
+                )
+                if (row.name.isNotBlank()) {
+                    Text(
+                        text = row.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AurumColors.textDim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = Fmt.money(row.price),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AurumColors.text
+                )
+                row.dayChangePct?.let {
+                    DeltaPct(value = it, style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            PillTag(
+                text = "${row.passed} of ${MustBuyEngine.CHECK_COUNT} checks green",
+                color = if (row.passed >= 7) AurumColors.gain else AurumColors.gold
+            )
+            if (row.measured < MustBuyEngine.CHECK_COUNT) {
+                Spacer(Modifier.width(8.dp))
+                PillTag(
+                    text = "${row.measured} measured",
+                    color = AurumColors.textDim
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        row.checks.forEach { check -> MustBuyCheckRow(check) }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.heightIn(min = 40.dp).clickable { onAnalyze() }
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.QueryStats,
+                contentDescription = null,
+                tint = AurumColors.gold,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "Full analysis & SPY race",
+                style = MaterialTheme.typography.labelMedium,
+                color = AurumColors.gold
+            )
+        }
+    }
+}
+
+/** One check on the card: pass ✓ green, fail ✗ red, unmeasured — dim. */
+@Composable
+private fun MustBuyCheckRow(check: MustBuyCheck) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+    ) {
+        Text(
+            text = when (check.state) {
+                CheckState.PASS -> "✓"
+                CheckState.FAIL -> "✗"
+                CheckState.UNMEASURED -> "—"
+            },
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = when (check.state) {
+                CheckState.PASS -> AurumColors.gain
+                CheckState.FAIL -> AurumColors.loss
+                CheckState.UNMEASURED -> AurumColors.textDim
+            },
+            modifier = Modifier.width(18.dp)
+        )
+        Text(
+            text = check.label,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (check.state == CheckState.UNMEASURED) AurumColors.textDim
+            else AurumColors.text
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = check.detail,
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+            modifier = Modifier.weight(1f)
         )
     }
 }

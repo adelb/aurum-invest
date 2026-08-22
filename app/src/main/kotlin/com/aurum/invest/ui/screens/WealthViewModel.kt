@@ -4,23 +4,33 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
+import com.aurum.invest.analytics.BeatSpyEngine
 import com.aurum.invest.analytics.BookContext
 import com.aurum.invest.analytics.DeploymentPlan
 import com.aurum.invest.analytics.EngineRecordReport
 import com.aurum.invest.analytics.MarketRating
+import com.aurum.invest.analytics.MustBuyCandidate
+import com.aurum.invest.analytics.MustBuyEngine
+import com.aurum.invest.analytics.MustBuyReport
 import com.aurum.invest.analytics.NextSessionReport
 import com.aurum.invest.analytics.PerformanceReport
 import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.analytics.WealthReport
 import com.aurum.invest.analytics.WeeklyStrategy
+import com.aurum.invest.core.Dates
 import com.aurum.invest.data.repo.PortfolioRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The Wealth tab's state: the wealth engine's full evaluation, the market
@@ -56,6 +66,11 @@ data class WealthState(
     val performanceLoading: Boolean = true,
     /** The engines' own graded call record. */
     val record: EngineRecordReport? = null,
+    /** The must-buy convergence: today's picks through every measured check. */
+    val mustBuy: MustBuyReport? = null,
+    val mustBuyLoading: Boolean = true,
+    val mustBuyScanned: Int = 0,
+    val mustBuyTotal: Int = 0,
     /** True while a pull-to-refresh recompute is in flight. */
     val refreshing: Boolean = false
 )
@@ -74,6 +89,13 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
     private var nextSessionJob: Job? = null
     private var performanceJob: Job? = null
     private var recordJob: Job? = null
+    private var mustBuyJob: Job? = null
+
+    private companion object {
+        /** Five years of dailies per SPY race — the long horizons' analog pool. */
+        const val BEAT_SPY_DAYS = 1825
+        const val DAY_MS = 86_400_000L
+    }
 
     init {
         viewModelScope.launch {
@@ -103,6 +125,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
         }
         refreshNextSession()
         refreshRecord()
+        refreshMustBuy()
         // A wallet change (top-up, first setup) re-sizes everything at once.
         viewModelScope.launch {
             container.wallet.total.collectLatest {
@@ -152,6 +175,192 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
             val record = runCatching { container.record.getRecord() }.getOrNull()
             if (record != null) _state.update { it.copy(record = record) }
         }
+    }
+
+    /**
+     * The must-buy convergence: every stock in today's pick lists put through
+     * every measured check the app has — the scans, the technique board, the
+     * Beat-SPY race, earnings proximity, analyst consensus, the news read, and
+     * the fit against the live book — then ranked by [MustBuyEngine]. Runs
+     * entirely off the main thread (the candle stores parse on the caller's
+     * dispatcher), with candle fetches chunked so the board never bursts Yahoo.
+     */
+    private fun refreshMustBuy(quoteMaxAgeMs: Long = 300_000L) {
+        mustBuyJob?.cancel()
+        mustBuyJob = viewModelScope.launch {
+            _state.update {
+                it.copy(mustBuyLoading = true, mustBuyScanned = 0, mustBuyTotal = 0)
+            }
+            try {
+                withContext(Dispatchers.Default) { runMustBuyScan(quoteMaxAgeMs) }
+            } finally {
+                _state.update { it.copy(mustBuyLoading = false) }
+            }
+        }
+    }
+
+    /** One nominated stock's facts, merged across every list that carries it. */
+    private class Nominee(var name: String) {
+        val sources = ArrayList<String>()
+        var bestScore: Double? = null
+        var pickPrice: Double = 0.0
+        var techDirection: String? = null
+        var techBullish: Int = 0
+        var techTotal: Int = 0
+        var analystRating: Double? = null
+        var rewardRisk: Double? = null
+        var headlineSentiment: Int? = null
+
+        fun nominate(source: String, score: Double, price: Double) {
+            if (source !in sources) sources.add(source)
+            bestScore = maxOf(bestScore ?: score, score)
+            if (price > 0.0) pickPrice = price
+        }
+
+        fun tech(direction: String, bullish: Int, total: Int) {
+            // The deepest board read wins — more techniques voting, more signal.
+            if (total > techTotal) {
+                techDirection = direction
+                techBullish = bullish
+                techTotal = total
+            }
+        }
+    }
+
+    private suspend fun runMustBuyScan(quoteMaxAgeMs: Long) {
+        val picks = container.picks
+        // Sequential on purpose — each ensure can be a market-wide sweep.
+        val daily = if (Dates.isSaturday()) emptyList() else picks.ensureDaily()
+        val entries = picks.ensureEntries()
+        val power = picks.ensurePower()
+        val weekly = picks.ensureCurrentWeek()
+        val budget = picks.ensureBudgetWeek()
+
+        val nominees = LinkedHashMap<String, Nominee>()
+        fun of(symbol: String, name: String): Nominee? {
+            val key = symbol.trim().uppercase()
+            if (key.isEmpty() || key == "SPY") return null
+            val n = nominees.getOrPut(key) { Nominee(name) }
+            if (n.name.isBlank() && name.isNotBlank()) n.name = name
+            return n
+        }
+        for (p in daily) {
+            of(p.symbol, p.name)?.apply {
+                nominate("Daily", p.score, p.price)
+                tech(p.techDirection, p.techBullish, p.techTotal)
+                if (p.headline.isNotBlank()) headlineSentiment = p.headlineSentiment
+            }
+        }
+        for (p in entries) {
+            of(p.symbol, p.name)?.apply {
+                nominate("Entries", p.score, p.price)
+                tech(p.techDirection, p.techBullish, p.techTotal)
+                if (p.analystRating != null) analystRating = p.analystRating
+                rewardRisk = p.rewardRisk
+            }
+        }
+        for (p in power) {
+            of(p.symbol, p.name)?.apply {
+                nominate("Power", p.score, p.price)
+                tech(p.techDirection, p.techBullish, p.techTotal)
+            }
+        }
+        for (p in weekly) of(p.symbol, p.name)?.nominate("Weekly", p.score, p.priceAtPick)
+        for (p in budget) of(p.symbol, p.name)?.nominate("Under $25", p.score, p.priceAtPick)
+
+        val symbols = nominees.keys.toList()
+        _state.update { it.copy(mustBuyTotal = symbols.size) }
+        if (symbols.isEmpty()) {
+            _state.update {
+                it.copy(mustBuy = MustBuyEngine.build(emptyList()))
+            }
+            return
+        }
+
+        // Shared facts, batched: live quotes, earnings dates, sectors.
+        val quotes = runCatching {
+            container.market.getQuotes(symbols, maxAgeMs = quoteMaxAgeMs)
+        }.getOrDefault(emptyMap())
+        val earnings = runCatching {
+            container.market.getEarningsDates(symbols)
+        }.getOrDefault(emptyMap())
+        val sectors = runCatching {
+            container.market.getSectors(symbols)
+        }.getOrDefault(emptyMap())
+
+        // The index side of every race, fetched once.
+        val spyCandles = runCatching {
+            container.market.getDailyCandles("SPY", BEAT_SPY_DAYS)
+        }.getOrDefault(emptyList())
+        val spyQuote = runCatching { container.market.getQuote("SPY") }.getOrNull()
+
+        val now = System.currentTimeMillis()
+        val candidates = ArrayList<MustBuyCandidate>(symbols.size)
+        for (chunk in symbols.chunked(4)) {
+            val raced = coroutineScope {
+                chunk.map { sym ->
+                    async {
+                        if (spyCandles.isEmpty()) return@async sym to null
+                        val stock = runCatching {
+                            container.market.getDailyCandles(sym, BEAT_SPY_DAYS)
+                        }.getOrDefault(emptyList())
+                        sym to runCatching {
+                            BeatSpyEngine.build(
+                                sym, stock, spyCandles,
+                                quotes[sym]?.price, spyQuote?.price
+                            )
+                        }.getOrNull()
+                    }
+                }.awaitAll()
+            }
+            for ((sym, report) in raced) {
+                val n = nominees[sym] ?: continue
+                val quote = quotes[sym]
+                val price = quote?.price?.takeIf { it > 0.0 } ?: n.pickPrice
+                val dayChange = quote?.let { q ->
+                    if (q.prevClose > 0.0) (q.price - q.prevClose) / q.prevClose * 100.0
+                    else null
+                }
+                val horizon = report?.let { BeatSpyEngine.buyHorizon(it) }
+                val info = earnings[sym]
+                val earningsDays = info?.nextTs
+                    ?.takeIf { it >= now - DAY_MS }
+                    ?.let { ((it - now).coerceAtLeast(0L) / DAY_MS).toInt() }
+                candidates += MustBuyCandidate(
+                    symbol = sym,
+                    name = n.name,
+                    price = price,
+                    dayChangePct = dayChange,
+                    sources = n.sources.toList(),
+                    bestScore = n.bestScore,
+                    techDirection = n.techDirection,
+                    techBullish = n.techBullish,
+                    techTotal = n.techTotal,
+                    spyVerdict = horizon?.verdict,
+                    spyGreen = if (report != null && horizon != null) {
+                        BeatSpyEngine.inGreenZone(report.price, horizon)
+                    } else null,
+                    spyBeatSharePct = horizon?.beatSharePct,
+                    spyEdgeEntry = horizon?.edgeEntry,
+                    earningsKnown = info != null,
+                    earningsInDays = earningsDays,
+                    noteKind = PortfolioLens.pickNote(
+                        sym, sectors[sym], _state.value.book
+                    )?.kind,
+                    analystRating = n.analystRating,
+                    rewardRisk = n.rewardRisk,
+                    headlineSentiment = n.headlineSentiment
+                )
+            }
+            _state.update {
+                it.copy(
+                    mustBuyScanned = (it.mustBuyScanned + chunk.size)
+                        .coerceAtMost(symbols.size)
+                )
+            }
+        }
+
+        _state.update { it.copy(mustBuy = MustBuyEngine.build(candidates)) }
     }
 
     /** The wealth engine's full evaluation — health, holdings, risk, actions. */
@@ -225,6 +434,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                 refreshNextSession(force = true)
                 refreshPerformance(force = true)
                 refreshRecord()
+                refreshMustBuy(quoteMaxAgeMs = 60_000L)
             } finally {
                 _state.update { it.copy(refreshing = false) }
             }
