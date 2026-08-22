@@ -584,9 +584,9 @@ private fun androidx.compose.foundation.lazy.LazyListScope.mustBuyItems(
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "Of ${report.scanned} scanned picks, none passes " +
-                        "${MustBuyEngine.MIN_PASSES} of the ${MustBuyEngine.CHECK_COUNT} " +
-                        "checks without a measured negative. The bar does not bend — " +
+                    text = "Of ${report.scanned} scanned picks, none clears the bar — " +
+                        "enough of the weighted checks measurable, half of that weight " +
+                        "earned, and not one measured negative. The bar does not bend — " +
                         "an empty list is the honest answer.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
@@ -604,10 +604,14 @@ private fun androidx.compose.foundation.lazy.LazyListScope.mustBuyItems(
         else -> {
             item {
                 Text(
-                    text = "Every stock in today's picks, judged on all " +
-                        "${MustBuyEngine.CHECK_COUNT} measured checks at once. A seat " +
-                        "needs ${MustBuyEngine.MIN_PASSES}+ green and not one measured " +
-                        "negative — the evidence is laid open on every card.",
+                    text = "Every stock the engines nominate — the five pick lists and " +
+                        "the next-session scan — judged on ${MustBuyEngine.CHECK_COUNT} " +
+                        "WEIGHTED checks (the SPY green zone weighs heaviest at " +
+                        "${MustBuyEngine.WEIGHT_GREEN.toInt()} of " +
+                        "${MustBuyEngine.CHECK_WEIGHT_TOTAL.toInt()} points), plus " +
+                        "backing scaled by each engine's own graded record — the most " +
+                        "accurate engine backs hardest. The evidence is laid open on " +
+                        "every card.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim,
                     modifier = Modifier.padding(horizontal = 4.dp)
@@ -696,19 +700,37 @@ private fun MustBuyCard(
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             PillTag(
-                text = "${row.passed} of ${MustBuyEngine.CHECK_COUNT} checks green",
-                color = if (row.passed >= 7) AurumColors.gain else AurumColors.gold
+                text = String.format(Locale.US, "%.1f pts", row.totalPoints),
+                color = AurumColors.gold
+            )
+            Spacer(Modifier.width(8.dp))
+            PillTag(
+                text = String.format(
+                    Locale.US, "checks %.1f of %.1f", row.checkPoints, row.checkMax
+                ),
+                color = if (row.checkPoints >= 0.75 * row.checkMax) AurumColors.gain
+                else AurumColors.textDim
             )
             if (row.measured < MustBuyEngine.CHECK_COUNT) {
                 Spacer(Modifier.width(8.dp))
                 PillTag(
-                    text = "${row.measured} measured",
+                    text = "${row.measured} of ${MustBuyEngine.CHECK_COUNT} measured",
                     color = AurumColors.textDim
                 )
             }
         }
         Spacer(Modifier.height(10.dp))
         row.checks.forEach { check -> MustBuyCheckRow(check) }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "Backing " + String.format(Locale.US, "%.1f pts — ", row.backingPoints) +
+                row.backing.joinToString(" · ") { b ->
+                    String.format(Locale.US, "%s ×%.1f", b.source, b.multiplier) +
+                        if (b.measured) " (${b.gradedCalls} graded)" else ""
+                },
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
+        )
         Spacer(Modifier.height(8.dp))
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -759,6 +781,11 @@ private fun MustBuyCheckRow(check: MustBuyCheck) {
             style = MaterialTheme.typography.labelMedium,
             color = if (check.state == CheckState.UNMEASURED) AurumColors.textDim
             else AurumColors.text
+        )
+        Text(
+            text = " ·${check.weight.toInt()}pt",
+            style = MaterialTheme.typography.labelSmall,
+            color = AurumColors.textDim
         )
         Spacer(Modifier.width(8.dp))
         Text(

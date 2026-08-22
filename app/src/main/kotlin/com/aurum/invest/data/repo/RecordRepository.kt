@@ -93,6 +93,34 @@ class RecordRepository(
     }
 
     /**
+     * Logs one pick list's freshly computed picks under its own kind, one per
+     * symbol per day — each list is its own engine and earns its own graded
+     * record, which the must-buy backing weights then read. Same honesty as
+     * every other log: no live price, no entry.
+     */
+    suspend fun logListPicks(kind: String, picks: List<Pair<String, Double>>) {
+        val now = System.currentTimeMillis()
+        for ((rawSymbol, price) in picks) {
+            val symbol = rawSymbol.trim().uppercase()
+            if (symbol.isEmpty() || price <= 0.0) continue
+            try {
+                if (dao.countSince(kind, symbol, now - PICK_DEDUPE_MS) > 0) continue
+                dao.insert(
+                    EngineCallEntity(
+                        ts = now,
+                        kind = kind,
+                        symbol = symbol,
+                        refPrice = price,
+                        note = ""
+                    )
+                )
+            } catch (_: Exception) {
+                // A failed log loses one data point, never the feature.
+            }
+        }
+    }
+
+    /**
      * Fills forward outcomes for every call whose sessions have since played
      * out. Candles come from the shared cached store, so a run costs at most
      * one fetch per distinct unscored symbol (capped per run). Returns how

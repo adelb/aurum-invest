@@ -1,6 +1,7 @@
 package com.aurum.invest.data.repo
 
 import com.aurum.invest.analytics.DailyPicker
+import com.aurum.invest.analytics.EngineRecord
 import com.aurum.invest.analytics.EntryPicker
 import com.aurum.invest.analytics.IntradayPick
 import com.aurum.invest.analytics.IntradayPicker
@@ -32,8 +33,23 @@ class PicksRepository(
     private val picksDao: PicksDao,
     private val market: MarketRepository,
     private val cacheDao: CacheDao,
-    private val news: NewsRepository
+    private val news: NewsRepository,
+    private val record: RecordRepository? = null
 ) {
+
+    /**
+     * Every freshly computed list is logged into the self-scoring ledger
+     * under its own kind — each list is its own engine, graded on the real
+     * 20-session outcomes, and the must-buy backing weights read that record.
+     * Logging never blocks or breaks the scan it rides on.
+     */
+    private suspend fun logList(kind: String, picks: List<Pair<String, Double>>) {
+        try {
+            record?.logListPicks(kind, picks)
+        } catch (_: Exception) {
+            // A lost log is one data point, never the feature.
+        }
+    }
 
     companion object {
         /** Budget (under-$25) picks share the weekly_picks table under a suffixed week key. */
@@ -85,6 +101,7 @@ class PicksRepository(
                         updatedAt = System.currentTimeMillis()
                     )
                 )
+                logList(EngineRecord.KIND_POWER, picks.map { it.symbol to it.price })
             }
             picks
         } catch (_: Exception) {
@@ -242,6 +259,7 @@ class PicksRepository(
                         updatedAt = System.currentTimeMillis()
                     )
                 )
+                logList(EngineRecord.KIND_ENTRY, picks.map { it.symbol to it.price })
             }
             picks
         } catch (_: Exception) {
@@ -279,6 +297,7 @@ class PicksRepository(
                         updatedAt = System.currentTimeMillis()
                     )
                 )
+                logList(EngineRecord.KIND_DAILY, picks.map { it.symbol to it.price })
             }
             picks
         } catch (_: Exception) {
@@ -320,6 +339,7 @@ class PicksRepository(
             if (picks.isNotEmpty()) {
                 picksDao.clearWeek(key)
                 picksDao.insertAll(picks.map { it.toEntity() })
+                logList(EngineRecord.KIND_BUDGET, picks.map { it.symbol to it.priceAtPick })
             }
             picks
         } catch (_: Exception) {
@@ -349,6 +369,7 @@ class PicksRepository(
             if (picks.isNotEmpty()) {
                 picksDao.clearWeek(weekStart)
                 picksDao.insertAll(picks.map { it.toEntity() })
+                logList(EngineRecord.KIND_WEEKLY, picks.map { it.symbol to it.priceAtPick })
             }
             picks
         } catch (_: Exception) {

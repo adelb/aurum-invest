@@ -61,6 +61,15 @@ object EngineRecord {
     const val KIND_EXIT = "EXIT"
     const val KIND_PICK = "PICK"
 
+    // Each pick list is its own engine and earns its own graded record —
+    // the must-buy backing weights read these buckets, so accuracy is
+    // measured per engine, never assumed.
+    const val KIND_DAILY = "DAILY"
+    const val KIND_ENTRY = "ENTRY"
+    const val KIND_POWER = "POWER"
+    const val KIND_WEEKLY = "WEEKLY"
+    const val KIND_BUDGET = "BUDGET"
+
     private data class KindSpec(
         val kind: String,
         val label: String,
@@ -85,6 +94,28 @@ object EngineRecord {
         KindSpec(
             KIND_EXIT, "Exit calls",
             "an exit wins when the name kept falling — money the call saved", false
+        ),
+        // The pick lists, graded on the same 20-session clock whatever each
+        // list's own horizon — the yardstick a buy is ultimately judged by.
+        KindSpec(
+            KIND_DAILY, "Daily picks",
+            "a daily pick wins when the name closed higher 20 sessions on", true
+        ),
+        KindSpec(
+            KIND_ENTRY, "Entry picks",
+            "an entry pick wins when the name closed higher 20 sessions on", true
+        ),
+        KindSpec(
+            KIND_POWER, "Power-hour picks",
+            "a power pick wins when the name closed higher 20 sessions on", true
+        ),
+        KindSpec(
+            KIND_WEEKLY, "Weekly picks",
+            "a weekly pick wins when the name closed higher 20 sessions on", true
+        ),
+        KindSpec(
+            KIND_BUDGET, "Under-$25 picks",
+            "an under-$25 pick wins when the name closed higher 20 sessions on", true
         )
     )
 

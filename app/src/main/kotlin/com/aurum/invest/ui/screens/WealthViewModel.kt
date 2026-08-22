@@ -267,12 +267,23 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
         }
         for (p in weekly) of(p.symbol, p.name)?.nominate("Weekly", p.score, p.priceAtPick)
         for (p in budget) of(p.symbol, p.name)?.nominate("Under $25", p.score, p.priceAtPick)
+        // The next-session engine's picks are nominations too — the one
+        // engine whose record is already graded (KIND_PICK in the ledger).
+        val nextSession = runCatching {
+            wealth.getNextSession(container.portfolio)
+        }.getOrNull()
+        for (p in nextSession?.picks.orEmpty()) {
+            of(p.symbol, p.name)?.nominate("Next session", p.score.toDouble(), p.price)
+        }
+
+        // Each engine's own graded record — the backing weights read it.
+        val engineRecord = runCatching { container.record.getRecord() }.getOrNull()
 
         val symbols = nominees.keys.toList()
         _state.update { it.copy(mustBuyTotal = symbols.size) }
         if (symbols.isEmpty()) {
             _state.update {
-                it.copy(mustBuy = MustBuyEngine.build(emptyList()))
+                it.copy(mustBuy = MustBuyEngine.build(emptyList(), engineRecord))
             }
             return
         }
@@ -360,7 +371,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
-        _state.update { it.copy(mustBuy = MustBuyEngine.build(candidates)) }
+        _state.update { it.copy(mustBuy = MustBuyEngine.build(candidates, engineRecord)) }
     }
 
     /** The wealth engine's full evaluation — health, holdings, risk, actions. */
