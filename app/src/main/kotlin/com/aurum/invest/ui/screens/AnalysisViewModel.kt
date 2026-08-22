@@ -212,19 +212,21 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
      * replayed as paired windows. Runs beside the main load; a result that
      * raced a newer symbol is dropped.
      */
-    private suspend fun loadBeatSpy(sym: String, price: Double?) {
-        val stock = runCatching { market.getDailyCandles(sym, BEAT_SPY_DAYS) }
-            .getOrDefault(emptyList())
-        val spy = runCatching { market.getDailyCandles("SPY", BEAT_SPY_DAYS) }
-            .getOrDefault(emptyList())
-        val spyQuote = runCatching { market.getQuote("SPY") }.getOrNull()
-        val report = withContext(Dispatchers.Default) {
-            runCatching {
+    private suspend fun loadBeatSpy(sym: String, price: Double?) =
+        // Whole race off the main thread: the five-year candle stores are
+        // parsed from JSON on the caller's dispatcher, and two of them on
+        // Main is a visible hitch every time the screen opens.
+        withContext(Dispatchers.Default) {
+            val stock = runCatching { market.getDailyCandles(sym, BEAT_SPY_DAYS) }
+                .getOrDefault(emptyList())
+            val spy = runCatching { market.getDailyCandles("SPY", BEAT_SPY_DAYS) }
+                .getOrDefault(emptyList())
+            val spyQuote = runCatching { market.getQuote("SPY") }.getOrNull()
+            val report = runCatching {
                 BeatSpyEngine.build(sym, stock, spy, price, spyQuote?.price)
             }.getOrNull()
+            _state.update { st ->
+                if (st.symbol != sym) st else st.copy(beatSpy = report, beatSpyLoading = false)
+            }
         }
-        _state.update { st ->
-            if (st.symbol != sym) st else st.copy(beatSpy = report, beatSpyLoading = false)
-        }
-    }
 }

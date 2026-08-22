@@ -206,7 +206,26 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
                 _state.update { it.copy(book = PortfolioLens.build(views, sectors)) }
             }
         }
-        // Classify whichever picks are on screen; cached lookups make this cheap.
+        // Pre/post-market prints for the four pick tabs' visible symbols —
+        // repo caching (5 min) keeps repeat visits cheap. The SPY tab's rows
+        // are deliberately absent: their cards carry no extended-hours chips,
+        // and re-sweeping the whole board every time a green row landed
+        // mid-scan was pure waste.
+        viewModelScope.launch {
+            _state
+                .map { st ->
+                    (st.rows.map { it.pick.symbol } +
+                        st.budgetRows.map { it.pick.symbol } +
+                        st.dailyRows.map { it.symbol } +
+                        st.entryRows.map { it.symbol } +
+                        st.powerRows.map { it.symbol }).toSet()
+                }
+                .distinctUntilChanged()
+                .collect { symbols -> launch { loadExtHours(symbols) } }
+        }
+        // Sector classification for every visible pick, green rows included,
+        // so each card's portfolio note stays factual; cached lookups (30
+        // days) make this cheap.
         viewModelScope.launch {
             _state
                 .map { st ->
@@ -219,9 +238,6 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 .distinctUntilChanged()
                 .collect { symbols ->
-                    // Pre/post-market prints for every visible pick — repo
-                    // caching (5 min) keeps repeat visits cheap.
-                    launch { loadExtHours(symbols) }
                     val missing = symbols - _state.value.pickSectors.keys
                     if (missing.isEmpty()) return@collect
                     val fetched = market.getSectors(missing.toList())
@@ -317,109 +333,115 @@ class PicksViewModel(app: Application) : AndroidViewModel(app) {
                 spyUnraced = 0, spyLoading = true
             )
         }
+        // The whole scan lives OFF the main thread: candle-store JSON is
+        // parsed on the caller's dispatcher, and five years × ~45 symbols of
+        // it on Main is exactly what makes the app feel heavy. Network still
+        // hops to IO inside the client; Room manages its own threads.
         try {
-            // The stocks now in the picks. Sequential on purpose: each ensure
-            // can be a market-wide sweep, and firing them together buried the
-            // app in requests before (see the note in init).
-            val daily = if (Dates.isSaturday()) emptyList() else picks.ensureDaily()
-            val entries = picks.ensureEntries()
-            val power = picks.ensurePower()
-            val weekly = picks.ensureCurrentWeek()
-            val budget = picks.ensureBudgetWeek()
-
-            val sources = LinkedHashMap<String, Pair<String, MutableList<String>>>()
-            fun add(symbol: String, name: String, source: String) {
-                val key = symbol.trim().uppercase()
-                if (key.isEmpty() || key == "SPY") return
-                val cur = sources.getOrPut(key) { name to mutableListOf() }
-                if (cur.first.isBlank() && name.isNotBlank()) sources[key] = name to cur.second
-                if (source !in cur.second) cur.second.add(source)
-            }
-            daily.forEach { add(it.symbol, it.name, "Daily") }
-            entries.forEach { add(it.symbol, it.name, "Entries") }
-            power.forEach { add(it.symbol, it.name, "Power") }
-            weekly.forEach { add(it.symbol, it.name, "Weekly") }
-            budget.forEach { add(it.symbol, it.name, "Under $25") }
-
-            val symbols = sources.keys.toList()
-            _state.update { it.copy(spyTotal = symbols.size) }
-            if (symbols.isEmpty()) return
-
-            // The index side of every race, fetched once.
-            val spyCandles = runCatching {
-                market.getDailyCandles("SPY", BEAT_SPY_DAYS)
-            }.getOrDefault(emptyList())
-            if (spyCandles.isEmpty()) {
-                _state.update {
-                    it.copy(spyScanned = symbols.size, spyUnraced = symbols.size)
-                }
-                return
-            }
-            val spyQuote = runCatching {
-                market.getQuote("SPY", maxAgeMs = quoteMaxAgeMs)
-            }.getOrNull()
-            val quotes = runCatching {
-                market.getQuotes(symbols, maxAgeMs = quoteMaxAgeMs)
-            }.getOrDefault(emptyMap())
-
-            val green = ArrayList<SpyGreenRow>()
-            var scanned = 0
-            var unraced = 0
-            for (chunk in symbols.chunked(4)) {
-                val raced = coroutineScope {
-                    chunk.map { sym ->
-                        async {
-                            val stock = runCatching {
-                                market.getDailyCandles(sym, BEAT_SPY_DAYS)
-                            }.getOrDefault(emptyList())
-                            sym to withContext(Dispatchers.Default) {
-                                runCatching {
-                                    BeatSpyEngine.build(
-                                        sym, stock, spyCandles,
-                                        quotes[sym]?.price, spyQuote?.price
-                                    )
-                                }.getOrNull()
-                            }
-                        }
-                    }.awaitAll()
-                }
-                for ((sym, report) in raced) {
-                    val h = report?.let { BeatSpyEngine.buyHorizon(it) }
-                    if (report == null || h == null) {
-                        unraced++
-                        continue
-                    }
-                    if (!BeatSpyEngine.inGreenZone(report.price, h)) continue
-                    val (name, from) = sources[sym] ?: ("" to mutableListOf<String>())
-                    green += SpyGreenRow(
-                        symbol = sym,
-                        name = name,
-                        price = report.price,
-                        edgeEntry = h.edgeEntry,
-                        breakevenEntry = h.breakevenEntry,
-                        headroomPct = (h.edgeEntry - report.price) / report.price * 100.0,
-                        beatSharePct = h.beatSharePct,
-                        medianEdgePct = h.medianEdgePct,
-                        stockMedianPct = h.stockMedianPct,
-                        spyMedianPct = h.spyMedianPct,
-                        analogCount = h.analogCount,
-                        horizonLabel = h.label,
-                        verdict = h.verdict,
-                        sources = from.toList()
-                    )
-                }
-                scanned += chunk.size
-                // Deepest in the green first — the most room to still be right.
-                val sorted = green.sortedWith(
-                    compareByDescending<SpyGreenRow> { it.headroomPct }
-                        .thenByDescending { it.beatSharePct }
-                )
-                _state.update {
-                    it.copy(spyRows = sorted, spyScanned = scanned, spyUnraced = unraced)
-                }
-            }
+            withContext(Dispatchers.Default) { runScanSpy(quoteMaxAgeMs) }
         } finally {
             _state.update { it.copy(spyLoading = false) }
+        }
+    }
+
+    private suspend fun runScanSpy(quoteMaxAgeMs: Long) {
+        // The stocks now in the picks. Sequential on purpose: each ensure
+        // can be a market-wide sweep, and firing them together buried the
+        // app in requests before (see the note in init).
+        val daily = if (Dates.isSaturday()) emptyList() else picks.ensureDaily()
+        val entries = picks.ensureEntries()
+        val power = picks.ensurePower()
+        val weekly = picks.ensureCurrentWeek()
+        val budget = picks.ensureBudgetWeek()
+
+        val sources = LinkedHashMap<String, Pair<String, MutableList<String>>>()
+        fun add(symbol: String, name: String, source: String) {
+            val key = symbol.trim().uppercase()
+            if (key.isEmpty() || key == "SPY") return
+            val cur = sources.getOrPut(key) { name to mutableListOf() }
+            if (cur.first.isBlank() && name.isNotBlank()) sources[key] = name to cur.second
+            if (source !in cur.second) cur.second.add(source)
+        }
+        daily.forEach { add(it.symbol, it.name, "Daily") }
+        entries.forEach { add(it.symbol, it.name, "Entries") }
+        power.forEach { add(it.symbol, it.name, "Power") }
+        weekly.forEach { add(it.symbol, it.name, "Weekly") }
+        budget.forEach { add(it.symbol, it.name, "Under $25") }
+
+        val symbols = sources.keys.toList()
+        _state.update { it.copy(spyTotal = symbols.size) }
+        if (symbols.isEmpty()) return
+
+        // The index side of every race, fetched once.
+        val spyCandles = runCatching {
+            market.getDailyCandles("SPY", BEAT_SPY_DAYS)
+        }.getOrDefault(emptyList())
+        if (spyCandles.isEmpty()) {
+            _state.update {
+                it.copy(spyScanned = symbols.size, spyUnraced = symbols.size)
+            }
+            return
+        }
+        val spyQuote = runCatching {
+            market.getQuote("SPY", maxAgeMs = quoteMaxAgeMs)
+        }.getOrNull()
+        val quotes = runCatching {
+            market.getQuotes(symbols, maxAgeMs = quoteMaxAgeMs)
+        }.getOrDefault(emptyMap())
+
+        val green = ArrayList<SpyGreenRow>()
+        var scanned = 0
+        var unraced = 0
+        for (chunk in symbols.chunked(4)) {
+            val raced = coroutineScope {
+                chunk.map { sym ->
+                    async {
+                        val stock = runCatching {
+                            market.getDailyCandles(sym, BEAT_SPY_DAYS)
+                        }.getOrDefault(emptyList())
+                        sym to runCatching {
+                            BeatSpyEngine.build(
+                                sym, stock, spyCandles,
+                                quotes[sym]?.price, spyQuote?.price
+                            )
+                        }.getOrNull()
+                    }
+                }.awaitAll()
+            }
+            for ((sym, report) in raced) {
+                val h = report?.let { BeatSpyEngine.buyHorizon(it) }
+                if (report == null || h == null) {
+                    unraced++
+                    continue
+                }
+                if (!BeatSpyEngine.inGreenZone(report.price, h)) continue
+                val (name, from) = sources[sym] ?: ("" to mutableListOf<String>())
+                green += SpyGreenRow(
+                    symbol = sym,
+                    name = name,
+                    price = report.price,
+                    edgeEntry = h.edgeEntry,
+                    breakevenEntry = h.breakevenEntry,
+                    headroomPct = (h.edgeEntry - report.price) / report.price * 100.0,
+                    beatSharePct = h.beatSharePct,
+                    medianEdgePct = h.medianEdgePct,
+                    stockMedianPct = h.stockMedianPct,
+                    spyMedianPct = h.spyMedianPct,
+                    analogCount = h.analogCount,
+                    horizonLabel = h.label,
+                    verdict = h.verdict,
+                    sources = from.toList()
+                )
+            }
+            scanned += chunk.size
+            // Deepest in the green first — the most room to still be right.
+            val sorted = green.sortedWith(
+                compareByDescending<SpyGreenRow> { it.headroomPct }
+                    .thenByDescending { it.beatSharePct }
+            )
+            _state.update {
+                it.copy(spyRows = sorted, spyScanned = scanned, spyUnraced = unraced)
+            }
         }
     }
 
