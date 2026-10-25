@@ -1,5 +1,6 @@
 package com.aurum.invest.ui.screens
 
+import com.aurum.invest.ui.components.RankedLogo
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -12,6 +13,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.ui.text.font.FontWeight
+import com.aurum.invest.ui.components.ScrollTabs
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -68,7 +71,9 @@ private enum class PicksTab(val key: String) {
     ENTRIES(PicksViewModel.TAB_ENTRIES),
     POWER(PicksViewModel.TAB_POWER),
     WEEKLY(PicksViewModel.TAB_WEEKLY),
-    SPY(PicksViewModel.TAB_SPY)
+    SPY(PicksViewModel.TAB_SPY),
+    /** The 2% desk — its own screen and view model, hosted as the sixth desk. */
+    TWO("two")
 }
 
 @Composable
@@ -79,13 +84,32 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
 
     // Each tab's market-wide scan starts only when that tab is first shown,
     // instead of all four firing at once when the screen opens.
-    LaunchedEffect(tab) { vm.ensureTab(tab.key) }
+    LaunchedEffect(tab) { if (tab != PicksTab.TWO) vm.ensureTab(tab.key) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(AurumColors.bg)
     ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Picks",
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold),
+                color = AurumColors.text
+            )
+        }
+        ScrollTabs(
+            options = listOf("Today", "Entries", "Power", "Weekly", "vs SPY", "2%"),
+            selected = tab.ordinal,
+            onSelect = { tab = PicksTab.entries[it] }
+        )
+        if (tab == PicksTab.TWO) {
+            PreMarketScreen(onOpenDetail = onOpenDetail, onOpenAnalysis = onOpenAnalysis)
+            return@Column
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -100,6 +124,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                         PicksTab.POWER -> "Power Hour"
                         PicksTab.WEEKLY -> "Weekly Picks"
                         PicksTab.SPY -> "Green vs SPY"
+                        PicksTab.TWO -> "2%"
                     },
                     style = MaterialTheme.typography.headlineMedium,
                     color = AurumColors.text
@@ -119,6 +144,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                                 "${state.spyRows.size} of ${state.spyTotal} picks priced in the green"
                             else -> "Every current pick raced against the index"
                         }
+                        PicksTab.TWO -> ""
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = AurumColors.textDim
@@ -130,6 +156,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 PicksTab.POWER -> state.powerRefreshing
                 PicksTab.WEEKLY -> state.refreshing
                 PicksTab.SPY -> state.spyRefreshing || state.spyLoading
+                PicksTab.TWO -> false
             }
             // Fixed 48dp slot so the header doesn't shift when the
             // refresh button swaps to the busy spinner and back.
@@ -137,7 +164,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 if (busy) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(22.dp),
-                        color = AurumColors.gold,
+                        color = AurumColors.accent,
                         strokeWidth = 2.dp
                     )
                 } else {
@@ -149,40 +176,20 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                                 PicksTab.POWER -> vm.refreshPower()
                                 PicksTab.WEEKLY -> vm.refresh()
                                 PicksTab.SPY -> vm.refreshSpy()
+                                PicksTab.TWO -> Unit
                             }
                         }
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Refresh,
                             contentDescription = "Recompute picks",
-                            tint = AurumColors.gold
+                            tint = AurumColors.accent
                         )
                     }
                 }
             }
         }
 
-        SegmentedToggle(
-            options = listOf("Today", "Entries", "Power", "Weekly", "SPY"),
-            selected = when (tab) {
-                PicksTab.DAILY -> 0
-                PicksTab.ENTRIES -> 1
-                PicksTab.POWER -> 2
-                PicksTab.WEEKLY -> 3
-                PicksTab.SPY -> 4
-            },
-            onSelect = {
-                tab = when (it) {
-                    0 -> PicksTab.DAILY
-                    1 -> PicksTab.ENTRIES
-                    2 -> PicksTab.POWER
-                    3 -> PicksTab.WEEKLY
-                    else -> PicksTab.SPY
-                }
-            },
-            compact = true,
-            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp)
-        )
 
         AurumRefreshBox(
             refreshing = when (tab) {
@@ -191,6 +198,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 PicksTab.POWER -> state.powerRefreshing
                 PicksTab.WEEKLY -> state.refreshing
                 PicksTab.SPY -> state.spyRefreshing
+                PicksTab.TWO -> false
             },
             onRefresh = {
                 when (tab) {
@@ -199,6 +207,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                     PicksTab.POWER -> vm.refreshPower()
                     PicksTab.WEEKLY -> vm.refresh()
                     PicksTab.SPY -> vm.refreshSpy()
+                    PicksTab.TWO -> Unit
                 }
             },
             modifier = Modifier.fillMaxSize()
@@ -214,6 +223,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 PicksTab.POWER -> powerItems(state, onOpenDetail, onOpenAnalysis, vm::refreshPower)
                 PicksTab.WEEKLY -> weeklyItems(state, onOpenDetail, onOpenAnalysis, vm::refresh)
                 PicksTab.SPY -> spyGreenItems(state, onOpenDetail, onOpenAnalysis, vm::refreshSpy)
+                PicksTab.TWO -> Unit
             }
         }
         }
@@ -244,7 +254,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.dailyItems(
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = AurumColors.gold)
+                    CircularProgressIndicator(color = AurumColors.accent)
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(
                         text = "Scanning for today's movers…",
@@ -310,7 +320,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.powerItems(
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = AurumColors.gold)
+                    CircularProgressIndicator(color = AurumColors.accent)
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(
                         text = "Sweeping the market for closing strength…",
@@ -372,7 +382,7 @@ private fun PowerWindowBanner() {
                 "(4:00 PM ET)." to AurumColors.gain
         Dates.PowerWindow.BEFORE ->
             "Buy window opens ${fmt.format(java.util.Date(startMs))} your time " +
-                "(2:30 PM ET)." to AurumColors.gold
+                "(2:30 PM ET)." to AurumColors.accent
         Dates.PowerWindow.CLOSED ->
             "Today's buy window has closed — these picks are for the next session." to
                 AurumColors.textDim
@@ -404,11 +414,7 @@ private fun PowerPickCard(
         onClick = onOpen
     ) {
         Row(verticalAlignment = Alignment.Top) {
-            Text(
-                text = pick.rank.toString().padStart(2, '0'),
-                style = MaterialTheme.typography.headlineMedium,
-                color = AurumColors.gold
-            )
+            RankedLogo(symbol = pick.symbol, rank = pick.rank)
             Spacer(modifier = Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.Bottom) {
@@ -435,7 +441,7 @@ private fun PowerPickCard(
                             Locale.US, "+%.1f–%.1f%% overnight potential",
                             pick.expectedLowPct, pick.expectedHighPct
                         ),
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     if (pick.techDirection == "BULLISH" && pick.techTotal > 0) {
@@ -452,7 +458,7 @@ private fun PowerPickCard(
                     Text(
                         text = pick.score.roundToInt().toString(),
                         style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                 }
                 Spacer(modifier = Modifier.height(10.dp))
@@ -500,14 +506,14 @@ private fun PowerPickCard(
                     Icon(
                         imageVector = Icons.Rounded.QueryStats,
                         contentDescription = null,
-                        tint = AurumColors.gold,
+                        tint = AurumColors.accent,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "Full analysis & $3,000 plan",
                         style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                 }
             }
@@ -547,7 +553,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.entryItems(
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = AurumColors.gold)
+                    CircularProgressIndicator(color = AurumColors.accent)
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(
                         text = "Sweeping the whole market for entry setups…",
@@ -613,11 +619,7 @@ private fun EntryPickCard(
         onClick = onOpen
     ) {
         Row(verticalAlignment = Alignment.Top) {
-            Text(
-                text = pick.rank.toString().padStart(2, '0'),
-                style = MaterialTheme.typography.headlineMedium,
-                color = AurumColors.gold
-            )
+            RankedLogo(symbol = pick.symbol, rank = pick.rank)
             Spacer(modifier = Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.Bottom) {
@@ -641,7 +643,7 @@ private fun EntryPickCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     PillTag(
                         text = String.format(Locale.US, "RR %.1f", pick.rewardRisk),
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     if (pick.techDirection == "BULLISH" && pick.techTotal > 0) {
@@ -663,7 +665,7 @@ private fun EntryPickCard(
                     Text(
                         text = pick.score.roundToInt().toString(),
                         style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                 }
                 Spacer(modifier = Modifier.height(10.dp))
@@ -714,14 +716,14 @@ private fun EntryPickCard(
                     Icon(
                         imageVector = Icons.Rounded.QueryStats,
                         contentDescription = null,
-                        tint = AurumColors.gold,
+                        tint = AurumColors.accent,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "Full analysis & $3,000 plan",
                         style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                 }
             }
@@ -759,11 +761,7 @@ private fun DailyPickCard(
         onClick = onOpen
     ) {
         Row(verticalAlignment = Alignment.Top) {
-            Text(
-                text = pick.rank.toString().padStart(2, '0'),
-                style = MaterialTheme.typography.headlineMedium,
-                color = AurumColors.gold
-            )
+            RankedLogo(symbol = pick.symbol, rank = pick.rank)
             Spacer(modifier = Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.Bottom) {
@@ -790,7 +788,7 @@ private fun DailyPickCard(
                             Locale.US, "+%.0f–%.0f%% potential",
                             pick.expectedLowPct, pick.expectedHighPct
                         ),
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     if (pick.techDirection == "BULLISH" && pick.techTotal > 0) {
@@ -807,7 +805,7 @@ private fun DailyPickCard(
                     Text(
                         text = pick.score.roundToInt().toString(),
                         style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                 }
                 Spacer(modifier = Modifier.height(6.dp))
@@ -841,14 +839,14 @@ private fun DailyPickCard(
                     Icon(
                         imageVector = Icons.Rounded.QueryStats,
                         contentDescription = null,
-                        tint = AurumColors.gold,
+                        tint = AurumColors.accent,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "Full analysis & $3,000 plan",
                         style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                 }
             }
@@ -940,7 +938,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.weeklyItems(
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = AurumColors.gold)
+                        CircularProgressIndicator(color = AurumColors.accent)
                         Spacer(modifier = Modifier.height(14.dp))
                         Text(
                             text = "Scanning the market…",
@@ -1003,11 +1001,7 @@ private fun PickCard(
         onClick = onOpen
     ) {
         Row(verticalAlignment = Alignment.Top) {
-            Text(
-                text = pick.rank.toString().padStart(2, '0'),
-                style = MaterialTheme.typography.headlineMedium,
-                color = AurumColors.gold
-            )
+            RankedLogo(symbol = pick.symbol, rank = pick.rank)
             Spacer(modifier = Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.Bottom) {
@@ -1034,7 +1028,7 @@ private fun PickCard(
                     Text(
                         text = pick.score.roundToInt().toString(),
                         style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                 }
                 Spacer(modifier = Modifier.height(6.dp))
@@ -1055,14 +1049,14 @@ private fun PickCard(
                     Icon(
                         imageVector = Icons.Rounded.QueryStats,
                         contentDescription = null,
-                        tint = AurumColors.gold,
+                        tint = AurumColors.accent,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "5-day analysis",
                         style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                 }
             }
@@ -1111,7 +1105,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.spyGreenItems(
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = AurumColors.gold)
+                    CircularProgressIndicator(color = AurumColors.accent)
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(
                         text = "Racing today's picks against SPY — five years of " +
@@ -1270,7 +1264,7 @@ private fun SpyGreenCard(
             StatTile(
                 label = "Median edge",
                 value = "≤ " + Fmt.money(row.breakevenEntry),
-                valueColor = AurumColors.gold,
+                valueColor = AurumColors.accent,
                 modifier = Modifier.weight(1f),
                 maxLines = 1
             )
@@ -1307,14 +1301,14 @@ private fun SpyGreenCard(
             Icon(
                 imageVector = Icons.Rounded.QueryStats,
                 contentDescription = null,
-                tint = AurumColors.gold,
+                tint = AurumColors.accent,
                 modifier = Modifier.size(16.dp)
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
                 text = "Full SPY race",
                 style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.gold
+                color = AurumColors.accent
             )
         }
         PortfolioNoteTag(note)
@@ -1335,7 +1329,7 @@ private fun PortfolioNoteTag(note: PickNote?) {
     PillTag(
         text = note.text,
         color = when (note.kind) {
-            NoteKind.HELD -> AurumColors.gold
+            NoteKind.HELD -> AurumColors.accent
             NoteKind.CONCENTRATION -> AurumColors.loss
             NoteKind.DIVERSIFIES -> AurumColors.info
         }

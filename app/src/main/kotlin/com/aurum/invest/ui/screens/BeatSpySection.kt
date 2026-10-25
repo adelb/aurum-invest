@@ -48,7 +48,7 @@ fun LazyListScope.beatSpyItems(state: AnalysisState) {
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = AurumColors.gold)
+                    CircularProgressIndicator(color = AurumColors.accent)
                     Spacer(Modifier.height(14.dp))
                     Text(
                         text = "Racing ${state.symbol} against SPY — five years of paired windows",
@@ -169,7 +169,7 @@ private fun BeatShareBar(sharePct: Double) {
     val fill = when {
         sharePct >= BeatSpyEngine.BEAT_BAR_PCT -> AurumColors.gain
         sharePct <= BeatSpyEngine.LOSE_BAR_PCT -> AurumColors.loss
-        else -> AurumColors.gold
+        else -> AurumColors.accent
     }
     Canvas(modifier = Modifier.fillMaxWidth().height(10.dp)) {
         val r = CornerRadius(size.height / 2f)
@@ -212,7 +212,7 @@ private fun EntryRangeCard(h: BeatSpyHorizon, price: Double) {
             StatTile(
                 label = "Median edge",
                 value = "≤ " + Fmt.money(h.breakevenEntry),
-                valueColor = AurumColors.gold,
+                valueColor = AurumColors.accent,
                 modifier = Modifier.weight(1f),
                 maxLines = 1
             )
@@ -278,7 +278,7 @@ internal fun EntryZoneBar(edgeEntry: Double, breakevenEntry: Double, price: Doub
         // Between the two: the median's side.
         if (xBreak > xEdge) {
             drawRect(
-                color = AurumColors.gold,
+                color = AurumColors.accent,
                 topLeft = Offset(xEdge, barTop),
                 size = Size(xBreak - xEdge, barH)
             )

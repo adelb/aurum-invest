@@ -117,14 +117,14 @@ fun BankFeedScreen() {
                                 Icon(
                                     imageVector = Icons.Rounded.NotificationsActive,
                                     contentDescription = null,
-                                    tint = AurumColors.gold,
+                                    tint = AurumColors.accent,
                                     modifier = Modifier.size(22.dp)
                                 )
                                 Spacer(Modifier.width(10.dp))
                                 Text(
                                     text = "Notification access is off",
                                     style = MaterialTheme.typography.titleSmall,
-                                    color = AurumColors.gold
+                                    color = AurumColors.accent
                                 )
                             }
                             Spacer(Modifier.height(8.dp))
@@ -138,7 +138,7 @@ fun BankFeedScreen() {
                                 onClick = { BankNotificationListener.openSettings(context) },
                                 shape = RoundedCornerShape(12.dp),
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = AurumColors.gold,
+                                    containerColor = AurumColors.accent,
                                     contentColor = AurumColors.bg
                                 )
                             ) {
@@ -158,7 +158,7 @@ fun BankFeedScreen() {
                     title = "Pending",
                     trailing = {
                         if (state.pending.isNotEmpty()) {
-                            PillTag(text = "${state.pending.size}", color = AurumColors.gold)
+                            PillTag(text = "${state.pending.size}", color = AurumColors.accent)
                         }
                     }
                 )
@@ -310,7 +310,7 @@ private fun PendingEventCard(
                     text = parsed.side.name,
                     color = if (parsed.side == TradeSide.BUY) AurumColors.gain else AurumColors.loss
                 )
-                parsed.symbol?.let { PillTag(text = it, color = AurumColors.gold) }
+                parsed.symbol?.let { PillTag(text = it, color = AurumColors.accent) }
                 parsed.shares?.let { PillTag(text = "${Fmt.qty(it)} sh", color = AurumColors.textDim) }
                 parsed.price?.let { PillTag(text = Fmt.money(it), color = AurumColors.textDim) }
             }
@@ -374,7 +374,7 @@ private fun PendingEventCard(
                         enabled = valid,
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = AurumColors.gold,
+                            containerColor = AurumColors.accent,
                             contentColor = AurumColors.bg,
                             disabledContainerColor = AurumColors.surfaceHigh,
                             disabledContentColor = AurumColors.textDim
@@ -400,7 +400,7 @@ private fun PendingEventCard(
             Text(
                 text = "Tap to review & import",
                 style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.gold
+                color = AurumColors.accent
             )
         }
     }
@@ -486,10 +486,10 @@ private fun HistoryRow(event: BankEvent) {
 private fun feedFieldColors(): TextFieldColors = OutlinedTextFieldDefaults.colors(
     focusedTextColor = AurumColors.text,
     unfocusedTextColor = AurumColors.text,
-    focusedBorderColor = AurumColors.gold,
+    focusedBorderColor = AurumColors.accent,
     unfocusedBorderColor = AurumColors.hairline,
-    cursorColor = AurumColors.gold,
-    focusedLabelColor = AurumColors.gold,
+    cursorColor = AurumColors.accent,
+    focusedLabelColor = AurumColors.accent,
     unfocusedLabelColor = AurumColors.textDim,
     focusedContainerColor = Color.Transparent,
     unfocusedContainerColor = Color.Transparent

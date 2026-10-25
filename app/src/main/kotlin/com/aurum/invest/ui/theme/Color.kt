@@ -4,40 +4,67 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 
+/**
+ * The Toss (TDS) night palette. Three jobs, three colours, never mixed:
+ * blue is for what you can DO (buttons, selection, links), gold is for gold
+ * and for targets, green/red are only ever gain and loss.
+ */
 object AurumColors {
-    val bg = Color(0xFF070B14)
-    val surface = Color(0xFF0E1524)
-    val surfaceHigh = Color(0xFF141D31)
-    val hairline = Color(0xFF1E2A44)
+    /** The screen ground. */
+    val bg = Color(0xFF17171C)
+    /** Layer 1 — cards, sheets, the nav bar. */
+    val surface = Color(0xFF202027)
+    /** Layer 2 — inputs, tracks, chips on a card. */
+    val surfaceHigh = Color(0xFF2C2C35)
+    /** Layer 3 — the selected thumb of a segmented control. */
+    val surfaceTop = Color(0xFF3C3C47)
+    /** Hairlines between rows. */
+    val hairline = Color(0xFF2C2C35)
+    /** The 16dp band that separates one section of a screen from the next. */
+    val separator = Color(0xFF101013)
 
-    val gold = Color(0xFFE9B95C)
-    val goldBright = Color(0xFFF7D98E)
-    val goldDeep = Color(0xFFB98A2F)
+    /** Actions: buttons, the selected tab, links. */
+    val accent = Color(0xFF3182F6)
+    val accentSoft = Color(0x293182F6)
 
-    val text = Color(0xFFF2F5FA)
-    val textDim = Color(0xFF8B96AC)
+    /** Gold itself, and the user's own targets. */
+    val gold = Color(0xFFFFC342)
+    val goldBright = Color(0xFFFFD87A)
+    val goldDeep = Color(0xFFC9932A)
+    val goldSoft = Color(0x29FFC342)
+    /** The warm ground of a gold summary strip. */
+    val goldGround = Color(0xFF3A3020)
 
-    val gain = Color(0xFF34D399)
-    val loss = Color(0xFFF87171)
-    val info = Color(0xFF7DA2E8)
-    val infoSoft = Color(0x267DA2E8)
-    val gainSoft = Color(0x2634D399)
-    val lossSoft = Color(0x26F87171)
-    val goldSoft = Color(0x26E9B95C)
+    val text = Color(0xFFFFFFFF)
+    /** Second-tier text: leads and supporting sentences. */
+    val textSub = Color(0xFFB0B8C1)
+    val textDim = Color(0xFF8B95A1)
+    /** Hints and footnotes. */
+    val textFaint = Color(0xFF6B7684)
 
-    /** Flat series colors for the portfolio allocation bar; cycled when holdings exceed it. */
+    /** Western convention: green up, red down. */
+    val gain = Color(0xFF1FC27A)
+    val loss = Color(0xFFFF5C6A)
+    val info = Color(0xFF64A8FF)
+    val infoSoft = Color(0x2964A8FF)
+    val gainSoft = Color(0x291FC27A)
+    val lossSoft = Color(0x29FF5C6A)
+
+    /**
+     * Allocation series. Four calm, distinguishable tones instead of a
+     * rainbow; a fifth slice and beyond falls back to the quiet greys, since
+     * past four the bar is read by its labels, not its colours.
+     */
     val allocation = listOf(
+        accent,
         gold,
-        info,
-        gain,
-        Color(0xFFB48EF0),
-        Color(0xFF5ED3E8),
-        Color(0xFFE8955E),
-        Color(0xFFE87DA2),
-        Color(0xFFA9C46C)
+        Color(0xFF7FB8FF),
+        Color(0xFF9AA4B2),
+        Color(0xFF5A6472),
+        Color(0xFF444B57)
     )
 
-    /** Brand accent as a Brush. Flat gold — Aurum does not use gradients. */
+    /** Brand accent as a Brush. Flat — the design uses no gradients. */
     fun goldGradient(width: Float = 600f): Brush = SolidColor(gold)
 
     /** Card ground as a Brush. Flat surface fill. */

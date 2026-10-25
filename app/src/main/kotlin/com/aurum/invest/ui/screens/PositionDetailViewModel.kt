@@ -211,6 +211,11 @@ class PositionDetailViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Deletes every ledger row for [symbol] — the old Home-card remove, moved here. */
+    fun removeHolding(symbol: String) {
+        viewModelScope.launch { runCatching { container.portfolio.removeSymbol(symbol) } }
+    }
+
     /** Pin: pin/unpin on the watchlist (adds it first when not watched yet). */
     fun togglePin() {
         if (symbol.isBlank()) return

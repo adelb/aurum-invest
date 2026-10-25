@@ -51,7 +51,7 @@ fun AurumRefreshBox(
         PullToRefreshContainer(
             state = state,
             containerColor = AurumColors.surfaceHigh,
-            contentColor = AurumColors.gold,
+            contentColor = AurumColors.accent,
             modifier = Modifier.align(Alignment.TopCenter)
         )
     }

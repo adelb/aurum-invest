@@ -1,12 +1,13 @@
 package com.aurum.invest.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,28 +24,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Description
-import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.Insights
-import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Toll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -54,52 +47,68 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.aurum.invest.analytics.BookContext
-import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
-import com.aurum.invest.data.model.PortfolioSummary
 import com.aurum.invest.data.repo.TargetsRepository
-import com.aurum.invest.data.repo.WalletState
 import com.aurum.invest.ui.components.ActionBadge
 import com.aurum.invest.ui.components.AnimatedMoney
-import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
-import com.aurum.invest.ui.components.DeltaMoney
-import com.aurum.invest.ui.components.DeltaPct
+import com.aurum.invest.ui.components.ButtonTone
+import com.aurum.invest.ui.components.CompanyLogo
 import com.aurum.invest.ui.components.EmptyState
 import com.aurum.invest.ui.components.ExtHoursChips
-import com.aurum.invest.ui.components.GoldGradientText
-import com.aurum.invest.ui.components.InfoDot
-import com.aurum.invest.ui.components.PillTag
-import com.aurum.invest.ui.components.SectionHeader
-import com.aurum.invest.ui.components.Sparkline
-import com.aurum.invest.ui.components.StatTile
+import com.aurum.invest.ui.components.Hint
+import com.aurum.invest.ui.components.IconTap
+import com.aurum.invest.ui.components.Kv
+import com.aurum.invest.ui.components.KvGrid
+import com.aurum.invest.ui.components.Lead
+import com.aurum.invest.ui.components.Meter
+import com.aurum.invest.ui.components.MoreLink
+import com.aurum.invest.ui.components.SectionBand
+import com.aurum.invest.ui.components.SectionTitle
+import com.aurum.invest.ui.components.SegmentedToggle
+import com.aurum.invest.ui.components.Sentence
+import com.aurum.invest.ui.components.TossButton
+import com.aurum.invest.ui.components.TossChip
+import com.aurum.invest.ui.components.companyName
+import com.aurum.invest.ui.components.pressScale
 import com.aurum.invest.ui.theme.AurumColors
 
 @Composable
 fun DashboardScreen(
     onOpenDetail: (String) -> Unit,
     onAdd: () -> Unit,
+    onAddGold: () -> Unit,
+    onOpenGold: () -> Unit,
+    onOpenLot: (Long) -> Unit,
     onSettings: () -> Unit,
     onReports: () -> Unit,
-    onEditPosition: (String) -> Unit,
-    onReview: () -> Unit
+    onReview: () -> Unit,
+    onOpenFeed: () -> Unit,
+    pendingAlerts: Int
 ) {
     val vm: DashboardViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
-    var confirmRemove by remember { mutableStateOf<String?>(null) }
     var targetFor by remember { mutableStateOf<HoldingRow?>(null) }
     var showWalletDialog by remember { mutableStateOf(false) }
+    var holdingsTab by rememberSaveable { mutableStateOf(0) }
+    var allocTab by rememberSaveable { mutableStateOf(0) }
 
     if (showWalletDialog) {
         WalletSetupDialog(
@@ -123,728 +132,543 @@ fun DashboardScreen(
         )
     }
 
-    confirmRemove?.let { sym ->
-        AlertDialog(
-            onDismissRequest = { confirmRemove = null },
-            containerColor = AurumColors.surface,
-            titleContentColor = AurumColors.text,
-            textContentColor = AurumColors.textDim,
-            title = { Text("Remove $sym?") },
-            text = {
-                Text(
-                    "This deletes every $sym trade record from Aurum's ledger — handy for " +
-                        "clearing a test position. Your other holdings are untouched, and " +
-                        "nothing happens at your real broker."
+    AurumRefreshBox(
+        refreshing = state.loading,
+        onRefresh = vm::refresh,
+        modifier = Modifier.fillMaxSize().background(AurumColors.bg)
+    ) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 140.dp)
+        ) {
+            item {
+                HomeHeader(
+                    pendingAlerts = pendingAlerts,
+                    onOpenFeed = onOpenFeed,
+                    onSettings = onSettings
                 )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    vm.removeHolding(sym)
-                    confirmRemove = null
-                }) {
-                    Text("Remove", color = AurumColors.loss)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmRemove = null }) {
-                    Text("Cancel", color = AurumColors.textDim)
+            }
+
+            item { HomeHero(state = state) }
+
+            item {
+                Spacer(Modifier.height(16.dp))
+                ShortcutChips(
+                    onAdd = onAdd,
+                    onAddGold = onAddGold,
+                    onReports = onReports,
+                    onReview = onReview
+                )
+            }
+
+            item {
+                SectionBand()
+                WalletSection(state = state, onEdit = { showWalletDialog = true })
+            }
+
+            if (state.holdings.isNotEmpty() || !state.goldBook.isEmpty) {
+                item {
+                    SectionBand()
+                    AllocationSection(state = state, tab = allocTab, onTab = { allocTab = it })
                 }
             }
-        )
-    }
 
-    Box(modifier = Modifier.fillMaxSize().background(AurumColors.bg)) {
-        AurumRefreshBox(
-            refreshing = state.loading,
-            onRefresh = vm::refresh,
-            modifier = Modifier.fillMaxSize()
-        ) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(
-                    start = 20.dp, end = 20.dp, top = 12.dp, bottom = 200.dp
+            item {
+                SectionBand()
+                HoldingsSection(
+                    state = state,
+                    tab = holdingsTab,
+                    onTab = { holdingsTab = it },
+                    onOpenDetail = onOpenDetail,
+                    onSetTarget = { targetFor = it },
+                    onAdd = onAdd,
+                    onAddGold = onAddGold,
+                    onOpenGold = onOpenGold,
+                    onOpenLot = onOpenLot
                 )
-            ) {
-                item {
-                    HeaderRow(
-                        loading = state.loading,
-                        onRefresh = vm::refresh,
-                        onSettings = onSettings,
-                        onReports = onReports,
-                        onReview = onReview
-                    )
-                }
-
-                item {
-                    Spacer(Modifier.height(20.dp))
-                    HeroSummary(summary = state.summary, wallet = state.wallet)
-                }
-
-                item {
-                    Spacer(Modifier.height(20.dp))
-                    SummaryTiles(summary = state.summary)
-                    TextButton(onClick = { showWalletDialog = true }) {
-                        Text(
-                            text = if (state.wallet.configured) {
-                                "Edit total wallet"
-                            } else {
-                                "Set your total wallet"
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            color = AurumColors.gold
-                        )
-                    }
-                }
-
-                if (state.holdings.size >= 2) {
-                    item {
-                        Spacer(Modifier.height(14.dp))
-                        AllocationCard(holdings = state.holdings, book = state.book)
-                    }
-                }
-
-                item {
-                    Spacer(Modifier.height(28.dp))
-                    SectionHeader(
-                        title = "Holdings",
-                        trailing = {
-                            if (state.holdings.isNotEmpty()) {
-                                Text(
-                                    text = "${state.holdings.size}",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = AurumColors.textDim
-                                )
-                            }
-                        }
-                    )
-                    Spacer(Modifier.height(14.dp))
-                }
-
-                if (state.loading && state.holdings.isEmpty() && state.summary == null) {
-                    item {
-                        Box(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 56.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(color = AurumColors.gold)
-                        }
-                    }
-                } else if (state.holdings.isEmpty()) {
-                    item {
-                        EmptyState(
-                            title = "No holdings yet",
-                            message = "Record your first buy and Aurum starts tracking price, P/L and advice for it.",
-                            actionLabel = "Add a trade",
-                            onAction = onAdd
-                        )
-                    }
-                } else {
-                    items(state.holdings, key = { it.view.position.symbol }) { row ->
-                        HoldingCard(
-                            row = row,
-                            onClick = { onOpenDetail(row.view.position.symbol) },
-                            onEdit = { onEditPosition(row.view.position.symbol) },
-                            onSetTarget = { targetFor = row },
-                            onRemove = { confirmRemove = row.view.position.symbol }
-                        )
-                        Spacer(Modifier.height(14.dp))
-                    }
-                }
             }
-        }
-
-        FloatingActionButton(
-            onClick = onAdd,
-            containerColor = AurumColors.gold,
-            contentColor = AurumColors.bg,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = 116.dp)
-        ) {
-            Icon(Icons.Rounded.Add, contentDescription = "Add trade")
         }
     }
 }
 
-/**
- * Where the money sits. Swipe between two reads of the SAME live values:
- * page one is per stock, page two compounds the stocks into their sectors
- * (via the shared [PortfolioLens], so Picks and Wealth agree with it).
- */
-@OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
-private fun AllocationCard(holdings: List<HoldingRow>, book: BookContext) {
-    val total = holdings.sumOf { it.view.marketValue }
-    if (total <= 0.0) return
-    val pagerState = rememberPagerState { 2 }
-    AurumCard(modifier = Modifier.animateContentSize()) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+private fun HomeHeader(pendingAlerts: Int, onOpenFeed: () -> Unit, onSettings: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().height(56.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = buildAnnotatedString {
+                append("Aurum")
+                withStyle(SpanStyle(color = AurumColors.gold)) { append(".") }
+            },
+            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold),
+            color = AurumColors.text,
+            modifier = Modifier.weight(1f)
+        )
+        IconTap(Icons.Rounded.Notifications, "Bank feed", onOpenFeed, badge = pendingAlerts)
+        IconTap(Icons.Rounded.Settings, "Settings", onSettings)
+    }
+}
+
+@Composable
+private fun HomeHero(state: DashboardState) {
+    val s = state.summary
+    Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+        Sentence(
+            if (state.wallet.configured || !state.goldBook.isEmpty) "Your net worth is"
+            else "Your holdings are worth"
+        )
+        AnimatedMoney(
+            value = state.netWorth,
+            style = MaterialTheme.typography.displaySmall.copy(fontSize = 34.sp, lineHeight = 44.sp)
+        )
+        if (s != null && s.investedCost > 0.0) {
+            Spacer(Modifier.height(10.dp))
+            val sessionWord = if (Dates.usMarketOpenedToday()) "Today" else "Last session"
             Text(
-                text = "Allocation",
-                style = MaterialTheme.typography.labelMedium,
+                text = buildAnnotatedString {
+                    append(if (s.unrealizedPl >= 0) "Your stocks are up " else "Your stocks are down ")
+                    withStyle(SpanStyle(color = AurumColors.deltaColor(s.unrealizedPl), fontWeight = FontWeight.Bold)) {
+                        append(Fmt.moneyExact(kotlin.math.abs(s.unrealizedPl)))
+                        append(" (")
+                        append(Fmt.signedPct(s.unrealizedPl / s.investedCost * 100.0))
+                        append(")")
+                    }
+                    append(" on what you put in. $sessionWord they moved ")
+                    withStyle(SpanStyle(color = AurumColors.deltaColor(s.dayPl), fontWeight = FontWeight.Bold)) {
+                        append(Fmt.signedMoneyExact(s.dayPl))
+                    }
+                    append(".")
+                    val gold = state.goldBook
+                    if (gold.lots.isNotEmpty()) {
+                        append(" Your gold is ")
+                        withStyle(SpanStyle(color = AurumColors.deltaColor(gold.pl), fontWeight = FontWeight.Bold)) {
+                            append(Fmt.signedPct(gold.plPct))
+                        }
+                        append(".")
+                    }
+                },
+                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 22.sp),
                 color = AurumColors.textDim
             )
-            Spacer(Modifier.weight(1f))
-            Text(
-                text = if (pagerState.currentPage == 0) "By stock · swipe for sectors"
-                else "By sector",
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.textDim
-            )
-            Spacer(Modifier.width(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                repeat(2) { i ->
-                    Box(
-                        modifier = Modifier
-                            .size(5.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (pagerState.currentPage == i) AurumColors.gold
-                                else AurumColors.hairline
-                            )
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        HorizontalPager(state = pagerState, verticalAlignment = Alignment.Top) { page ->
-            if (page == 0) {
-                StockAllocation(holdings = holdings, total = total)
-            } else {
-                SectorAllocation(book = book)
-            }
+        } else if (state.loading && s == null) {
+            Spacer(Modifier.height(10.dp))
+            Lead("Pricing your book…")
         }
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun StockAllocation(holdings: List<HoldingRow>, total: Double) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(8.dp)
-                .clip(RoundedCornerShape(2.dp)),
-            horizontalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            holdings.forEachIndexed { i, row ->
-                val weight = (row.view.marketValue / total).toFloat()
-                if (weight > 0f) {
-                    Box(
-                        modifier = Modifier
-                            .weight(weight)
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(1.dp))
-                            .background(
-                                AurumColors.allocation[i % AurumColors.allocation.size]
-                            )
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            holdings.forEachIndexed { i, row ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .clip(RoundedCornerShape(1.dp))
-                            .background(
-                                AurumColors.allocation[i % AurumColors.allocation.size]
-                            )
-                    )
-                    Text(
-                        text = "  ${row.view.position.symbol} " +
-                            Fmt.pct(row.view.marketValue / total * 100.0),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = AurumColors.textDim
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SectorAllocation(book: BookContext) {
-    if (book.isEmpty) {
-        Text(
-            text = "Sector data is still loading — swipe back, or pull to refresh.",
-            style = MaterialTheme.typography.bodySmall,
-            color = AurumColors.textDim
-        )
-        return
-    }
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(8.dp)
-                .clip(RoundedCornerShape(2.dp)),
-            horizontalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            book.slices.forEachIndexed { i, slice ->
-                val weight = (slice.weightPct / 100.0).toFloat()
-                if (weight > 0f) {
-                    Box(
-                        modifier = Modifier
-                            .weight(weight)
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(1.dp))
-                            .background(
-                                AurumColors.allocation[i % AurumColors.allocation.size]
-                            )
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        book.slices.forEachIndexed { i, slice ->
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(vertical = 3.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .clip(RoundedCornerShape(1.dp))
-                        .background(
-                            AurumColors.allocation[i % AurumColors.allocation.size]
-                        )
-                )
-                Text(
-                    text = "  ${slice.sector}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = AurumColors.text
-                )
-                Spacer(Modifier.weight(1f))
-                Text(
-                    text = slice.symbols.take(4).joinToString(", ") +
-                        (if (slice.symbols.size > 4) " +${slice.symbols.size - 4}" else "") +
-                        "  ·  " + Fmt.pct(slice.weightPct),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun HeaderRow(
-    loading: Boolean,
-    onRefresh: () -> Unit,
-    onSettings: () -> Unit,
+private fun ShortcutChips(
+    onAdd: () -> Unit,
+    onAddGold: () -> Unit,
     onReports: () -> Unit,
     onReview: () -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Text(
-            text = "Aurum",
-            style = MaterialTheme.typography.titleLarge,
-            color = AurumColors.gold
-        )
-        Spacer(Modifier.weight(1f))
-        AnimatedVisibility(visible = loading, enter = fadeIn(), exit = fadeOut()) {
-            CircularProgressIndicator(
-                color = AurumColors.gold,
-                strokeWidth = 2.dp,
-                modifier = Modifier.size(18.dp)
-            )
-        }
-        IconButton(onClick = onRefresh) {
-            Icon(
-                Icons.Rounded.Refresh,
-                contentDescription = "Refresh",
-                tint = AurumColors.textDim
-            )
-        }
-        IconButton(onClick = onReview) {
-            Icon(
-                Icons.Rounded.Insights,
-                contentDescription = "Portfolio review",
-                tint = AurumColors.textDim
-            )
-        }
-        IconButton(onClick = onReports) {
-            Icon(
-                Icons.Rounded.Description,
-                contentDescription = "Reports",
-                tint = AurumColors.textDim
-            )
-        }
-        IconButton(onClick = onSettings) {
-            Icon(
-                Icons.Rounded.Settings,
-                contentDescription = "Settings",
-                tint = AurumColors.textDim
-            )
-        }
+        TossChip("Add trade", onAdd, icon = Icons.Rounded.Add)
+        TossChip("Add gold", onAddGold, icon = Icons.Rounded.Toll)
+        TossChip("Reports", onReports, icon = Icons.Rounded.Description)
+        TossChip("Review", onReview, icon = Icons.Rounded.Insights)
     }
 }
 
 @Composable
-private fun HeroSummary(summary: PortfolioSummary?, wallet: WalletState = WalletState.UNSET) {
-    val s = summary ?: PortfolioSummary(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-    Column(modifier = Modifier.fillMaxWidth().animateContentSize()) {
-        Text(
-            // "Holdings value", not "Total value": uninvested cash is its own
-            // line below — the sum of open positions must never masquerade as
-            // account equity.
-            text = "Holdings value",
-            style = MaterialTheme.typography.labelMedium,
-            color = AurumColors.textDim
-        )
-        Spacer(Modifier.height(4.dp))
-        // Rolls per digit and flashes by direction as the prices re-price the
-        // book — only the places that changed move.
-        AnimatedMoney(
-            value = s.marketValue,
-            style = MaterialTheme.typography.displayLarge,
-            baseColor = AurumColors.text
-        )
-        Spacer(Modifier.height(4.dp))
-        // The headline delta: how the holdings stand AGAINST THE MONEY PUT IN
-        // (market value vs remaining cost basis), not just today's move.
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            DeltaMoney(value = s.unrealizedPl, style = MaterialTheme.typography.titleMedium)
-            if (s.investedCost > 0.0) {
-                Text(
-                    text = "  ·  ",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = AurumColors.textDim
-                )
-                DeltaPct(
-                    value = s.unrealizedPl / s.investedCost * 100.0,
-                    style = MaterialTheme.typography.titleMedium
-                )
-            }
-            Text(
-                text = " vs invested",
-                style = MaterialTheme.typography.titleMedium,
-                color = AurumColors.textDim
-            )
-        }
-        Spacer(Modifier.height(2.dp))
-        // The session move, demoted to a secondary line.
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            DeltaMoney(value = s.dayPl, style = MaterialTheme.typography.bodySmall)
-            Text(
-                // Before today's US open, the delta belongs to the last session.
-                text = if (Dates.usMarketOpenedToday()) " today" else " last session",
-                style = MaterialTheme.typography.bodySmall,
-                color = AurumColors.textDim
-            )
-        }
-        if (wallet.configured) {
-            Spacer(Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                WalletStat(label = "Wallet", value = wallet.total, modifier = Modifier.weight(1f))
-                WalletStat(label = "Invested", value = wallet.invested, modifier = Modifier.weight(1f))
-                WalletStat(
-                    label = "Liquidity",
-                    value = wallet.liquidity,
-                    modifier = Modifier.weight(1f),
-                    valueColor = if (wallet.shortfall) AurumColors.loss else AurumColors.text
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            // The second row closes the loop: what the sells booked, the
-            // accumulated P/L, and what the wallet is actually worth today.
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                WalletStat(
-                    label = "Realized",
-                    value = wallet.realizedPl,
-                    modifier = Modifier.weight(1f),
-                    signed = true
-                )
-                WalletStat(
-                    label = "Total P/L",
-                    value = wallet.totalPl,
-                    modifier = Modifier.weight(1f),
-                    signed = true
-                )
-                WalletStat(label = "Net worth", value = wallet.netWorth, modifier = Modifier.weight(1f))
-            }
-            Spacer(Modifier.height(4.dp))
-            // Says out loud how the three cash figures relate, so a sell that
-            // moves liquidity is never mistaken for a number drifting on its own.
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "Liquidity = wallet − invested + realized · " +
-                        "net worth = liquidity + holdings",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.textDim
-                )
-                Spacer(Modifier.width(6.dp))
-                InfoDot(
-                    title = "The wallet identity",
-                    explanation = "You state one number — the total cash you committed to " +
-                        "investing. Aurum reads what is deployed (invested cost) and what " +
-                        "your sells have booked (realized P/L) from the ledger, and derives " +
-                        "liquidity = wallet − invested + realized. A sell returns its cost " +
-                        "basis AND its profit to liquidity. Net worth is liquidity plus " +
-                        "what the holdings are worth right now. Change the wallet total " +
-                        "only when you actually add or withdraw money."
-                )
-            }
-            if (wallet.shortfall) {
-                Text(
-                    text = "Your ledger has ${Fmt.moneyExact(-wallet.liquidity)} more deployed than " +
-                        "the stated wallet covers — raise the total if you've added money.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.gold
-                )
-            }
-        }
+private fun WalletSection(state: DashboardState, onEdit: () -> Unit) {
+    val w = state.wallet
+    SectionTitle(
+        title = "Your wallet",
+        subtitle = "The cash you committed to investing",
+        trailing = { MoreLink(if (w.configured) "Edit" else "Set up", onEdit) }
+    )
+    if (!w.configured) {
+        Spacer(Modifier.height(10.dp))
+        Lead("Tell Aurum the cash you put in for investing, and it works out what is free to invest after every buy and sell.")
+        Spacer(Modifier.height(12.dp))
+        TossButton("Set your wallet", onClick = onEdit, tone = ButtonTone.SOFT, small = true)
+        return
     }
-}
-
-@Composable
-private fun WalletStat(
-    label: String,
-    value: Double,
-    modifier: Modifier = Modifier,
-    signed: Boolean = false,
-    valueColor: androidx.compose.ui.graphics.Color = AurumColors.text
-) {
-    Column(modifier = modifier) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = AurumColors.textDim,
-            maxLines = 1
+    Spacer(Modifier.height(16.dp))
+    // Every figure here rolls per digit as the live prices re-price the book.
+    KvGrid(
+        listOf(
+            Kv("Wallet", live = w.total),
+            Kv("Invested", live = w.invested),
+            Kv(
+                "Liquidity",
+                live = w.liquidity,
+                note = "free to invest",
+                valueColor = if (w.shortfall) AurumColors.loss else AurumColors.text
+            ),
+            Kv("Realized", live = w.realizedPl, liveSigned = true, note = "booked by your sells",
+                valueColor = AurumColors.deltaColor(w.realizedPl)),
+            Kv("Total P/L", live = w.totalPl, liveSigned = true, valueColor = AurumColors.deltaColor(w.totalPl)),
+            Kv("Account value", live = w.netWorth)
         )
-        // Exact cents (rounding $25,477.30 to "$25,477" hides money the user
-        // has), and animated so a figure moved by the live prices announces
-        // itself instead of silently differing from a second ago.
-        AnimatedMoney(
-            value = value,
+    )
+    Hint(
+        "Liquidity is what’s free: your wallet, minus what’s invested, plus what your sells " +
+            "booked. A sell returns its cost and its profit here."
+    )
+    if (w.shortfall) {
+        Text(
+            text = "Your ledger has ${Fmt.moneyExact(-w.liquidity)} more deployed than the stated " +
+                "wallet covers — raise the total if you’ve added money.",
             style = MaterialTheme.typography.bodyMedium,
-            baseColor = if (signed) AurumColors.deltaColor(value) else valueColor,
-            signed = signed
+            color = AurumColors.loss,
+            modifier = Modifier.padding(top = 8.dp)
         )
     }
 }
 
+private data class Slice(val label: String, val sub: String, val value: Double)
+
 @Composable
-private fun SummaryTiles(summary: PortfolioSummary?) {
-    val s = summary ?: PortfolioSummary(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-    AurumCard {
-        Row(modifier = Modifier.fillMaxWidth()) {
-            StatTile(
-                label = "Invested",
-                value = Fmt.money(s.investedCost),
-                modifier = Modifier.weight(1f)
-            )
-            StatTile(
-                label = "Unrealized P/L",
-                value = Fmt.signedMoney(s.unrealizedPl),
-                modifier = Modifier.weight(1f),
-                valueColor = AurumColors.deltaColor(s.unrealizedPl)
-            )
-            StatTile(
-                label = "Realized P/L",
-                value = Fmt.signedMoney(s.realizedPl),
-                modifier = Modifier.weight(1f),
-                valueColor = AurumColors.deltaColor(s.realizedPl)
+private fun AllocationSection(state: DashboardState, tab: Int, onTab: (Int) -> Unit) {
+    val stocksUsd = state.holdings.sumOf { it.view.marketValue }
+    val goldUsd = state.goldBook.valueUsd
+    val cash = if (state.wallet.configured) state.wallet.liquidity.coerceAtLeast(0.0) else 0.0
+    val slices: List<Slice> = when (tab) {
+        0 -> listOfNotNull(
+            Slice("Stocks", "${state.holdings.size} holdings", stocksUsd).takeIf { stocksUsd > 0.0 },
+            Slice("Gold", "${Fmt.qty(Math.round(state.goldBook.grams * 10) / 10.0)} g", goldUsd).takeIf { goldUsd > 0.0 },
+            Slice("Cash", "free to invest", cash).takeIf { cash > 0.0 }
+        )
+        1 -> state.holdings.map {
+            Slice(it.view.position.symbol, Fmt.money(it.view.marketValue), it.view.marketValue)
+        }
+        else -> state.book.slices.map { slice ->
+            Slice(
+                slice.sector,
+                slice.symbols.take(3).joinToString(", ") + if (slice.symbols.size > 3) " +${slice.symbols.size - 3}" else "",
+                slice.weightPct
             )
         }
     }
-}
-
-@Composable
-private fun HoldingCard(
-    row: HoldingRow,
-    onClick: () -> Unit,
-    onEdit: () -> Unit,
-    onSetTarget: () -> Unit,
-    onRemove: () -> Unit
-) {
-    val view = row.view
-    val position = view.position
-    val quote = view.quote
-    val price = quote?.price ?: position.avgCost
-
-    AurumCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+    val total = slices.sumOf { it.value }
+    SectionTitle(title = "Where your money sits")
+    Spacer(Modifier.height(14.dp))
+    SegmentedToggle(options = listOf("Assets", "Stocks", "Sectors"), selected = tab, onSelect = onTab)
+    Spacer(Modifier.height(16.dp))
+    if (slices.isEmpty() || total <= 0.0) {
+        Lead(if (tab == 2) "Sector data is still loading — pull to refresh." else "Nothing to split yet.")
+        return
+    }
+    AnimatedContent(
+        targetState = tab,
+        transitionSpec = {
+            val dir = if (targetState > initialState) 1 else -1
+            (slideInHorizontally(tween(320)) { it / 6 * dir } + fadeIn(tween(320))) togetherWith
+                (slideOutHorizontally(tween(220)) { -it / 6 * dir } + fadeOut(tween(220)))
+        },
+        label = "allocation"
+    ) { _ ->
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth().height(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                slices.forEachIndexed { i, slice ->
+                    val weight = (slice.value / total).toFloat()
+                    if (weight > 0.002f) {
+                        Box(
+                            modifier = Modifier
+                                .weight(weight)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(sliceColor(tab, i, slice.label))
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            slices.forEachIndexed { i, slice ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(sliceColor(tab, i, slice.label))
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(slice.label, style = MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp), color = AurumColors.text)
                     Text(
-                        text = position.symbol,
-                        style = MaterialTheme.typography.titleMedium,
+                        "  " + slice.sub,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AurumColors.textFaint,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        Fmt.pct(slice.value / total * 100.0),
+                        style = MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp),
                         color = AurumColors.text
                     )
                 }
+            }
+        }
+    }
+    Hint(
+        when (tab) {
+            0 -> if (goldUsd > 0.0) "Gold is converted at the 0.709 dinar peg and valued at the Syndicate buy price." else
+                "Stocks at live prices; cash is your liquidity."
+            1 -> "Each holding at its live price."
+            else -> "Your stocks compounded into their sectors — the same split Picks and Wealth use."
+        }
+    )
+}
+
+private fun sliceColor(tab: Int, i: Int, label: String): Color = when {
+    tab == 0 && label == "Gold" -> AurumColors.gold
+    tab == 0 && label == "Cash" -> AurumColors.textFaint
+    tab == 0 -> AurumColors.accent
+    else -> AurumColors.allocation.filter { it != AurumColors.gold }.let { it[i % it.size] }
+}
+
+@Composable
+private fun HoldingsSection(
+    state: DashboardState,
+    tab: Int,
+    onTab: (Int) -> Unit,
+    onOpenDetail: (String) -> Unit,
+    onSetTarget: (HoldingRow) -> Unit,
+    onAdd: () -> Unit,
+    onAddGold: () -> Unit,
+    onOpenGold: () -> Unit,
+    onOpenLot: (Long) -> Unit
+) {
+    val gold = state.goldBook
+    SectionTitle(
+        title = "Holdings",
+        subtitle = if (tab == 0) {
+            if (state.holdings.isEmpty()) "No stocks yet"
+            else "${state.holdings.size} stocks · ${Fmt.moneyExact(state.holdings.sumOf { it.view.marketValue })}"
+        } else {
+            val n = state.goldLots.count { !it.sold }
+            if (n == 0) "No gold yet" else "$n purchase${if (n == 1) "" else "s"} · ${Fmt.qty(Math.round(gold.grams * 10) / 10.0)} g"
+        }
+    )
+    Spacer(Modifier.height(14.dp))
+    SegmentedToggle(options = listOf("Stocks", "Gold"), selected = tab, onSelect = onTab)
+    Spacer(Modifier.height(8.dp))
+    AnimatedContent(
+        targetState = tab,
+        transitionSpec = {
+            val dir = if (targetState > initialState) 1 else -1
+            (slideInHorizontally(tween(340)) { it / 5 * dir } + fadeIn(tween(340))) togetherWith
+                (slideOutHorizontally(tween(220)) { -it / 5 * dir } + fadeOut(tween(220)))
+        },
+        label = "holdings"
+    ) { which ->
+        if (which == 0) {
+            StockHoldings(state, onOpenDetail, onSetTarget, onAdd)
+        } else {
+            GoldHoldings(state, onAddGold, onOpenGold, onOpenLot)
+        }
+    }
+}
+
+@Composable
+private fun StockHoldings(
+    state: DashboardState,
+    onOpenDetail: (String) -> Unit,
+    onSetTarget: (HoldingRow) -> Unit,
+    onAdd: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        when {
+            state.loading && state.holdings.isEmpty() && state.summary == null -> Box(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                contentAlignment = Alignment.Center
+            ) { CircularProgressIndicator(color = AurumColors.accent) }
+            state.holdings.isEmpty() -> EmptyState(
+                title = "No holdings yet",
+                message = "Record your first buy and Aurum starts tracking its price, profit and advice.",
+                actionLabel = "Add a trade",
+                onAction = onAdd
+            )
+            else -> state.holdings.forEach { row ->
+                StockRow(
+                    row = row,
+                    onClick = { onOpenDetail(row.view.position.symbol) },
+                    onSetTarget = { onSetTarget(row) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StockRow(row: HoldingRow, onClick: () -> Unit, onSetTarget: () -> Unit) {
+    val view = row.view
+    val symbol = view.position.symbol
+    Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 10.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .pressScale(pressedScale = 0.98f, onClick = onClick)
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CompanyLogo(symbol = symbol)
+            Spacer(Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "${Fmt.qty(position.shares)} shares · ${Fmt.money(view.marketValue)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim
+                    text = companyName(view.quote?.shortName, symbol),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AurumColors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "${Fmt.signedMoney(view.unrealizedPl)} (${Fmt.signedPct(view.unrealizedPlPct)})",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AurumColors.deltaColor(view.unrealizedPl),
+                    maxLines = 1
                 )
             }
-            if (row.spark.size >= 2) {
-                Sparkline(
-                    data = row.spark,
-                    modifier = Modifier.width(90.dp).height(36.dp)
-                )
-                Spacer(Modifier.width(14.dp))
-            }
+            Spacer(Modifier.width(8.dp))
             Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    text = Fmt.money(price),
+                    text = Fmt.moneyExact(view.marketValue),
                     style = MaterialTheme.typography.titleMedium,
-                    color = AurumColors.text
+                    color = AurumColors.text,
+                    maxLines = 1
                 )
-                if (quote != null) {
-                    DeltaPct(
-                        value = quote.dayChangePct,
-                        style = MaterialTheme.typography.bodySmall
+                Spacer(Modifier.height(2.dp))
+                row.advice?.let { ActionBadge(action = it.action) }
+                    ?: Text(
+                        "${Fmt.qty(view.position.shares)} sh",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AurumColors.textDim
                     )
-                }
             }
         }
-        Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "Unrealized  ",
-                style = MaterialTheme.typography.bodySmall,
-                color = AurumColors.textDim
-            )
-            DeltaMoney(value = view.unrealizedPl, style = MaterialTheme.typography.bodySmall)
-            Text(
-                text = "  ·  ",
-                style = MaterialTheme.typography.bodySmall,
-                color = AurumColors.textDim
-            )
-            DeltaPct(value = view.unrealizedPlPct, style = MaterialTheme.typography.bodySmall)
-            Spacer(Modifier.weight(1f))
-            row.advice?.let { ActionBadge(action = it.action) }
-            Spacer(Modifier.width(6.dp))
-            IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
-                Icon(
-                    Icons.Rounded.Edit,
-                    contentDescription = "Edit ${position.symbol} trades",
-                    tint = AurumColors.textDim,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-            IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
-                Icon(
-                    Icons.Rounded.Close,
-                    contentDescription = "Remove ${position.symbol} from portfolio",
-                    tint = AurumColors.textDim,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-        }
+        TargetLine(row = row, onClick = onSetTarget)
         if (row.ext?.preMarketPct != null || row.ext?.postMarketPct != null) {
-            Spacer(Modifier.height(8.dp))
-            ExtHoursChips(ext = row.ext)
+            ExtHoursChips(ext = row.ext, modifier = Modifier.padding(start = 58.dp, top = 6.dp))
         }
-        Spacer(Modifier.height(10.dp))
-        SellTargetFlag(row = row, onClick = onSetTarget)
     }
 }
 
 /**
- * The sell flag: the exact price this position must reach for the profit
- * percentage the user asked for, plus how far away it still is. Tap to set
- * or change the percentage; it turns green the moment the price gets there.
+ * The sell flag, as one line under the holding: the price the user's profit
+ * target implies and a meter of how far along the way the price already is.
  */
 @Composable
-private fun SellTargetFlag(row: HoldingRow, onClick: () -> Unit) {
-    val targetPrice = row.targetPrice
-    val shape = RoundedCornerShape(10.dp)
-    if (targetPrice == null) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(shape)
-                .background(AurumColors.surfaceHigh)
-                .clickable { onClick() }
-                .padding(horizontal = 12.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                Icons.Rounded.Flag,
-                contentDescription = null,
-                tint = AurumColors.textDim,
-                modifier = Modifier.size(15.dp)
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = "Set a profit target — Aurum shows the sell price",
-                style = MaterialTheme.typography.bodySmall,
-                color = AurumColors.textDim
-            )
-        }
-        return
-    }
-
-    val reached = row.targetReached
-    val accent = if (reached) AurumColors.gain else AurumColors.gold
+private fun TargetLine(row: HoldingRow, onClick: () -> Unit) {
+    val target = row.targetPrice
+    val style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp, fontWeight = FontWeight.Bold)
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(shape)
-            .background(accent.copy(alpha = 0.10f))
-            .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(start = 58.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .pressScale(pressedScale = 0.98f, onClick = onClick)
+            .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            Icons.Rounded.Flag,
-            contentDescription = null,
-            tint = accent,
-            modifier = Modifier.size(16.dp)
+        if (target == null) {
+            Text("No profit target yet — tap to set one", style = style, color = AurumColors.textDim)
+            return@Row
+        }
+        val reached = row.targetReached
+        val avg = row.view.position.avgCost
+        val price = row.view.quote?.price ?: avg
+        val progress = if (target > avg) ((price - avg) / (target - avg)).toFloat().coerceIn(0f, 1f) else 1f
+        Text(
+            text = buildAnnotatedString {
+                append(if (reached) "Target reached — sell at " else "Sell at ")
+                withStyle(SpanStyle(color = if (reached) AurumColors.gain else AurumColors.text)) {
+                    append(Fmt.money(target))
+                }
+            },
+            style = style,
+            color = AurumColors.textDim
         )
         Spacer(Modifier.width(10.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = if (reached) "Target reached — sell at ${Fmt.money(targetPrice)}"
-                else "Sell at ${Fmt.money(targetPrice)}",
-                style = MaterialTheme.typography.titleSmall,
-                color = accent
-            )
-            Spacer(Modifier.height(2.dp))
-            val distance = row.distanceToTargetPct
-            Text(
-                text = buildString {
-                    append("for ")
-                    append(Fmt.pct(row.targetPct ?: 0.0))
-                    append(" on ")
-                    append(Fmt.money(row.view.position.avgCost))
-                    append(" avg cost")
-                    if (distance != null && !reached) {
-                        append(" · ")
-                        append(Fmt.pct(distance))
-                        append(" to go")
-                    }
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = AurumColors.textDim
-            )
+        Meter(
+            fraction = if (reached) 1f else progress,
+            color = if (reached) AurumColors.gain else AurumColors.gold,
+            modifier = Modifier.weight(1f)
+        )
+        val distance = row.distanceToTargetPct
+        if (!reached && distance != null) {
+            Spacer(Modifier.width(10.dp))
+            Text("${Fmt.pct(distance)} to go", style = style, color = AurumColors.textDim)
         }
-        val gain = row.targetPct?.let { row.view.position.shares * row.view.position.avgCost * it / 100.0 }
-        if (gain != null) {
-            Text(
-                text = Fmt.signedMoney(gain),
-                style = MaterialTheme.typography.titleSmall,
-                color = accent
-            )
+    }
+}
+
+@Composable
+private fun GoldHoldings(
+    state: DashboardState,
+    onAddGold: () -> Unit,
+    onOpenGold: () -> Unit,
+    onOpenLot: (Long) -> Unit
+) {
+    val book = state.goldBook
+    val goldState = GoldState(
+        loading = false,
+        lots = state.goldLots,
+        list = state.goldList,
+        shop = state.goldShop
+    )
+    Column(modifier = Modifier.fillMaxWidth()) {
+        val open = state.goldLots.filter { !it.sold }
+        if (open.isEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Lead("Record the gold you bought and Aurum values it at what a Jordan shop would pay you today.")
+            Spacer(Modifier.height(12.dp))
+            TossButton("Add gold I bought", onClick = onAddGold, tone = ButtonTone.SOFT, small = true)
+            return@Column
         }
+        if (book.lots.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(AurumColors.goldGround)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "${Fmt.qty(Math.round(book.grams * 10) / 10.0)} g · ${Fmt.jod(book.value)}",
+                    style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp),
+                    color = Color(0xFFE7DCC0),
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    "${Fmt.moneyExact(book.valueUsd)} · ${Fmt.signedPct(book.plPct)}",
+                    style = MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp, fontWeight = FontWeight.ExtraBold),
+                    color = AurumColors.gold
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        open.forEach { lot ->
+            GoldLotRow(lot = lot, state = goldState, onClick = { onOpenLot(lot.id) }, compact = true)
+        }
+        TossButton("Open Gold", onClick = onOpenGold, tone = ButtonTone.SOFT, small = true,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+        Hint(
+            if (state.goldList != null) "Valued at the Syndicate buy price of ${listLabel(state.goldList)}, " +
+                "converted at the 0.709 JOD peg."
+            else "Today’s Syndicate list hasn’t loaded yet, so the gold isn’t valued."
+        )
     }
 }
 
@@ -867,6 +691,7 @@ private fun SellTargetDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = AurumColors.surface,
+        shape = RoundedCornerShape(24.dp),
         titleContentColor = AurumColors.text,
         textContentColor = AurumColors.textDim,
         title = { Text("Profit target for ${row.view.position.symbol}") },
@@ -888,11 +713,11 @@ private fun SellTargetDialog(
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = AurumColors.text,
                         unfocusedTextColor = AurumColors.text,
-                        focusedBorderColor = AurumColors.gold,
+                        focusedBorderColor = AurumColors.accent,
                         unfocusedBorderColor = AurumColors.hairline,
-                        focusedLabelColor = AurumColors.gold,
+                        focusedLabelColor = AurumColors.accent,
                         unfocusedLabelColor = AurumColors.textDim,
-                        cursorColor = AurumColors.gold
+                        cursorColor = AurumColors.accent
                     ),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth()
@@ -940,8 +765,8 @@ private fun SellTargetDialog(
                 onClick = { if (valid) onSave(pct) },
                 enabled = valid,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = AurumColors.gold,
-                    contentColor = AurumColors.bg,
+                    containerColor = AurumColors.accent,
+                    contentColor = AurumColors.text,
                     disabledContainerColor = AurumColors.surfaceHigh,
                     disabledContentColor = AurumColors.textDim
                 )
@@ -977,6 +802,7 @@ private fun WalletSetupDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = AurumColors.surface,
+        shape = RoundedCornerShape(24.dp),
         titleContentColor = AurumColors.text,
         textContentColor = AurumColors.textDim,
         title = { Text("Set your total wallet") },
@@ -1006,8 +832,8 @@ private fun WalletSetupDialog(
                 onClick = { if (amount != null) onSave(amount) },
                 enabled = valid,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = AurumColors.gold,
-                    contentColor = AurumColors.bg,
+                    containerColor = AurumColors.accent,
+                    contentColor = AurumColors.text,
                     disabledContainerColor = AurumColors.surfaceHigh,
                     disabledContentColor = AurumColors.textDim
                 )

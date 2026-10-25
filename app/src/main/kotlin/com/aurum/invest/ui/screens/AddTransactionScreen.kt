@@ -221,8 +221,8 @@ fun AddTransactionScreen(prefillSymbol: String?, prefillSide: String?, onDone: (
                     checked = state.sellAll,
                     onCheckedChange = vm::setSellAll,
                     colors = SwitchDefaults.colors(
-                        checkedThumbColor = AurumColors.gold,
-                        checkedTrackColor = AurumColors.goldSoft,
+                        checkedThumbColor = AurumColors.accent,
+                        checkedTrackColor = AurumColors.accentSoft,
                         checkedBorderColor = Color.Transparent,
                         uncheckedThumbColor = AurumColors.textDim,
                         uncheckedTrackColor = AurumColors.surfaceHigh,
@@ -261,7 +261,7 @@ fun AddTransactionScreen(prefillSymbol: String?, prefillSide: String?, onDone: (
             Text(
                 text = Fmt.money(state.total),
                 style = MaterialTheme.typography.titleMedium,
-                color = if (state.total > 0.0) AurumColors.gold else AurumColors.textDim
+                color = if (state.total > 0.0) AurumColors.accent else AurumColors.textDim
             )
         }
         Spacer(modifier = Modifier.height(20.dp))
@@ -274,7 +274,7 @@ fun AddTransactionScreen(prefillSymbol: String?, prefillSide: String?, onDone: (
                 .height(54.dp),
             shape = RoundedCornerShape(16.dp),
             colors = ButtonDefaults.buttonColors(
-                containerColor = AurumColors.gold,
+                containerColor = AurumColors.accent,
                 contentColor = AurumColors.bg,
                 disabledContainerColor = AurumColors.surfaceHigh,
                 disabledContentColor = AurumColors.textDim
@@ -333,7 +333,7 @@ private fun SideOption(
     val m = modifier
         .clip(shape)
         .clickable { onClick() }
-        .background(if (selected) AurumColors.gold else Color.Transparent)
+        .background(if (selected) AurumColors.accent else Color.Transparent)
     Box(
         modifier = m.padding(vertical = 10.dp),
         contentAlignment = Alignment.Center
@@ -354,11 +354,11 @@ private fun addFieldColors(): TextFieldColors = OutlinedTextFieldDefaults.colors
     focusedContainerColor = AurumColors.surface,
     unfocusedContainerColor = AurumColors.surface,
     disabledContainerColor = AurumColors.surface,
-    cursorColor = AurumColors.gold,
-    focusedBorderColor = AurumColors.gold,
+    cursorColor = AurumColors.accent,
+    focusedBorderColor = AurumColors.accent,
     unfocusedBorderColor = AurumColors.hairline,
     disabledBorderColor = AurumColors.hairline,
-    focusedLabelColor = AurumColors.gold,
+    focusedLabelColor = AurumColors.accent,
     unfocusedLabelColor = AurumColors.textDim,
     disabledLabelColor = AurumColors.textDim,
     focusedPlaceholderColor = AurumColors.textDim,

@@ -108,7 +108,7 @@ internal fun EditTradeDialog(
                         ts = newDate.atTime(oldTime).atZone(zone).toInstant().toEpochMilli()
                     }
                     showDatePicker = false
-                }) { Text("Set date", color = AurumColors.gold) }
+                }) { Text("Set date", color = AurumColors.accent) }
             },
             dismissButton = {
                 TextButton(onClick = { showDatePicker = false }) {
@@ -191,7 +191,7 @@ internal fun EditTradeDialog(
                     Text(
                         text = Fmt.dateShort(ts),
                         style = MaterialTheme.typography.labelLarge,
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                 }
                 if (ts != tx.ts) {
@@ -261,7 +261,7 @@ internal fun EditTradeDialog(
                 onClick = { if (valid) onSave(side, shares!!, price!!, fees, ts, plOverride) },
                 enabled = valid,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = AurumColors.gold,
+                    containerColor = AurumColors.accent,
                     contentColor = AurumColors.bg,
                     disabledContainerColor = AurumColors.surfaceHigh,
                     disabledContentColor = AurumColors.textDim
@@ -284,7 +284,7 @@ private fun TradeSideOption(
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(50))
-            .background(if (selected) AurumColors.gold else AurumColors.surfaceHigh)
+            .background(if (selected) AurumColors.accent else AurumColors.surfaceHigh)
             .clickable { onClick() }
             .padding(vertical = 9.dp),
         contentAlignment = Alignment.Center
@@ -301,11 +301,11 @@ private fun TradeSideOption(
 private fun tradeFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedTextColor = AurumColors.text,
     unfocusedTextColor = AurumColors.text,
-    focusedBorderColor = AurumColors.gold,
+    focusedBorderColor = AurumColors.accent,
     unfocusedBorderColor = AurumColors.hairline,
-    focusedLabelColor = AurumColors.gold,
+    focusedLabelColor = AurumColors.accent,
     unfocusedLabelColor = AurumColors.textDim,
-    cursorColor = AurumColors.gold
+    cursorColor = AurumColors.accent
 )
 
 /** "150.25" not "150.2500" — keeps the edit fields clean. */

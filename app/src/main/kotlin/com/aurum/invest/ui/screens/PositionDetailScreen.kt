@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -42,6 +43,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -70,18 +72,56 @@ import com.aurum.invest.ui.components.SectionHeader
 import com.aurum.invest.ui.components.SentimentDot
 import com.aurum.invest.ui.components.StatTile
 import com.aurum.invest.ui.components.ZoomablePriceChart
+import com.aurum.invest.ui.components.TossChip
+import com.aurum.invest.ui.components.CompanyLogo
 import com.aurum.invest.ui.theme.AurumColors
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 
 @Composable
 fun PositionDetailScreen(
     symbol: String,
     onBack: () -> Unit,
     onTrade: (String, String) -> Unit,
-    onOpenAnalysis: (String) -> Unit
+    onOpenAnalysis: (String) -> Unit,
+    onEditPosition: (String) -> Unit = {}
 ) {
     val vm: PositionDetailViewModel = viewModel()
     LaunchedEffect(symbol) { vm.start(symbol) }
     val state by vm.state.collectAsStateWithLifecycle()
+    var confirmRemove by remember { mutableStateOf(false) }
+    if (confirmRemove) {
+        val sym = state.symbol.ifEmpty { symbol.uppercase() }
+        AlertDialog(
+            onDismissRequest = { confirmRemove = false },
+            containerColor = AurumColors.surface,
+            shape = RoundedCornerShape(24.dp),
+            titleContentColor = AurumColors.text,
+            textContentColor = AurumColors.textSub,
+            title = { Text("Remove $sym?") },
+            text = {
+                Text(
+                    "This deletes every $sym trade record from Aurum’s ledger — handy for " +
+                        "clearing a test position. Your other holdings are untouched, and " +
+                        "nothing happens at your real broker."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRemove = false
+                    vm.removeHolding(sym)
+                    onBack()
+                }) { Text("Remove", color = AurumColors.loss) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRemove = false }) {
+                    Text("Cancel", color = AurumColors.textDim)
+                }
+            }
+        )
+    }
     var range by rememberSaveable { mutableStateOf("1D") }
 
     Column(modifier = Modifier.fillMaxSize().background(AurumColors.bg)) {
@@ -98,6 +138,8 @@ fun PositionDetailScreen(
                     tint = AurumColors.text
                 )
             }
+            CompanyLogo(symbol = symbol.uppercase(), size = 36.dp)
+            Spacer(Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = state.symbol.ifEmpty { symbol.uppercase() },
@@ -144,7 +186,7 @@ fun PositionDetailScreen(
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator(color = AurumColors.gold)
+                CircularProgressIndicator(color = AurumColors.accent)
             }
         } else if (state.quote == null && state.chart3M.closes.isEmpty()) {
             Column(modifier = Modifier.fillMaxWidth().weight(1f)) {
@@ -270,7 +312,7 @@ fun PositionDetailScreen(
                             Icon(
                                 Icons.Rounded.QueryStats,
                                 contentDescription = null,
-                                tint = AurumColors.gold
+                                tint = AurumColors.accent
                             )
                             Spacer(Modifier.padding(start = 12.dp))
                             Column(modifier = Modifier.weight(1f)) {
@@ -392,7 +434,7 @@ fun PositionDetailScreen(
                                         Text(
                                             text = "•  ",
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = AurumColors.gold
+                                            color = AurumColors.accent
                                         )
                                         Text(
                                             text = reason,
@@ -428,7 +470,7 @@ fun PositionDetailScreen(
                                             label = "Good entry",
                                             value = Fmt.money(it),
                                             modifier = Modifier.weight(1f),
-                                            valueColor = AurumColors.gold
+                                            valueColor = AurumColors.accent
                                         )
                                     }
                                 }
@@ -504,6 +546,27 @@ fun PositionDetailScreen(
             }
             }
 
+            // ------- ledger actions: moved here from the Home cards -------
+            if (state.isHeld) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 20.dp, end = 20.dp, top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TossChip(
+                        text = "Edit trades",
+                        onClick = { onEditPosition(state.symbol.ifEmpty { symbol.uppercase() }) },
+                        icon = Icons.Rounded.Edit
+                    )
+                    TossChip(
+                        text = "Remove from Aurum",
+                        onClick = { confirmRemove = true },
+                        icon = Icons.Rounded.DeleteOutline
+                    )
+                }
+            }
+
             // ------- trade actions -------
             Row(
                 modifier = Modifier
@@ -528,7 +591,7 @@ fun PositionDetailScreen(
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(50),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = AurumColors.gold,
+                        containerColor = AurumColors.accent,
                         contentColor = AurumColors.bg
                     )
                 ) {
@@ -616,14 +679,14 @@ private fun RangeMeter(label: String, low: Double, high: Double, value: Double) 
                 cap = StrokeCap.Round
             )
             drawLine(
-                color = AurumColors.gold.copy(alpha = 0.35f),
+                color = AurumColors.accent.copy(alpha = 0.35f),
                 start = Offset(0f, y),
                 end = Offset(frac * size.width, y),
                 strokeWidth = 6f,
                 cap = StrokeCap.Round
             )
             drawCircle(
-                color = AurumColors.gold,
+                color = AurumColors.accent,
                 radius = 6f,
                 center = Offset(frac * size.width, y)
             )
@@ -637,10 +700,10 @@ private fun RangeChip(label: String, selected: Boolean, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .clip(shape)
-            .background(if (selected) AurumColors.goldSoft else AurumColors.surfaceHigh)
+            .background(if (selected) AurumColors.accentSoft else AurumColors.surfaceHigh)
             .border(
                 width = 1.dp,
-                color = if (selected) AurumColors.gold.copy(alpha = 0.45f) else AurumColors.hairline,
+                color = if (selected) AurumColors.accent.copy(alpha = 0.45f) else AurumColors.hairline,
                 shape = shape
             )
             .clickable { onClick() }
@@ -649,7 +712,7 @@ private fun RangeChip(label: String, selected: Boolean, onClick: () -> Unit) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,
-            color = if (selected) AurumColors.gold else AurumColors.textDim
+            color = if (selected) AurumColors.accent else AurumColors.textDim
         )
     }
 }

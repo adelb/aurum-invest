@@ -122,3 +122,27 @@ interface PicksDao {
     @Query("SELECT * FROM weekly_picks WHERE weekStart = :weekStart ORDER BY rank ASC")
     fun observeWeek(weekStart: String): Flow<List<WeeklyPickEntity>>
 }
+
+@Dao
+interface GoldDao {
+    @Query("SELECT * FROM gold_lots ORDER BY boughtAt DESC, id DESC")
+    fun observeAll(): Flow<List<GoldLotEntity>>
+
+    @Query("SELECT * FROM gold_lots ORDER BY boughtAt DESC, id DESC")
+    suspend fun all(): List<GoldLotEntity>
+
+    @Query("SELECT * FROM gold_lots WHERE id = :id")
+    suspend fun get(id: Long): GoldLotEntity?
+
+    @Query("SELECT * FROM gold_lots WHERE id = :id")
+    fun observe(id: Long): Flow<GoldLotEntity?>
+
+    @Insert
+    suspend fun insert(lot: GoldLotEntity): Long
+
+    @Update
+    suspend fun update(lot: GoldLotEntity)
+
+    @Query("DELETE FROM gold_lots WHERE id = :id")
+    suspend fun delete(id: Long)
+}

@@ -1,5 +1,15 @@
 package com.aurum.invest.ui.screens
 
+import com.aurum.invest.ui.components.pressScale
+import com.aurum.invest.ui.components.Sentence
+import com.aurum.invest.ui.components.Meter
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Color
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Spring
+import com.aurum.invest.ui.components.RankedLogo
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.Canvas
@@ -121,27 +131,20 @@ fun WealthScreen(onOpenAnalysis: (String) -> Unit, onOpenDetail: (String) -> Uni
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 20.dp, end = 20.dp, top = 18.dp),
+                .height(56.dp)
+                .padding(start = 20.dp, end = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Wealth",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = AurumColors.text
-                )
-                Text(
-                    text = state.report?.let { r ->
-                        r.healthScore?.let { "Health $it/100 · ${r.healthBand}" } ?: r.healthBand
-                    } ?: "Your wealth, evaluated and managed",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = AurumColors.textDim
-                )
-            }
+            Text(
+                text = "Wealth",
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold),
+                color = AurumColors.text,
+                modifier = Modifier.weight(1f)
+            )
             if (state.refreshing) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(22.dp),
-                    color = AurumColors.gold,
+                    color = AurumColors.accent,
                     strokeWidth = 2.dp
                 )
             } else {
@@ -149,9 +152,33 @@ fun WealthScreen(onOpenAnalysis: (String) -> Unit, onOpenDetail: (String) -> Uni
                     Icon(
                         Icons.Rounded.Refresh,
                         contentDescription = "Re-scan the market",
-                        tint = AurumColors.gold
+                        tint = AurumColors.textSub
                     )
                 }
+            }
+        }
+        // The hub's headline: one sentence for the whole book's health.
+        Column(modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 4.dp)) {
+            val score = state.report?.healthScore
+            Sentence(
+                if (score != null) "Your wealth health is $score out of 100"
+                else "Your wealth, evaluated and managed"
+            )
+            state.report?.healthBand?.let { band ->
+                Spacer(Modifier.height(8.dp))
+                Text(band, style = MaterialTheme.typography.bodyLarge, color = AurumColors.textDim)
+            }
+            if (score != null) {
+                Spacer(Modifier.height(12.dp))
+                Meter(
+                    fraction = score / 100f,
+                    color = when {
+                        score >= 70 -> AurumColors.gain
+                        score >= 45 -> AurumColors.gold
+                        else -> AurumColors.loss
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
 
@@ -160,7 +187,7 @@ fun WealthScreen(onOpenAnalysis: (String) -> Unit, onOpenDetail: (String) -> Uni
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator(color = AurumColors.gold)
+                CircularProgressIndicator(color = AurumColors.accent)
             }
         } else {
             AurumRefreshBox(
@@ -187,12 +214,13 @@ private fun WealthContent(
     onOpenDetail: (String) -> Unit
 ) {
     val report = state.report
-    // Which sections the user has folded away. Survives rotation and tab
-    // switches, so the tab stays arranged the way they left it.
-    var collapsed by rememberSaveable { mutableStateOf(HashSet<String>()) }
-    fun open(key: String) = key !in collapsed
+    // The hub: every discipline is one row, opened in place. The two read
+    // every morning start open; the rest wait folded until asked. Survives
+    // rotation and tab switches, so the tab stays arranged as it was left.
+    var expanded by rememberSaveable { mutableStateOf(hashSetOf("pulse", "mustbuy")) }
+    fun open(key: String) = key in expanded
     fun toggle(key: String) {
-        collapsed = HashSet(collapsed).apply { if (!add(key)) remove(key) }
+        expanded = HashSet(expanded).apply { if (!add(key)) remove(key) }
     }
 
     LazyColumn(
@@ -509,17 +537,27 @@ private fun WealthSectionHeader(
     trailing: String? = null,
     onToggle: () -> Unit
 ) {
+    val turn by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMediumLow),
+        label = "wealthChevron"
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .clickable { onToggle() }
-            .padding(horizontal = 2.dp, vertical = 6.dp),
+            .heightIn(min = 60.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .pressScale(pressedScale = 0.98f, onClick = onToggle)
+            .background(if (expanded) Color.Transparent else AurumColors.surface)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             text = title,
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleMedium.copy(
+                fontSize = if (expanded) 19.sp else 16.sp,
+                fontWeight = FontWeight.ExtraBold
+            ),
             color = AurumColors.text,
             modifier = Modifier.weight(1f)
         )
@@ -532,10 +570,12 @@ private fun WealthSectionHeader(
             Spacer(Modifier.width(8.dp))
         }
         Icon(
-            imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+            imageVector = Icons.Rounded.ExpandMore,
             contentDescription = if (expanded) "Collapse $title" else "Expand $title",
             tint = AurumColors.textDim,
-            modifier = Modifier.size(20.dp)
+            modifier = Modifier
+                .size(22.dp)
+                .graphicsLayer { rotationZ = turn }
         )
     }
 }
@@ -664,11 +704,7 @@ private fun MustBuyCard(
 ) {
     AurumCard(onClick = onOpen) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "%02d".format(row.rank),
-                style = MaterialTheme.typography.headlineMedium,
-                color = AurumColors.gold
-            )
+            RankedLogo(symbol = row.symbol, rank = row.rank)
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -701,7 +737,7 @@ private fun MustBuyCard(
         Row(verticalAlignment = Alignment.CenterVertically) {
             PillTag(
                 text = String.format(Locale.US, "%.1f pts", row.totalPoints),
-                color = AurumColors.gold
+                color = AurumColors.accent
             )
             Spacer(Modifier.width(8.dp))
             PillTag(
@@ -739,14 +775,14 @@ private fun MustBuyCard(
             Icon(
                 imageVector = Icons.Rounded.QueryStats,
                 contentDescription = null,
-                tint = AurumColors.gold,
+                tint = AurumColors.accent,
                 modifier = Modifier.size(16.dp)
             )
             Spacer(Modifier.width(6.dp))
             Text(
                 text = "Full analysis & SPY race",
                 style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.gold
+                color = AurumColors.accent
             )
         }
     }
@@ -819,7 +855,7 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
             if (loading && pulse == null) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
-                    color = AurumColors.gold,
+                    color = AurumColors.accent,
                     strokeWidth = 2.dp
                 )
             } else if (pulse != null) {
@@ -831,7 +867,7 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
                             fontWeight = FontWeight.Bold,
                             color = when (pulse.call) {
                                 MarketCall.INVEST -> AurumColors.gain
-                                MarketCall.SELECTIVE -> AurumColors.gold
+                                MarketCall.SELECTIVE -> AurumColors.accent
                                 MarketCall.DEFENSIVE -> AurumColors.loss
                             }
                         )
@@ -865,7 +901,7 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             when (pulse.call) {
                 MarketCall.INVEST -> PillTag(text = "Worth investing this week", color = AurumColors.gain)
-                MarketCall.SELECTIVE -> PillTag(text = "Selective entries only", color = AurumColors.gold)
+                MarketCall.SELECTIVE -> PillTag(text = "Selective entries only", color = AurumColors.accent)
                 MarketCall.DEFENSIVE -> PillTag(text = "Not this week", color = AurumColors.loss)
             }
         }
@@ -894,7 +930,7 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
                     Text(
                         text = "•  ",
                         style = MaterialTheme.typography.bodySmall,
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                     Text(
                         text = reason,
@@ -907,7 +943,10 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
 
         if (pulse.indexes.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
-            Row(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 pulse.indexes.forEach { ix ->
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
@@ -921,9 +960,16 @@ private fun MarketPulseCard(pulse: MarketRating?, loading: Boolean) {
                             style = MaterialTheme.typography.titleSmall
                         )
                         Text(
-                            text = "5 days · ${Fmt.signedPct(ix.vs50Pct)} vs 50d",
+                            text = "over 5 days",
                             style = MaterialTheme.typography.labelSmall,
-                            color = AurumColors.textDim
+                            color = AurumColors.textDim,
+                            maxLines = 1
+                        )
+                        Text(
+                            text = "${Fmt.signedPct(ix.vs50Pct)} vs 50-day",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AurumColors.textDim,
+                            maxLines = 1
                         )
                     }
                 }
@@ -1001,7 +1047,7 @@ private fun BookCard(book: BookContext) {
                     Text(
                         text = "•  ",
                         style = MaterialTheme.typography.bodySmall,
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                     Text(
                         text = note,
@@ -1064,7 +1110,7 @@ private fun SectorGapsCard(strategy: WeeklyStrategy?, loading: Boolean) {
                 Spacer(Modifier.width(10.dp))
                 when (gap.status) {
                     GapStatus.MISSING -> PillTag("Missing", AurumColors.loss)
-                    GapStatus.UNDER -> PillTag("Light", AurumColors.gold)
+                    GapStatus.UNDER -> PillTag("Light", AurumColors.accent)
                     GapStatus.COVERED -> PillTag("Covered", AurumColors.gain)
                     GapStatus.OVER -> PillTag("Heavy", AurumColors.info)
                 }
@@ -1139,7 +1185,7 @@ private fun AllocationRow(
                     text = if (slice.amount > 0.0) Fmt.money(slice.amount)
                     else Fmt.pct(slice.sharePct),
                     style = MaterialTheme.typography.titleMedium,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
                 if (slice.amount > 0.0) {
                     Text(
@@ -1160,7 +1206,7 @@ private fun AllocationRow(
             if (lead.newsNote.isNotBlank()) {
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.Top) {
-                    PillTag(text = "Report", color = AurumColors.gold)
+                    PillTag(text = "Report", color = AurumColors.accent)
                     Spacer(Modifier.width(8.dp))
                     Text(
                         text = lead.newsNote,
@@ -1177,7 +1223,7 @@ private fun AllocationRow(
                     label = "Entry",
                     value = Fmt.money(lead.entry),
                     modifier = Modifier.weight(1f),
-                    valueColor = AurumColors.gold
+                    valueColor = AurumColors.accent
                 )
                 StatTile(
                     label = "Last price",
@@ -1208,14 +1254,14 @@ private fun AllocationRow(
                 Icon(
                     imageVector = Icons.Rounded.QueryStats,
                     contentDescription = null,
-                    tint = AurumColors.gold,
+                    tint = AurumColors.accent,
                     modifier = Modifier.size(16.dp)
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
                     text = "Full analysis",
                     style = MaterialTheme.typography.labelMedium,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
             }
         }
@@ -1257,7 +1303,7 @@ private fun AllocationRow(
                     Text(
                         text = "Entry ${Fmt.money(alt.entry)}",
                         style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                     IconButton(
                         onClick = { onAnalyze(alt.symbol) },
@@ -1291,7 +1337,7 @@ private fun StrategyNotesCard(strategy: WeeklyStrategy) {
                 Text(
                     text = "•  ",
                     style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
                 Text(
                     text = note,
@@ -1311,7 +1357,7 @@ private fun WealthNoteTag(note: PickNote?) {
     PillTag(
         text = note.text,
         color = when (note.kind) {
-            NoteKind.HELD -> AurumColors.gold
+            NoteKind.HELD -> AurumColors.accent
             NoteKind.CONCENTRATION -> AurumColors.loss
             NoteKind.DIVERSIFIES -> AurumColors.info
         }
@@ -1331,7 +1377,7 @@ private fun MoverRow(
                 text = "%02d".format(rank),
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
-                color = AurumColors.gold
+                color = AurumColors.accent
             )
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
@@ -1403,7 +1449,7 @@ private fun VixBlock(vix: Double?, change5d: Double?) {
                         fontWeight = FontWeight.Bold,
                         color = when {
                             vix < 20.0 -> AurumColors.gain
-                            vix < 25.0 -> AurumColors.gold
+                            vix < 25.0 -> AurumColors.accent
                             else -> AurumColors.loss
                         }
                     )
@@ -1432,7 +1478,7 @@ private fun VixBlock(vix: Double?, change5d: Double?) {
                 text = MarketPulse.vixRegime(vix),
                 color = when {
                     vix < 20.0 -> AurumColors.gain
-                    vix < 25.0 -> AurumColors.gold
+                    vix < 25.0 -> AurumColors.accent
                     else -> AurumColors.loss
                 }
             )
@@ -1537,7 +1583,7 @@ private fun SectorDeployGroup(
                             Fmt.money(sector.amount) +
                             " · ${Fmt.pct(sector.heldPct)} held → ${Fmt.pct(sector.targetPct)} target",
                         style = MaterialTheme.typography.labelSmall,
-                        color = AurumColors.gold,
+                        color = AurumColors.accent,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -1547,7 +1593,7 @@ private fun SectorDeployGroup(
             }
             when (sector.status) {
                 GapStatus.MISSING -> PillTag(text = "Missing", color = AurumColors.loss)
-                GapStatus.UNDER -> PillTag(text = "Light", color = AurumColors.gold)
+                GapStatus.UNDER -> PillTag(text = "Light", color = AurumColors.accent)
                 GapStatus.COVERED -> PillTag(text = "Covered", color = AurumColors.gain)
                 GapStatus.OVER -> PillTag(text = "Heavy", color = AurumColors.textDim)
             }
@@ -1587,7 +1633,7 @@ private fun DeployLineRow(
                 Text(
                     text = Fmt.money(line.amount),
                     style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -1605,7 +1651,7 @@ private fun DeployLineRow(
                 Text(
                     text = "•  ",
                     style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
                 Text(
                     text = r,
@@ -1625,14 +1671,14 @@ private fun DeployLineRow(
             Icon(
                 imageVector = Icons.Rounded.QueryStats,
                 contentDescription = null,
-                tint = AurumColors.gold,
+                tint = AurumColors.accent,
                 modifier = Modifier.size(14.dp)
             )
             Spacer(Modifier.width(6.dp))
             Text(
                 text = "Full analysis",
                 style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.gold
+                color = AurumColors.accent
             )
         }
     }
@@ -1690,7 +1736,7 @@ private fun WealthHealthCard(report: WealthReport?, loading: Boolean) {
                 Text(
                     text = report.healthBand,
                     style = MaterialTheme.typography.labelMedium,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
             }
             Column(horizontalAlignment = Alignment.End) {
@@ -1701,7 +1747,7 @@ private fun WealthHealthCard(report: WealthReport?, loading: Boolean) {
                     color = when {
                         report.healthScore == null -> AurumColors.textDim
                         report.healthScore >= 60 -> AurumColors.gain
-                        report.healthScore >= 40 -> AurumColors.gold
+                        report.healthScore >= 40 -> AurumColors.accent
                         else -> AurumColors.loss
                     }
                 )
@@ -1735,7 +1781,7 @@ private fun WealthHealthCard(report: WealthReport?, loading: Boolean) {
                     Text(
                         text = "•  ",
                         style = MaterialTheme.typography.labelSmall,
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                     Text(
                         text = note,
@@ -1765,7 +1811,7 @@ private fun DisciplineRow(d: WealthDiscipline) {
                 color = when {
                     d.score == null -> AurumColors.textDim
                     d.score >= d.maxScore * 0.6 -> AurumColors.gain
-                    d.score >= d.maxScore * 0.35 -> AurumColors.gold
+                    d.score >= d.maxScore * 0.35 -> AurumColors.accent
                     else -> AurumColors.loss
                 }
             )
@@ -1782,12 +1828,12 @@ private fun DisciplineRow(d: WealthDiscipline) {
                 Text(
                     text = "→  ",
                     style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
                 Text(
                     text = d.fix,
                     style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
             }
         }
@@ -1843,7 +1889,7 @@ private fun HoldingEvalRow(
             when (eval.move) {
                 HoldingMove.HOLD -> PillTag(text = "Hold", color = AurumColors.textDim)
                 HoldingMove.ADD -> PillTag(text = "Add", color = AurumColors.gain)
-                HoldingMove.TRIM -> PillTag(text = "Trim", color = AurumColors.gold)
+                HoldingMove.TRIM -> PillTag(text = "Trim", color = AurumColors.accent)
                 HoldingMove.EXIT -> PillTag(text = "Exit", color = AurumColors.loss)
             }
             Spacer(Modifier.width(8.dp))
@@ -1874,7 +1920,7 @@ private fun HoldingEvalRow(
                 Text(
                     text = "•  ",
                     style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
                 Text(
                     text = r,
@@ -1893,7 +1939,7 @@ private fun HoldingEvalRow(
                         " · ${Fmt.pct(it)} below — raise it as the highs rise, never lower it"
                     } ?: ""),
                 style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.gold
+                color = AurumColors.accent
             )
         }
         // The next report, always visible when Yahoo knows it. Gold inside
@@ -1910,7 +1956,7 @@ private fun HoldingEvalRow(
                         else -> " — in $days days"
                     },
                 style = MaterialTheme.typography.labelSmall,
-                color = if (days <= WealthEngine.EARNINGS_BLACKOUT_DAYS) AurumColors.gold
+                color = if (days <= WealthEngine.EARNINGS_BLACKOUT_DAYS) AurumColors.accent
                 else AurumColors.textDim
             )
         }
@@ -1922,14 +1968,14 @@ private fun HoldingEvalRow(
             Icon(
                 imageVector = Icons.Rounded.QueryStats,
                 contentDescription = null,
-                tint = AurumColors.gold,
+                tint = AurumColors.accent,
                 modifier = Modifier.size(16.dp)
             )
             Spacer(Modifier.width(6.dp))
             Text(
                 text = "Full 35-technique analysis",
                 style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.gold
+                color = AurumColors.accent
             )
         }
     }
@@ -1944,7 +1990,7 @@ private fun ManagementActionRow(action: ManagementAction, onOpen: (String) -> Un
                 text = "${action.priority}",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                color = AurumColors.gold
+                color = AurumColors.accent
             )
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
@@ -1965,19 +2011,19 @@ private fun ManagementActionRow(action: ManagementAction, onOpen: (String) -> Un
             Column(horizontalAlignment = Alignment.End) {
                 when (action.kind) {
                     ActionKind.EXIT -> PillTag(text = "Exit", color = AurumColors.loss)
-                    ActionKind.TRIM -> PillTag(text = "Trim", color = AurumColors.gold)
-                    ActionKind.SET_STOP -> PillTag(text = "Stops", color = AurumColors.gold)
+                    ActionKind.TRIM -> PillTag(text = "Trim", color = AurumColors.accent)
+                    ActionKind.SET_STOP -> PillTag(text = "Stops", color = AurumColors.accent)
                     ActionKind.ADD -> PillTag(text = "Add", color = AurumColors.gain)
                     ActionKind.DEPLOY -> PillTag(text = "Deploy", color = AurumColors.gain)
-                    ActionKind.RAISE_CASH -> PillTag(text = "Cash", color = AurumColors.gold)
-                    ActionKind.DIVERSIFY -> PillTag(text = "Spread", color = AurumColors.gold)
+                    ActionKind.RAISE_CASH -> PillTag(text = "Cash", color = AurumColors.accent)
+                    ActionKind.DIVERSIFY -> PillTag(text = "Spread", color = AurumColors.accent)
                 }
                 action.amount?.let {
                     Spacer(Modifier.height(4.dp))
                     Text(
                         text = Fmt.money(it),
                         style = MaterialTheme.typography.labelMedium,
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                 }
             }
@@ -2025,7 +2071,7 @@ private fun PerformanceCard(perf: PerformanceReport?, loading: Boolean) {
                     modifier = Modifier
                         .size(8.dp)
                         .clip(RoundedCornerShape(4.dp))
-                        .background(AurumColors.gold)
+                        .background(AurumColors.accent)
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
@@ -2123,7 +2169,7 @@ private fun PerformanceCard(perf: PerformanceReport?, loading: Boolean) {
                 label = "Your book now",
                 value = Fmt.money(perf.bookNow),
                 modifier = Modifier.weight(1f),
-                valueColor = AurumColors.gold
+                valueColor = AurumColors.accent
             )
             StatTile(
                 label = "Same flows in SPY",
@@ -2194,7 +2240,7 @@ private fun VerdictCurve(curve: List<CurvePoint>) {
             }
         }
         drawPath(spyPath, color = AurumColors.info, style = Stroke(width = 1.5.dp.toPx()))
-        drawPath(bookPath, color = AurumColors.gold, style = Stroke(width = 2.dp.toPx()))
+        drawPath(bookPath, color = AurumColors.accent, style = Stroke(width = 2.dp.toPx()))
     }
 }
 
@@ -2244,7 +2290,7 @@ private fun RecordBucketRow(bucket: RecordBucket) {
                     fontWeight = FontWeight.SemiBold,
                     color = when {
                         (bucket.wilsonLowerPct ?: 0.0) >= 50.0 -> AurumColors.gain
-                        bucket.winRatePct >= 50.0 -> AurumColors.gold
+                        bucket.winRatePct >= 50.0 -> AurumColors.accent
                         else -> AurumColors.loss
                     }
                 )
@@ -2372,7 +2418,7 @@ private fun NextSessionCard(
     onOpenDetail: (String) -> Unit
 ) {
     val cardModifier =
-        if (pick.alert) Modifier.border(1.5.dp, AurumColors.gold, RoundedCornerShape(16.dp))
+        if (pick.alert) Modifier.border(1.5.dp, AurumColors.accent, RoundedCornerShape(16.dp))
         else Modifier
     AurumCard(modifier = cardModifier, onClick = { onOpenDetail(pick.symbol) }) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2380,7 +2426,7 @@ private fun NextSessionCard(
                 text = "%02d".format(rank),
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
-                color = AurumColors.gold
+                color = AurumColors.accent
             )
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
@@ -2392,7 +2438,7 @@ private fun NextSessionCard(
                     )
                     if (pick.alert) {
                         Spacer(Modifier.width(8.dp))
-                        PillTag(text = "Every gate cleared", color = AurumColors.gold)
+                        PillTag(text = "Every gate cleared", color = AurumColors.accent)
                     }
                 }
                 Text(
@@ -2563,7 +2609,7 @@ private fun NextSessionCard(
             Text(
                 text = pick.heldNote,
                 style = MaterialTheme.typography.bodySmall,
-                color = AurumColors.gold
+                color = AurumColors.accent
             )
         }
         Spacer(Modifier.height(8.dp))
@@ -2576,14 +2622,14 @@ private fun NextSessionCard(
             Icon(
                 imageVector = Icons.Rounded.QueryStats,
                 contentDescription = null,
-                tint = AurumColors.gold,
+                tint = AurumColors.accent,
                 modifier = Modifier.size(16.dp)
             )
             Spacer(Modifier.width(6.dp))
             Text(
                 text = "Full analysis",
                 style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.gold
+                color = AurumColors.accent
             )
         }
     }
@@ -2597,7 +2643,7 @@ private fun NextSessionFooterCard(ns: NextSessionReport) {
                 Text(
                     text = "•  ",
                     style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
                 Text(
                     text = note,
@@ -2611,7 +2657,7 @@ private fun NextSessionFooterCard(ns: NextSessionReport) {
             text = "When a name clears every gate, Aurum pushes a notification — once per " +
                 "name per day, after the close or pre-open.",
             style = MaterialTheme.typography.labelSmall,
-            color = AurumColors.gold
+            color = AurumColors.accent
         )
     }
 }

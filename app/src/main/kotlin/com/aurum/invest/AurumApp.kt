@@ -5,6 +5,7 @@ import com.aurum.invest.data.db.AurumDatabase
 import com.aurum.invest.data.remote.YahooClient
 import com.aurum.invest.data.repo.BankFeedRepository
 import com.aurum.invest.data.repo.EvaluationStore
+import com.aurum.invest.data.repo.GoldRepository
 import com.aurum.invest.data.repo.MarketRepository
 import com.aurum.invest.data.repo.NewsRepository
 import com.aurum.invest.data.repo.ReviewRepository
@@ -54,4 +55,5 @@ class AppContainer(app: Application) {
     val targets = TargetsRepository(db.cacheDao())
     val evaluations = EvaluationStore(db.cacheDao())
     val review = ReviewRepository(market, portfolio, news, evaluations)
+    val gold = GoldRepository(db.goldDao(), db.cacheDao(), market)
 }

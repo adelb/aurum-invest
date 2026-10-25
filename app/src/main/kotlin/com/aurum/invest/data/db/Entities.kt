@@ -83,3 +83,25 @@ data class WeeklyPickEntity(
     val reason: String,
     val priceAtPick: Double
 )
+
+/**
+ * One gold purchase, as the shop wrote it. [qty] is grams for jewelry and
+ * bars, pieces for a lira; both prices are per that unit, in dinars, with the
+ * making charge (مصنعية) kept apart from the gold price because a shop never
+ * refunds it. A sale fills [soldAt] and [soldPricePerUnit] — the row is never
+ * deleted to record one, so the realised profit stays on the record.
+ */
+@Entity(tableName = "gold_lots")
+data class GoldLotEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val kind: String,              // JEWELRY / BAR / RASHADI / ENGLISH
+    val karat: Int,                // 24 / 22 / 21 / 18
+    val qty: Double,
+    val pricePerUnit: Double,
+    val makingPerUnit: Double,
+    val boughtAt: Long,
+    val name: String,
+    val note: String,
+    val soldAt: Long?,
+    val soldPricePerUnit: Double?
+)

@@ -2,6 +2,9 @@ package com.aurum.invest.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
@@ -10,6 +13,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -19,6 +23,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -63,7 +68,12 @@ import com.aurum.invest.ui.theme.AurumColors
 import kotlin.math.abs
 import kotlin.math.floor
 
-/** Flat segmented toggle — gold fill marks the selected option. */
+/**
+ * The Toss segmented control: a layer-2 track with a layer-3 thumb that
+ * slides (with a little spring overshoot) to the chosen option. The thumb is
+ * one shape that moves, not a fill that blinks from one slot to another, so
+ * the eye follows the choice.
+ */
 @Composable
 fun SegmentedToggle(
     options: List<String>,
@@ -72,39 +82,53 @@ fun SegmentedToggle(
     modifier: Modifier = Modifier,
     compact: Boolean = false
 ) {
-    Row(
+    val thumbPos by animateFloatAsState(
+        targetValue = selected.coerceIn(0, (options.size - 1).coerceAtLeast(0)).toFloat(),
+        animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow),
+        label = "segmentThumb"
+    )
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(AurumColors.surface)
+            .clip(RoundedCornerShape(14.dp))
+            .background(AurumColors.surfaceHigh)
             .padding(4.dp)
     ) {
-        options.forEachIndexed { i, label ->
-            val sel = i == selected
-            val fill by animateColorAsState(
-                targetValue = if (sel) AurumColors.gold else Color.Transparent,
-                label = "segmentFill"
-            )
-            val textColor by animateColorAsState(
-                targetValue = if (sel) AurumColors.bg else AurumColors.textDim,
-                label = "segmentText"
-            )
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(fill)
-                    .clickable { onSelect(i) }
-                    .padding(vertical = if (compact) 6.dp else 9.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = textColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+        val slot = maxWidth / options.size.coerceAtLeast(1)
+        val height = if (compact) 34.dp else 40.dp
+        Box(
+            modifier = Modifier
+                .offset(x = slot * thumbPos)
+                .width(slot)
+                .height(height)
+                .clip(RoundedCornerShape(10.dp))
+                .background(AurumColors.surfaceTop)
+        )
+        Row(modifier = Modifier.fillMaxWidth()) {
+            options.forEachIndexed { i, label ->
+                val sel = i == selected
+                val textColor by animateColorAsState(
+                    targetValue = if (sel) AurumColors.text else AurumColors.textDim,
+                    animationSpec = tween(240),
+                    label = "segmentText"
                 )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(height)
+                        .clip(RoundedCornerShape(10.dp))
+                        .pressScale { onSelect(i) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = label,
+                        style = if (compact) MaterialTheme.typography.labelLarge
+                        else MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp),
+                        color = textColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
     }
@@ -152,19 +176,22 @@ private fun ExtHoursChip(label: String, value: Double) {
     }
 }
 
-/** The standard Aurum surface: flat fill, quiet radius, no chrome. */
+/**
+ * The standard Aurum surface: a layer-1 card with the Toss 20dp radius. A
+ * tappable card gives under the finger (scale 0.98) instead of flashing a
+ * ripple across its whole face.
+ */
 @Composable
 fun AurumCard(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
-    contentPadding: PaddingValues = PaddingValues(16.dp),
+    contentPadding: PaddingValues = PaddingValues(18.dp),
     content: @Composable ColumnScope.() -> Unit
 ) {
-    val shape = RoundedCornerShape(16.dp)
+    val shape = RoundedCornerShape(20.dp)
     var m = modifier
-        .clip(shape)
-        .background(AurumColors.surface)
-    if (onClick != null) m = m.clickable { onClick() }
+    if (onClick != null) m = m.pressScale(pressedScale = 0.98f, onClick = onClick)
+    m = m.clip(shape).background(AurumColors.surface)
     Column(modifier = m.padding(contentPadding), content = content)
 }
 
@@ -182,8 +209,8 @@ fun SectionHeader(
     ) {
         Text(
             text = title,
-            style = MaterialTheme.typography.titleSmall,
-            color = AurumColors.textDim,
+            style = MaterialTheme.typography.titleLarge,
+            color = AurumColors.text,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
@@ -295,9 +322,12 @@ fun AnimatedMoney(
     signed: Boolean = false,
     textAlign: TextAlign? = null,
     /** Movements below this are rounding noise and must not fire the flash. */
-    epsilon: Double = 0.005
+    epsilon: Double = 0.005,
+    /** How the figure is written; dollars by default, [Fmt.jod] for gold. */
+    format: ((Double) -> String)? = null
 ) {
-    val text = if (signed) Fmt.signedMoneyExact(value) else Fmt.moneyExact(value)
+    val text = format?.invoke(value)
+        ?: if (signed) Fmt.signedMoneyExact(value) else Fmt.moneyExact(value)
     val move = remember { MoveTracker(value) }
     // Read while composing, deliberately: the wheels below need the direction
     // in the SAME frame they are handed their new digit. Direction published
@@ -550,7 +580,8 @@ private const val ROLL_STAGGER_CAP_MS = 130
 private fun adviceColor(action: AdviceAction): Color = when (action) {
     AdviceAction.STRONG_BUY, AdviceAction.BUY -> AurumColors.gain
     AdviceAction.WAIT -> AurumColors.textDim
-    AdviceAction.HOLD, AdviceAction.TAKE_PROFIT -> AurumColors.gold
+    AdviceAction.HOLD -> AurumColors.textSub
+    AdviceAction.TAKE_PROFIT -> AurumColors.gold
     AdviceAction.CUT_LOSS, AdviceAction.SELL -> AurumColors.loss
 }
 
@@ -585,15 +616,14 @@ fun PillTag(
 ) {
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(50))
-            .background(color.copy(alpha = 0.14f))
-            .padding(horizontal = 10.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(color.copy(alpha = 0.16f))
+            .padding(horizontal = 9.dp, vertical = 4.dp)
     ) {
         Text(
             text = text,
-            style = MaterialTheme.typography.labelSmall.copy(
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 0.2.sp
+            style = MaterialTheme.typography.labelMedium.copy(
+                fontWeight = FontWeight.ExtraBold
             ),
             color = color,
             maxLines = maxLines,
@@ -617,7 +647,7 @@ fun ScoreBar(score: Double, modifier: Modifier = Modifier) {
                 .fillMaxWidth(fraction)
                 .height(6.dp)
                 .clip(RoundedCornerShape(50))
-                .background(AurumColors.gold)
+                .background(AurumColors.accent)
         )
     }
 }
@@ -653,7 +683,7 @@ fun EmptyState(
     ) {
         Text(
             text = title,
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.headlineSmall,
             color = AurumColors.text,
             textAlign = TextAlign.Center
         )
@@ -665,17 +695,11 @@ fun EmptyState(
             modifier = Modifier.padding(top = 6.dp)
         )
         if (actionLabel != null && onAction != null) {
-            Button(
+            TossButton(
+                text = actionLabel,
                 onClick = onAction,
-                shape = RoundedCornerShape(50),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AurumColors.gold,
-                    contentColor = AurumColors.bg
-                ),
-                modifier = Modifier.padding(top = 18.dp)
-            ) {
-                Text(text = actionLabel, style = MaterialTheme.typography.labelLarge)
-            }
+                modifier = Modifier.padding(top = 22.dp)
+            )
         }
     }
 }
@@ -686,7 +710,7 @@ fun GoldGradientText(text: String, style: TextStyle, modifier: Modifier = Modifi
     Text(
         text = text,
         style = style,
-        color = AurumColors.gold,
+        color = AurumColors.accent,
         modifier = modifier
     )
 }

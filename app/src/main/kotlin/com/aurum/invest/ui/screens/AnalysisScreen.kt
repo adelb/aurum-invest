@@ -157,7 +157,7 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     contentAlignment = Alignment.Center
                 ) {
-                    CircularProgressIndicator(color = AurumColors.gold)
+                    CircularProgressIndicator(color = AurumColors.accent)
                 }
             }
             analysis == null -> {
@@ -284,7 +284,7 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
                                                 "${analysis.results.size - TechniqueEvaluator.TOP_TECHNIQUES} more, ranked lower on this stock"
                                         },
                                         style = MaterialTheme.typography.labelMedium,
-                                        color = AurumColors.gold
+                                        color = AurumColors.accent
                                     )
                                 }
                             }
@@ -381,7 +381,7 @@ private fun OutlookCard(analysis: TechniqueAnalysis, price: Double?) {
                 Text(
                     text = "•  ",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
                 Text(
                     text = line,
@@ -408,7 +408,7 @@ private fun RangeBar(low: Double, high: Double, price: Double) {
             val span = (high - low).takeIf { it > 1e-9 } ?: 1.0
             val frac = ((price - low) / span).coerceIn(0.0, 1.0).toFloat()
             drawCircle(
-                color = AurumColors.gold,
+                color = AurumColors.accent,
                 radius = 7f,
                 center = Offset(frac * size.width, trackY)
             )
@@ -426,7 +426,7 @@ private fun RangeBar(low: Double, high: Double, price: Double) {
             Text(
                 text = Fmt.money(price),
                 style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.gold,
+                color = AurumColors.accent,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -459,7 +459,7 @@ private fun TechniqueCard(
     // The gold border is EARNED: only a technique that actually called this
     // stock's 5-day moves right over the last year wears it.
     val cardModifier =
-        if (trusted) Modifier.border(1.5.dp, AurumColors.gold, RoundedCornerShape(16.dp))
+        if (trusted) Modifier.border(1.5.dp, AurumColors.accent, RoundedCornerShape(20.dp))
         else Modifier
     AurumCard(modifier = cardModifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -467,7 +467,7 @@ private fun TechniqueCard(
                 Text(
                     text = "%02d".format(rank),
                     style = MaterialTheme.typography.titleSmall,
-                    color = if (rank <= TechniqueEvaluator.TOP_TECHNIQUES) AurumColors.gold
+                    color = if (rank <= TechniqueEvaluator.TOP_TECHNIQUES) AurumColors.accent
                     else AurumColors.textDim
                 )
                 Spacer(Modifier.width(10.dp))
@@ -481,7 +481,7 @@ private fun TechniqueCard(
                 overflow = TextOverflow.Ellipsis
             )
             if (trusted) {
-                PillTag(text = "Trusted", color = AurumColors.gold)
+                PillTag(text = "Trusted", color = AurumColors.accent)
                 Spacer(Modifier.width(8.dp))
             }
             VerdictPill(verdict = result.verdict)
@@ -558,7 +558,7 @@ private fun TechniqueCard(
             )
             "hull" -> OverlayDiagram(
                 analysis.hullData.closes,
-                listOf(OverlaySeries("HMA 20", AurumColors.gold, analysis.hullData.hull)),
+                listOf(OverlaySeries("HMA 20", AurumColors.accent, analysis.hullData.hull)),
                 ts, viewport, m, ohlc, style, onTapChart
             )
             "supertrend" -> OverlayDiagram(
@@ -589,7 +589,7 @@ private fun TechniqueCard(
             )
             "vwap" -> OverlayDiagram(
                 analysis.vwapData.closes,
-                listOf(OverlaySeries("VWAP 20", AurumColors.gold, analysis.vwapData.vwap)),
+                listOf(OverlaySeries("VWAP 20", AurumColors.accent, analysis.vwapData.vwap)),
                 ts, viewport, m, ohlc, style, onTapChart
             )
             "ad" -> ObvDiagram(
@@ -623,14 +623,14 @@ private fun TechniqueCard(
             Text(
                 text = accuracyLine(score),
                 style = MaterialTheme.typography.labelSmall,
-                color = if (trusted) AurumColors.gold else AurumColors.textDim
+                color = if (trusted) AurumColors.accent else AurumColors.textDim
             )
         }
         Spacer(Modifier.height(6.dp))
         Text(
             text = "Tap the chart for the full analysis",
             style = MaterialTheme.typography.labelSmall,
-            color = AurumColors.gold.copy(alpha = 0.8f)
+            color = AurumColors.accent.copy(alpha = 0.8f)
         )
     }
 }
@@ -706,7 +706,7 @@ private fun AccuracyCard(evaluation: TechniqueEvaluation?, loading: Boolean) {
                         trusted.forEach { s ->
                             PillTag(
                                 text = "${s.name} · ${s.independentHitRate}% vs ${s.baseRatePct}% base",
-                                color = AurumColors.gold
+                                color = AurumColors.accent
                             )
                         }
                     }
@@ -829,7 +829,7 @@ private fun SheetSection(title: String) {
     Text(
         text = title,
         style = MaterialTheme.typography.labelMedium,
-        color = AurumColors.gold
+        color = AurumColors.accent
     )
     Spacer(Modifier.height(6.dp))
 }
@@ -840,7 +840,7 @@ private fun SheetBullet(text: String) {
         Text(
             text = "•  ",
             style = MaterialTheme.typography.bodyMedium,
-            color = AurumColors.gold
+            color = AurumColors.accent
         )
         Text(
             text = text,
@@ -909,7 +909,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.planItems(plan: BuyPl
                 Text(
                     text = plan.budgetBasis,
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (plan.accountEquity != null) AurumColors.textDim else AurumColors.gold
+                    color = if (plan.accountEquity != null) AurumColors.textDim else AurumColors.accent
                 )
             }
         }
@@ -1006,7 +1006,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.planItems(plan: BuyPl
                     Text(
                         text = "D${day.day}",
                         style = MaterialTheme.typography.titleSmall,
-                        color = AurumColors.gold,
+                        color = AurumColors.accent,
                         modifier = Modifier.width(36.dp)
                     )
                     Column {
@@ -1042,7 +1042,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.planItems(plan: BuyPl
                 Text(
                     text = who,
                     style = MaterialTheme.typography.titleSmall,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
                 Text(
                     text = what,
@@ -1075,14 +1075,14 @@ private fun TrancheCard(index: Int, tranche: PlanTranche) {
                 color = AurumColors.text,
                 modifier = Modifier.weight(1f)
             )
-            PillTag(text = tranche.day, color = AurumColors.gold)
+            PillTag(text = tranche.day, color = AurumColors.accent)
         }
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = Fmt.money(tranche.amount),
                 style = MaterialTheme.typography.titleMedium,
-                color = AurumColors.gold
+                color = AurumColors.accent
             )
             Spacer(Modifier.width(10.dp))
             Text(

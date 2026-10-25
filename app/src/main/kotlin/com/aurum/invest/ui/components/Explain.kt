@@ -62,7 +62,7 @@ fun InfoDot(
             },
             confirmButton = {
                 TextButton(onClick = { show = false }) {
-                    Text(text = "Got it", color = AurumColors.gold)
+                    Text(text = "Got it", color = AurumColors.accent)
                 }
             }
         )

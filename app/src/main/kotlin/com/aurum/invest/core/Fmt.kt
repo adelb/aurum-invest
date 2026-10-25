@@ -58,6 +58,25 @@ object Fmt {
 
     fun qty(v: Double): String = qtyFmt.format(v)
 
+    private val jod3 = DecimalFormat("#,##0.000")
+
+    /**
+     * Jordanian dinars the way a Jordan gold shop writes them: "JOD 7,930.400"
+     * — three decimals, because the dinar has 1,000 fils and the Syndicate
+     * list is quoted to the fils.
+     */
+    fun jod(v: Double): String =
+        if (v < 0) "-JOD ${jod3.format(abs(v))}" else "JOD ${jod3.format(v)}"
+
+    /** [jod] with an explicit +/- sign — for gold profit and loss. */
+    fun signedJod(v: Double): String {
+        val sign = if (v >= 0) "+" else "-"
+        return "${sign}JOD ${jod3.format(abs(v))}"
+    }
+
+    /** A dinar amount without the currency — for per-gram prices in tables. */
+    fun num3(v: Double): String = jod3.format(v)
+
     /** Plain 2-decimal number, no currency symbol — for non-USD amounts. */
     fun num2(v: Double): String = money2.format(v)
 

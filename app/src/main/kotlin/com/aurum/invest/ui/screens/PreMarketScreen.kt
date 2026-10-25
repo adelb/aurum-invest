@@ -1,5 +1,6 @@
 package com.aurum.invest.ui.screens
 
+import com.aurum.invest.ui.components.RankedLogo
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -127,9 +128,9 @@ fun PreMarketScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
                     style = MaterialTheme.typography.bodyMedium,
                     color = when {
                         tab == DeskTab.PRE && state.session == Dates.MarketSession.PRE ->
-                            AurumColors.gold
+                            AurumColors.accent
                         tab == DeskTab.OPEN && state.session == Dates.MarketSession.REGULAR ->
-                            AurumColors.gold
+                            AurumColors.accent
                         else -> AurumColors.textDim
                     }
                 )
@@ -142,7 +143,7 @@ fun PreMarketScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
                 if (busy) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(22.dp),
-                        color = AurumColors.gold,
+                        color = AurumColors.accent,
                         strokeWidth = 2.dp
                     )
                 } else {
@@ -157,7 +158,7 @@ fun PreMarketScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> 
                         Icon(
                             Icons.Rounded.Refresh,
                             contentDescription = "Rescan",
-                            tint = AurumColors.gold
+                            tint = AurumColors.accent
                         )
                     }
                 }
@@ -221,7 +222,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.preMarketItems(
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = AurumColors.gold)
+                    CircularProgressIndicator(color = AurumColors.accent)
                     Spacer(Modifier.height(14.dp))
                     Text(
                         text = "Reading pre-market prints and session history…",
@@ -284,7 +285,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.intradayItems(
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = AurumColors.gold)
+                    CircularProgressIndicator(color = AurumColors.accent)
                     Spacer(Modifier.height(14.dp))
                     Text(
                         text = "Scanning the open session…",
@@ -372,7 +373,7 @@ private fun TargetCard(state: PreMarketState, tab: DeskTab, onEdit: () -> Unit) 
                 Text(
                     text = Fmt.pct(state.targetPct),
                     style = MaterialTheme.typography.displaySmall,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
             }
             Column(horizontalAlignment = Alignment.End) {
@@ -434,7 +435,7 @@ private fun StaleScanNotice(asOf: Long) {
             Text(
                 text = "!  ",
                 style = MaterialTheme.typography.bodyMedium,
-                color = AurumColors.gold
+                color = AurumColors.accent
             )
             Text(
                 text = "The market is closed — this is the last scan of the open session" +
@@ -455,7 +456,7 @@ private fun LastSessionNotice() {
             Text(
                 text = "!  ",
                 style = MaterialTheme.typography.bodyMedium,
-                color = AurumColors.gold
+                color = AurumColors.accent
             )
             Text(
                 text = "The pre-market session has no trades right now, so these are ranked " +
@@ -475,17 +476,13 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
     val (oddsLabel, oddsColor) = when (pick.odds) {
         TargetOdds.RELIABLE -> "Reaches it most days" to AurumColors.gain
         TargetOdds.FREQUENT -> "Reaches it often" to AurumColors.gain
-        TargetOdds.COINFLIP -> "Roughly even odds" to AurumColors.gold
+        TargetOdds.COINFLIP -> "Roughly even odds" to AurumColors.accent
         TargetOdds.RARE -> "Rarely reaches it" to AurumColors.loss
     }
 
     AurumCard(onClick = onOpen, modifier = Modifier.fillMaxWidth().animateContentSize()) {
         Row(verticalAlignment = Alignment.Top) {
-            Text(
-                text = pick.rank.toString().padStart(2, '0'),
-                style = MaterialTheme.typography.headlineMedium,
-                color = AurumColors.gold
-            )
+            RankedLogo(symbol = pick.symbol, rank = pick.rank)
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.Bottom) {
@@ -566,7 +563,7 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
                 TimingLine(
                     label = "Best time to buy",
                     value = pick.buyWindow,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
                 Spacer(Modifier.height(4.dp))
                 TimingLine(
@@ -636,14 +633,14 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
             Icon(
                 Icons.Rounded.QueryStats,
                 contentDescription = null,
-                tint = AurumColors.gold,
+                tint = AurumColors.accent,
                 modifier = Modifier.size(16.dp)
             )
             Spacer(Modifier.width(6.dp))
             Text(
                 text = "Full analysis",
                 style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.gold
+                color = AurumColors.accent
             )
         }
     }
@@ -654,17 +651,13 @@ private fun PreMarketCard(pick: PreMarketPick, onOpen: () -> Unit, onAnalyze: ()
 private fun IntradayCard(pick: IntradayPick, onOpen: () -> Unit, onAnalyze: () -> Unit) {
     val oddsColor = when {
         pick.hitRatePct >= 55.0 -> AurumColors.gain
-        pick.hitRatePct >= 40.0 -> AurumColors.gold
+        pick.hitRatePct >= 40.0 -> AurumColors.accent
         else -> AurumColors.loss
     }
 
     AurumCard(onClick = onOpen, modifier = Modifier.fillMaxWidth().animateContentSize()) {
         Row(verticalAlignment = Alignment.Top) {
-            Text(
-                text = pick.rank.toString().padStart(2, '0'),
-                style = MaterialTheme.typography.headlineMedium,
-                color = AurumColors.gold
-            )
+            RankedLogo(symbol = pick.symbol, rank = pick.rank)
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.Bottom) {
@@ -813,14 +806,14 @@ private fun IntradayCard(pick: IntradayPick, onOpen: () -> Unit, onAnalyze: () -
             Icon(
                 Icons.Rounded.QueryStats,
                 contentDescription = null,
-                tint = AurumColors.gold,
+                tint = AurumColors.accent,
                 modifier = Modifier.size(16.dp)
             )
             Spacer(Modifier.width(6.dp))
             Text(
                 text = "Full analysis",
                 style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.gold
+                color = AurumColors.accent
             )
         }
     }
@@ -854,7 +847,7 @@ private fun IntradayMethodCard(targetPct: Double) {
                 Text(
                     text = "•  ",
                     style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
                 Text(
                     text = line,
@@ -910,7 +903,7 @@ private fun MethodCard(targetPct: Double) {
                 Text(
                     text = "•  ",
                     style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
                 Text(
                     text = line,
@@ -954,11 +947,11 @@ private fun TargetDialog(current: Double, onDismiss: () -> Unit, onSave: (Double
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = AurumColors.text,
                         unfocusedTextColor = AurumColors.text,
-                        focusedBorderColor = AurumColors.gold,
+                        focusedBorderColor = AurumColors.accent,
                         unfocusedBorderColor = AurumColors.hairline,
-                        focusedLabelColor = AurumColors.gold,
+                        focusedLabelColor = AurumColors.accent,
                         unfocusedLabelColor = AurumColors.textDim,
-                        cursorColor = AurumColors.gold
+                        cursorColor = AurumColors.accent
                     ),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth()
@@ -978,7 +971,7 @@ private fun TargetDialog(current: Double, onDismiss: () -> Unit, onSave: (Double
                 onClick = { if (valid) onSave(pct!!) },
                 enabled = valid,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = AurumColors.gold,
+                    containerColor = AurumColors.accent,
                     contentColor = AurumColors.bg,
                     disabledContainerColor = AurumColors.surfaceHigh,
                     disabledContentColor = AurumColors.textDim

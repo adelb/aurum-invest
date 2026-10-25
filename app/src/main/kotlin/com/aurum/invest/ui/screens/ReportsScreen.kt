@@ -89,7 +89,7 @@ fun ReportsScreen(onBack: () -> Unit, onOpenAdviceHistory: () -> Unit = {}) {
             text = { Text(message) },
             confirmButton = {
                 TextButton(onClick = { vm.clearLedgerError() }) {
-                    Text("OK", color = AurumColors.gold)
+                    Text("OK", color = AurumColors.accent)
                 }
             }
         )
@@ -147,7 +147,7 @@ fun ReportsScreen(onBack: () -> Unit, onOpenAdviceHistory: () -> Unit = {}) {
                 Text(
                     text = "Advice history",
                     style = MaterialTheme.typography.labelLarge,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
             }
         }
@@ -180,7 +180,7 @@ fun ReportsScreen(onBack: () -> Unit, onOpenAdviceHistory: () -> Unit = {}) {
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator(color = AurumColors.gold)
+                CircularProgressIndicator(color = AurumColors.accent)
             }
         } else if (reports.isEmpty()) {
             Column(modifier = Modifier.fillMaxWidth().weight(1f)) {
@@ -270,7 +270,7 @@ private fun WalletSummaryCard(state: ReportsState) {
                         (if (state.unpricedCount == 1) " has" else "s have") +
                         " no live price — counted at cost, so net worth is approximate.",
                     style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
             }
             if (w.shortfall) {
@@ -278,7 +278,7 @@ private fun WalletSummaryCard(state: ReportsState) {
                     text = "Your ledger has more deployed than the stated wallet covers — " +
                         "raise the total from the Portfolio tab if you've added money.",
                     style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
             }
         } else {
@@ -401,7 +401,7 @@ private fun ReportCard(
         Text(
             text = if (expanded) "Hide trades" else "Show ${report.trades.size} trades",
             style = MaterialTheme.typography.labelMedium,
-            color = AurumColors.gold
+            color = AurumColors.accent
         )
     }
 }
@@ -498,7 +498,7 @@ private fun TradeRow(trade: TradeLine, onEdit: () -> Unit, onDelete: () -> Unit)
                     Text(
                         text = "pinned",
                         style = MaterialTheme.typography.labelSmall,
-                        color = AurumColors.gold
+                        color = AurumColors.accent
                     )
                 }
             }

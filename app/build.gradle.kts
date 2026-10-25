@@ -78,6 +78,9 @@ dependencies {
     // Networking — plain OkHttp; JSON via org.json (bundled in Android)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // Company logos on stock rows — Coil, with its own memory + disk cache
+    implementation("io.coil-kt:coil-compose:2.6.0")
+
     // DataStore for settings
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 

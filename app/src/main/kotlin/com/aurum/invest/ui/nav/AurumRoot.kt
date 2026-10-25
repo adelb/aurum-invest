@@ -2,6 +2,24 @@ package com.aurum.invest.ui.nav
 
 import android.app.Application
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ShowChart
+import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.DonutLarge
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Toll
+import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -67,7 +85,10 @@ import com.aurum.invest.ui.screens.EditPositionScreen
 import com.aurum.invest.ui.screens.PicksScreen
 import com.aurum.invest.ui.screens.PortfolioReviewScreen
 import com.aurum.invest.ui.screens.PositionDetailScreen
-import com.aurum.invest.ui.screens.PreMarketScreen
+import com.aurum.invest.ui.screens.GoldAddScreen
+import com.aurum.invest.ui.screens.GoldLotScreen
+import com.aurum.invest.ui.screens.GoldPricesScreen
+import com.aurum.invest.ui.screens.GoldScreen
 import com.aurum.invest.ui.screens.ReportsScreen
 import com.aurum.invest.ui.screens.SettingsScreen
 import com.aurum.invest.ui.screens.StocksScreen
@@ -81,7 +102,8 @@ import kotlinx.coroutines.flow.stateIn
 object Routes {
     const val DASHBOARD = "dashboard"; const val STOCKS = "stocks"
     const val PICKS = "picks"; const val WEALTH = "wealth"
-    const val PREMARKET = "premarket"
+    const val GOLD = "gold"; const val GOLD_PRICES = "gold/prices"
+    const val GOLD_ADD = "gold/add?id={id}"; const val GOLD_LOT = "gold/lot/{id}"
     const val FEED = "feed"; const val SETTINGS = "settings"
     const val ADD = "add?symbol={symbol}&side={side}"; const val DETAIL = "detail/{symbol}"
     const val ANALYSIS = "analysis/{symbol}"; const val REPORTS = "reports"
@@ -89,6 +111,8 @@ object Routes {
     fun detail(symbol: String) = "detail/$symbol"
     fun analysis(symbol: String) = "analysis/$symbol"
     fun editPosition(symbol: String) = "edit/$symbol"
+    fun goldAdd(id: Long? = null) = if (id == null) "gold/add" else "gold/add?id=$id"
+    fun goldLot(id: Long) = "gold/lot/$id"
     fun add(symbol: String? = null, side: String? = null): String {
         val params = mutableListOf<String>()
         if (symbol != null) params += "symbol=$symbol"
@@ -104,7 +128,11 @@ class RootViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 }
 
-private data class TopDest(val route: String, val label: String)
+private data class TopDest(val route: String, val label: String, val icon: ImageVector)
+
+/** Top-level tabs swap with a quick cross-fade; anything pushed on top slides in. */
+private fun isTop(route: String?): Boolean = route in TOP_ROUTES
+private val TOP_ROUTES = setOf(Routes.DASHBOARD, Routes.STOCKS, Routes.GOLD, Routes.PICKS, Routes.WEALTH)
 
 /** Past this much downward scroll the bar ducks away; a small nudge up recalls it. */
 private const val HIDE_AFTER_PX = 48f
@@ -114,16 +142,15 @@ private const val SHOW_AFTER_PX = 16f
 fun AurumRoot() {
     val nav = rememberNavController()
     val rootVm: RootViewModel = viewModel()
-    @Suppress("UNUSED_VARIABLE")
     val pending by rootVm.pendingCount.collectAsStateWithLifecycle()
 
     val topDests = remember {
         listOf(
-            TopDest(Routes.DASHBOARD, "Portfolio"),
-            TopDest(Routes.STOCKS, "Stocks"),
-            TopDest(Routes.PICKS, "Picks"),
-            TopDest(Routes.WEALTH, "Wealth"),
-            TopDest(Routes.PREMARKET, "2%")
+            TopDest(Routes.DASHBOARD, "Home", Icons.Rounded.Home),
+            TopDest(Routes.STOCKS, "Stocks", Icons.AutoMirrored.Rounded.ShowChart),
+            TopDest(Routes.GOLD, "Gold", Icons.Rounded.Toll),
+            TopDest(Routes.PICKS, "Picks", Icons.Rounded.Bolt),
+            TopDest(Routes.WEALTH, "Wealth", Icons.Rounded.DonutLarge)
         )
     }
 
@@ -187,16 +214,82 @@ fun AurumRoot() {
             NavHost(
                 navController = nav,
                 startDestination = Routes.DASHBOARD,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
+                enterTransition = {
+                    if (isTop(initialState.destination.route) && isTop(targetState.destination.route)) {
+                        fadeIn(tween(220, delayMillis = 60))
+                    } else {
+                        slideInHorizontally(tween(340, easing = FastOutSlowInEasing)) { it / 6 } +
+                            fadeIn(tween(260))
+                    }
+                },
+                exitTransition = {
+                    if (isTop(initialState.destination.route) && isTop(targetState.destination.route)) {
+                        fadeOut(tween(120))
+                    } else {
+                        slideOutHorizontally(tween(340, easing = FastOutSlowInEasing)) { -it / 10 } +
+                            fadeOut(tween(220))
+                    }
+                },
+                popEnterTransition = {
+                    slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { -it / 10 } +
+                        fadeIn(tween(240))
+                },
+                popExitTransition = {
+                    slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { it / 6 } +
+                        fadeOut(tween(200))
+                }
             ) {
                 composable(Routes.DASHBOARD) {
                     DashboardScreen(
                         onOpenDetail = { nav.navigate(Routes.detail(it)) },
                         onAdd = { nav.navigate(Routes.add()) },
+                        onAddGold = { nav.navigate(Routes.goldAdd()) },
+                        onOpenGold = {
+                            nav.navigate(Routes.GOLD) {
+                                popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        onOpenLot = { nav.navigate(Routes.goldLot(it)) },
                         onSettings = { nav.navigate(Routes.SETTINGS) },
                         onReports = { nav.navigate(Routes.REPORTS) },
-                        onEditPosition = { nav.navigate(Routes.editPosition(it)) },
-                        onReview = { nav.navigate(Routes.REVIEW) }
+                        onReview = { nav.navigate(Routes.REVIEW) },
+                        onOpenFeed = { nav.navigate(Routes.FEED) },
+                        pendingAlerts = pending
+                    )
+                }
+                composable(Routes.GOLD) {
+                    GoldScreen(
+                        onAdd = { nav.navigate(Routes.goldAdd()) },
+                        onOpenPrices = { nav.navigate(Routes.GOLD_PRICES) },
+                        onOpenLot = { nav.navigate(Routes.goldLot(it)) }
+                    )
+                }
+                composable(Routes.GOLD_PRICES) {
+                    GoldPricesScreen(onBack = { nav.popBackStack() })
+                }
+                composable(
+                    route = Routes.GOLD_ADD,
+                    arguments = listOf(navArgument("id") {
+                        type = NavType.LongType
+                        defaultValue = -1L
+                    })
+                ) { entry ->
+                    GoldAddScreen(
+                        lotId = entry.arguments?.getLong("id") ?: -1L,
+                        onDone = { nav.popBackStack() }
+                    )
+                }
+                composable(
+                    route = Routes.GOLD_LOT,
+                    arguments = listOf(navArgument("id") { type = NavType.LongType })
+                ) { entry ->
+                    GoldLotScreen(
+                        lotId = entry.arguments?.getLong("id") ?: -1L,
+                        onBack = { nav.popBackStack() },
+                        onEdit = { nav.navigate(Routes.goldAdd(it)) }
                     )
                 }
                 composable(Routes.REVIEW) {
@@ -233,19 +326,14 @@ fun AurumRoot() {
                         onOpenDetail = { nav.navigate(Routes.detail(it)) }
                     )
                 }
-                composable(Routes.PREMARKET) {
-                    PreMarketScreen(
-                        onOpenDetail = { nav.navigate(Routes.detail(it)) },
-                        onOpenAnalysis = { nav.navigate(Routes.analysis(it)) }
-                    )
-                }
                 composable(Routes.FEED) {
                     BankFeedScreen()
                 }
                 composable(Routes.SETTINGS) {
                     SettingsScreen(
                         onBack = { nav.popBackStack() },
-                        onOpenFeed = { nav.navigate(Routes.FEED) }
+                        onOpenFeed = { nav.navigate(Routes.FEED) },
+                        onOpenGoldPrices = { nav.navigate(Routes.GOLD_PRICES) }
                     )
                 }
                 composable(Routes.REPORTS) {
@@ -280,7 +368,8 @@ fun AurumRoot() {
                         symbol = entry.arguments?.getString("symbol").orEmpty(),
                         onBack = { nav.popBackStack() },
                         onTrade = { sym, side -> nav.navigate(Routes.add(sym, side)) },
-                        onOpenAnalysis = { nav.navigate(Routes.analysis(it)) }
+                        onOpenAnalysis = { nav.navigate(Routes.analysis(it)) },
+                        onEditPosition = { nav.navigate(Routes.editPosition(it)) }
                     )
                 }
                 composable(
@@ -314,9 +403,10 @@ fun AurumRoot() {
 }
 
 /**
- * The text-only bottom bar: five words, a gliding gold indicator that springs
- * between them, and per-item color/scale motion. It floats OVER the content
- * (edge-to-edge) and ducks away on downward scroll.
+ * The Toss tab bar: five icons with their words under them. The chosen tab
+ * turns white and its icon pops (a short spring); the others sit back in
+ * the quiet grey. It floats over the content and ducks away on a downward
+ * scroll.
  */
 @Composable
 private fun AurumNavBar(
@@ -326,80 +416,68 @@ private fun AurumNavBar(
     modifier: Modifier = Modifier
 ) {
     val selectedIndex = items.indexOfFirst { it.route == currentRoute }
-    // Off a top route the indicator keeps its last slot while the bar slides away.
-    val indicatorPos by animateFloatAsState(
-        targetValue = if (selectedIndex >= 0) selectedIndex.toFloat() else 0f,
-        animationSpec = spring(
-            dampingRatio = 0.72f,
-            stiffness = Spring.StiffnessMediumLow
-        ),
-        label = "navIndicator"
-    )
-
     Column(
         modifier = modifier
             .fillMaxWidth()
-            // Nearly opaque: the list is felt sliding underneath without
-            // ever making the labels hard to read.
-            .background(AurumColors.surface.copy(alpha = 0.97f))
+            .background(AurumColors.surface)
     ) {
-        HorizontalDivider(color = AurumColors.hairline, thickness = 1.dp)
-        BoxWithConstraints(
+        HorizontalDivider(color = AurumColors.separator, thickness = 1.dp)
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(60.dp)
+                .height(64.dp)
+                .padding(horizontal = 8.dp)
         ) {
-            val slotWidth = maxWidth / items.size
-            val indicatorWidth = 28.dp
-            Box(
-                modifier = Modifier
-                    .offset(x = slotWidth * indicatorPos + (slotWidth - indicatorWidth) / 2)
-                    .width(indicatorWidth)
-                    .height(3.dp)
-                    .clip(RoundedCornerShape(bottomStart = 3.dp, bottomEnd = 3.dp))
-                    .background(AurumColors.gold)
-            )
-            Row(modifier = Modifier.fillMaxSize()) {
-                items.forEachIndexed { index, dest ->
-                    val selected = index == selectedIndex
-                    val color by animateColorAsState(
-                        targetValue = if (selected) AurumColors.gold else AurumColors.textDim,
-                        animationSpec = tween(220),
-                        label = "navColor"
-                    )
-                    val scale by animateFloatAsState(
-                        targetValue = if (selected) 1.08f else 1f,
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioMediumBouncy,
-                            stiffness = Spring.StiffnessMedium
-                        ),
-                        label = "navScale"
-                    )
-                    Box(
+            items.forEachIndexed { index, dest ->
+                val selected = index == selectedIndex
+                val color by animateColorAsState(
+                    targetValue = if (selected) AurumColors.text else AurumColors.textFaint,
+                    animationSpec = tween(220),
+                    label = "navColor"
+                )
+                val scale by animateFloatAsState(
+                    targetValue = if (selected) 1.12f else 1f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessMedium
+                    ),
+                    label = "navScale"
+                )
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { onSelect(dest.route) }
+                        .semantics { this.selected = selected },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = dest.icon,
+                        contentDescription = null,
+                        tint = color,
                         modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null
-                            ) { onSelect(dest.route) },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = dest.label,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = color,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                            modifier = Modifier.graphicsLayer {
+                            .size(24.dp)
+                            .graphicsLayer {
                                 scaleX = scale
                                 scaleY = scale
                             }
-                        )
-                    }
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = dest.label,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold
+                        ),
+                        color = color
+                    )
                 }
             }
         }
-        // The bar's surface continues behind the gesture area — borderless.
+        // The surface continues behind the gesture area: borderless.
         Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
     }
 }

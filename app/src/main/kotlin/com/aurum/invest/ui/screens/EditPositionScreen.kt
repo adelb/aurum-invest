@@ -130,13 +130,13 @@ fun EditPositionScreen(
                 )
             }
             IconButton(onClick = { onAddTrade(state.symbol) }) {
-                Icon(Icons.Rounded.Add, contentDescription = "Add a trade", tint = AurumColors.gold)
+                Icon(Icons.Rounded.Add, contentDescription = "Add a trade", tint = AurumColors.accent)
             }
         }
 
         if (state.loading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = AurumColors.gold)
+                CircularProgressIndicator(color = AurumColors.accent)
             }
             return@Column
         }

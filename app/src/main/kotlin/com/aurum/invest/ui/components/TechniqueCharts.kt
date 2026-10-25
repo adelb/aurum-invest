@@ -605,12 +605,12 @@ fun MaTrendDiagram(
             val pane = Pane(minV, maxV, size.width, size.height - AXIS_H, 8f, closes.size)
             drawPriceGrid(textMeasurer, pane, minV, maxV)
             drawPriceSeries(closes, candlesW, style, pane)
-            strokeSeries(seriesPoints(sma20, pane), AurumColors.gold, 2.5f)
+            strokeSeries(seriesPoints(sma20, pane), AurumColors.accent, 2.5f)
             strokeSeries(seriesPoints(sma50, pane), AurumColors.info, 2.5f)
             drawTimeAxis(textMeasurer, timestamps.win(viewport))
             scrubAt(viewport, closes.size, size.width)?.let { sc ->
                 val lines = priceScrubLines(sc.idx, closes, candlesW, style).toMutableList()
-                sma20.getOrNull(sc.idx)?.let { lines += "SMA 20 ${Fmt.money(it)}" to AurumColors.gold }
+                sma20.getOrNull(sc.idx)?.let { lines += "SMA 20 ${Fmt.money(it)}" to AurumColors.accent }
                 sma50.getOrNull(sc.idx)?.let { lines += "SMA 50 ${Fmt.money(it)}" to AurumColors.info }
                 drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
             }
@@ -618,7 +618,7 @@ fun MaTrendDiagram(
         LegendRow(
             entries = listOf(
                 "Price" to priceLineColor,
-                "SMA 20" to AurumColors.gold,
+                "SMA 20" to AurumColors.accent,
                 "SMA 50" to AurumColors.info
             ),
             modifier = Modifier.padding(top = 8.dp)
@@ -659,14 +659,14 @@ fun RsiDiagram(
         drawText(textMeasurer, "70", topLeft = Offset(4f, y70 - m70.size.height - 2f), style = dim)
         drawText(textMeasurer, "30", topLeft = Offset(4f, y30 + 2f), style = dim)
 
-        strokeSeries(seriesPoints(rsi, pane), AurumColors.gold, 2.5f)
+        strokeSeries(seriesPoints(rsi, pane), AurumColors.accent, 2.5f)
 
         val lastIdx = rsi.indexOfLast { it != null }
         if (lastIdx >= 0) {
             val v = rsi[lastIdx]
             if (v != null) {
                 val txt = "RSI ${v.roundToInt()}"
-                val goldStyle = chartLabelStyle(AurumColors.gold)
+                val goldStyle = chartLabelStyle(AurumColors.accent)
                 val m = textMeasurer.measure(AnnotatedString(txt), goldStyle)
                 val ty = (pane.y(v) - m.size.height - 4f)
                     .coerceIn(2f, size.height - AXIS_H - m.size.height - 2f)
@@ -680,7 +680,7 @@ fun RsiDiagram(
         drawTimeAxis(textMeasurer, timestamps.win(viewport))
         scrubAt(viewport, rsi.size, size.width)?.let { sc ->
             val lines = buildList {
-                rsi.getOrNull(sc.idx)?.let { add("RSI ${it.roundToInt()}" to AurumColors.gold) }
+                rsi.getOrNull(sc.idx)?.let { add("RSI ${it.roundToInt()}" to AurumColors.accent) }
             }
             drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
         }
@@ -734,12 +734,12 @@ fun MacdDiagram(
             }
 
             dashedLevel(y0, AurumColors.textDim.copy(alpha = 0.55f))
-            strokeSeries(seriesPoints(macd, pane), AurumColors.gold, 2.5f)
+            strokeSeries(seriesPoints(macd, pane), AurumColors.accent, 2.5f)
             strokeSeries(seriesPoints(signal, pane), AurumColors.info, 2.5f)
             drawTimeAxis(textMeasurer, timestamps.win(viewport))
             scrubAt(viewport, n, size.width)?.let { sc ->
                 val lines = buildList {
-                    macd.getOrNull(sc.idx)?.let { add("MACD ${sig(it)}" to AurumColors.gold) }
+                    macd.getOrNull(sc.idx)?.let { add("MACD ${sig(it)}" to AurumColors.accent) }
                     signal.getOrNull(sc.idx)?.let { add("Signal ${sig(it)}" to AurumColors.info) }
                     histogram.getOrNull(sc.idx)?.let {
                         add("Hist ${sig(it)}" to if (it >= 0) AurumColors.gain else AurumColors.loss)
@@ -750,7 +750,7 @@ fun MacdDiagram(
         }
         LegendRow(
             entries = listOf(
-                "MACD" to AurumColors.gold,
+                "MACD" to AurumColors.accent,
                 "Signal" to AurumColors.info,
                 "Histogram" to AurumColors.textDim
             ),
@@ -968,7 +968,7 @@ fun FibonacciDiagram(
 
         data.levels.forEach { (name, level) ->
             val isEdge = name == "0.0" || name == "1.0"
-            val color = if (isEdge) AurumColors.textDim else AurumColors.gold
+            val color = if (isEdge) AurumColors.textDim else AurumColors.accent
             val labelStyle = chartLabelStyle(color)
             val label = "$name  ${Fmt.money(level)}"
             val m = textMeasurer.measure(AnnotatedString(label), labelStyle)
@@ -1052,13 +1052,13 @@ fun IchimokuDiagram(
                 drawPath(cloud, color = AurumColors.infoSoft)
             }
 
-            strokeSeries(seriesPoints(tenkan, pane), AurumColors.gold, 2f)
+            strokeSeries(seriesPoints(tenkan, pane), AurumColors.accent, 2f)
             strokeSeries(seriesPoints(kijun, pane), AurumColors.info, 2f)
             drawPriceSeries(closes, candlesW, style, pane)
             drawTimeAxis(textMeasurer, timestamps.win(viewport))
             scrubAt(viewport, closes.size, size.width)?.let { sc ->
                 val lines = priceScrubLines(sc.idx, closes, candlesW, style).toMutableList()
-                tenkan.getOrNull(sc.idx)?.let { lines += "Tenkan ${Fmt.money(it)}" to AurumColors.gold }
+                tenkan.getOrNull(sc.idx)?.let { lines += "Tenkan ${Fmt.money(it)}" to AurumColors.accent }
                 kijun.getOrNull(sc.idx)?.let { lines += "Kijun ${Fmt.money(it)}" to AurumColors.info }
                 drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
             }
@@ -1066,7 +1066,7 @@ fun IchimokuDiagram(
         LegendRow(
             entries = listOf(
                 "Price" to priceLineColor,
-                "Tenkan 9" to AurumColors.gold,
+                "Tenkan 9" to AurumColors.accent,
                 "Kijun 26" to AurumColors.info,
                 "Cloud" to AurumColors.info.copy(alpha = 0.4f)
             ),
@@ -1110,12 +1110,12 @@ fun StochasticDiagram(
             drawText(textMeasurer, "80", topLeft = Offset(4f, y80 - m80.size.height - 2f), style = dim)
             drawText(textMeasurer, "20", topLeft = Offset(4f, y20 + 2f), style = dim)
 
-            strokeSeries(seriesPoints(k, pane), AurumColors.gold, 2.5f)
+            strokeSeries(seriesPoints(k, pane), AurumColors.accent, 2.5f)
             strokeSeries(seriesPoints(d, pane), AurumColors.info, 2f)
             drawTimeAxis(textMeasurer, timestamps.win(viewport))
             scrubAt(viewport, k.size, size.width)?.let { sc ->
                 val lines = buildList {
-                    k.getOrNull(sc.idx)?.let { add("%K ${it.roundToInt()}" to AurumColors.gold) }
+                    k.getOrNull(sc.idx)?.let { add("%K ${it.roundToInt()}" to AurumColors.accent) }
                     d.getOrNull(sc.idx)?.let { add("%D ${it.roundToInt()}" to AurumColors.info) }
                 }
                 drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
@@ -1123,7 +1123,7 @@ fun StochasticDiagram(
         }
         LegendRow(
             entries = listOf(
-                "%K" to AurumColors.gold,
+                "%K" to AurumColors.accent,
                 "%D" to AurumColors.info
             ),
             modifier = Modifier.padding(top = 8.dp)
@@ -1161,11 +1161,11 @@ fun ObvDiagram(
 
             val pane = Pane(0.0, 1.0, size.width, size.height - AXIS_H, 10f, obv.size)
             strokeSeries(pricePoints(norm(px), pane), priceLineColor.copy(alpha = 0.55f), 2f)
-            strokeSeries(pricePoints(norm(obv), pane), AurumColors.gold, 2.5f)
+            strokeSeries(pricePoints(norm(obv), pane), AurumColors.accent, 2.5f)
             drawTimeAxis(textMeasurer, timestamps.win(viewport))
             scrubAt(viewport, obv.size, size.width)?.let { sc ->
                 val lines = buildList {
-                    obv.getOrNull(sc.idx)?.let { add("$label ${Fmt.compact(it)}" to AurumColors.gold) }
+                    obv.getOrNull(sc.idx)?.let { add("$label ${Fmt.compact(it)}" to AurumColors.accent) }
                     px.getOrNull(sc.idx)?.let { add("Close ${Fmt.money(it)}" to priceLineColor) }
                 }
                 drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
@@ -1173,7 +1173,7 @@ fun ObvDiagram(
         }
         LegendRow(
             entries = listOf(
-                label to AurumColors.gold,
+                label to AurumColors.accent,
                 "Price (scaled)" to priceLineColor.copy(alpha = 0.55f)
             ),
             modifier = Modifier.padding(top = 8.dp)
@@ -1213,11 +1213,11 @@ fun AdxDiagram(
 
             strokeSeries(seriesPoints(plus, pane), AurumColors.gain, 2f)
             strokeSeries(seriesPoints(minus, pane), AurumColors.loss, 2f)
-            strokeSeries(seriesPoints(adx, pane), AurumColors.gold, 2.5f)
+            strokeSeries(seriesPoints(adx, pane), AurumColors.accent, 2.5f)
             drawTimeAxis(textMeasurer, timestamps.win(viewport))
             scrubAt(viewport, adx.size, size.width)?.let { sc ->
                 val lines = buildList {
-                    adx.getOrNull(sc.idx)?.let { add("ADX ${it.roundToInt()}" to AurumColors.gold) }
+                    adx.getOrNull(sc.idx)?.let { add("ADX ${it.roundToInt()}" to AurumColors.accent) }
                     plus.getOrNull(sc.idx)?.let { add("+DI ${it.roundToInt()}" to AurumColors.gain) }
                     minus.getOrNull(sc.idx)?.let { add("-DI ${it.roundToInt()}" to AurumColors.loss) }
                 }
@@ -1226,7 +1226,7 @@ fun AdxDiagram(
         }
         LegendRow(
             entries = listOf(
-                "ADX" to AurumColors.gold,
+                "ADX" to AurumColors.accent,
                 "+DI" to AurumColors.gain,
                 "-DI" to AurumColors.loss
             ),
@@ -1277,8 +1277,8 @@ fun DonchianDiagram(
                 band.lineTo(lowerRev.first().x, lowerRev.first().y)
                 appendSmooth(band, lowerRev)
                 band.close()
-                drawPath(band, color = AurumColors.goldSoft)
-                val edge = AurumColors.gold.copy(alpha = 0.55f)
+                drawPath(band, color = AurumColors.accentSoft)
+                val edge = AurumColors.accent.copy(alpha = 0.55f)
                 strokeSeries(upperPts, edge, 1.5f)
                 strokeSeries(lowerPts, edge, 1.5f)
             }
@@ -1287,15 +1287,15 @@ fun DonchianDiagram(
             drawTimeAxis(textMeasurer, timestamps.win(viewport))
             scrubAt(viewport, closes.size, size.width)?.let { sc ->
                 val lines = priceScrubLines(sc.idx, closes, candlesW, style).toMutableList()
-                upper.getOrNull(sc.idx)?.let { lines += "20d high ${Fmt.money(it)}" to AurumColors.gold }
-                lower.getOrNull(sc.idx)?.let { lines += "20d low ${Fmt.money(it)}" to AurumColors.gold }
+                upper.getOrNull(sc.idx)?.let { lines += "20d high ${Fmt.money(it)}" to AurumColors.accent }
+                lower.getOrNull(sc.idx)?.let { lines += "20d low ${Fmt.money(it)}" to AurumColors.accent }
                 drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
             }
         }
         LegendRow(
             entries = listOf(
                 "Price" to priceLineColor,
-                "20-day channel" to AurumColors.gold.copy(alpha = 0.7f),
+                "20-day channel" to AurumColors.accent.copy(alpha = 0.7f),
                 "Middle" to AurumColors.textDim
             ),
             modifier = Modifier.padding(top = 8.dp)
@@ -1396,14 +1396,14 @@ fun MfiDiagram(
         drawText(textMeasurer, "80", topLeft = Offset(4f, y80 - m80.size.height - 2f), style = dim)
         drawText(textMeasurer, "20", topLeft = Offset(4f, y20 + 2f), style = dim)
 
-        strokeSeries(seriesPoints(mfi, pane), AurumColors.gold, 2.5f)
+        strokeSeries(seriesPoints(mfi, pane), AurumColors.accent, 2.5f)
 
         val lastIdx = mfi.indexOfLast { it != null }
         if (lastIdx >= 0) {
             val v = mfi[lastIdx]
             if (v != null) {
                 val txt = "MFI ${v.roundToInt()}"
-                val goldStyle = chartLabelStyle(AurumColors.gold)
+                val goldStyle = chartLabelStyle(AurumColors.accent)
                 val m = textMeasurer.measure(AnnotatedString(txt), goldStyle)
                 val ty = (pane.y(v) - m.size.height - 4f)
                     .coerceIn(2f, size.height - AXIS_H - m.size.height - 2f)
@@ -1417,7 +1417,7 @@ fun MfiDiagram(
         drawTimeAxis(textMeasurer, timestamps.win(viewport))
         scrubAt(viewport, mfi.size, size.width)?.let { sc ->
             val lines = buildList {
-                mfi.getOrNull(sc.idx)?.let { add("MFI ${it.roundToInt()}" to AurumColors.gold) }
+                mfi.getOrNull(sc.idx)?.let { add("MFI ${it.roundToInt()}" to AurumColors.accent) }
             }
             drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
         }
@@ -1455,12 +1455,12 @@ fun GoldenCrossDiagram(
             val pane = Pane(minV, maxV, size.width, size.height - AXIS_H, 8f, closes.size)
             drawPriceGrid(textMeasurer, pane, minV, maxV)
             drawPriceSeries(closes, candlesW, style, pane)
-            strokeSeries(seriesPoints(sma50, pane), AurumColors.gold, 2.5f)
+            strokeSeries(seriesPoints(sma50, pane), AurumColors.accent, 2.5f)
             strokeSeries(seriesPoints(sma200, pane), AurumColors.info, 2.5f)
             drawTimeAxis(textMeasurer, timestamps.win(viewport))
             scrubAt(viewport, closes.size, size.width)?.let { sc ->
                 val lines = priceScrubLines(sc.idx, closes, candlesW, style).toMutableList()
-                sma50.getOrNull(sc.idx)?.let { lines += "SMA 50 ${Fmt.money(it)}" to AurumColors.gold }
+                sma50.getOrNull(sc.idx)?.let { lines += "SMA 50 ${Fmt.money(it)}" to AurumColors.accent }
                 sma200.getOrNull(sc.idx)?.let { lines += "SMA 200 ${Fmt.money(it)}" to AurumColors.info }
                 drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
             }
@@ -1468,7 +1468,7 @@ fun GoldenCrossDiagram(
         LegendRow(
             entries = listOf(
                 "Price" to priceLineColor,
-                "SMA 50" to AurumColors.gold,
+                "SMA 50" to AurumColors.accent,
                 "SMA 200" to AurumColors.info
             ),
             modifier = Modifier.padding(top = 8.dp)
@@ -1509,14 +1509,14 @@ fun WilliamsRDiagram(
         drawText(textMeasurer, "-20", topLeft = Offset(4f, y20 - m20.size.height - 2f), style = dim)
         drawText(textMeasurer, "-80", topLeft = Offset(4f, y80 + 2f), style = dim)
 
-        strokeSeries(seriesPoints(r, pane), AurumColors.gold, 2.5f)
+        strokeSeries(seriesPoints(r, pane), AurumColors.accent, 2.5f)
 
         val lastIdx = r.indexOfLast { it != null }
         if (lastIdx >= 0) {
             val v = r[lastIdx]
             if (v != null) {
                 val txt = "%R ${v.roundToInt()}"
-                val goldStyle = chartLabelStyle(AurumColors.gold)
+                val goldStyle = chartLabelStyle(AurumColors.accent)
                 val m = textMeasurer.measure(AnnotatedString(txt), goldStyle)
                 val ty = (pane.y(v) - m.size.height - 4f)
                     .coerceIn(2f, size.height - AXIS_H - m.size.height - 2f)
@@ -1530,7 +1530,7 @@ fun WilliamsRDiagram(
         drawTimeAxis(textMeasurer, timestamps.win(viewport))
         scrubAt(viewport, r.size, size.width)?.let { sc ->
             val lines = buildList {
-                r.getOrNull(sc.idx)?.let { add("%R ${it.roundToInt()}" to AurumColors.gold) }
+                r.getOrNull(sc.idx)?.let { add("%R ${it.roundToInt()}" to AurumColors.accent) }
             }
             drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
         }
@@ -1575,11 +1575,11 @@ fun CciDiagram(
         drawText(textMeasurer, "+100", topLeft = Offset(4f, yPlus - mPlus.size.height - 2f), style = dim)
         drawText(textMeasurer, "-100", topLeft = Offset(4f, yMinus + 2f), style = dim)
 
-        strokeSeries(seriesPoints(cci, pane), AurumColors.gold, 2.5f)
+        strokeSeries(seriesPoints(cci, pane), AurumColors.accent, 2.5f)
         drawTimeAxis(textMeasurer, timestamps.win(viewport))
         scrubAt(viewport, cci.size, size.width)?.let { sc ->
             val lines = buildList {
-                cci.getOrNull(sc.idx)?.let { add("CCI ${it.roundToInt()}" to AurumColors.gold) }
+                cci.getOrNull(sc.idx)?.let { add("CCI ${it.roundToInt()}" to AurumColors.accent) }
             }
             drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
         }
@@ -1692,12 +1692,12 @@ fun CmfDiagram(
         drawText(textMeasurer, "+0.05", topLeft = Offset(4f, yHi - mHi.size.height - 2f), style = dim)
         drawText(textMeasurer, "-0.05", topLeft = Offset(4f, yLo + 2f), style = dim)
 
-        strokeSeries(seriesPoints(cmf, pane), AurumColors.gold, 2.5f)
+        strokeSeries(seriesPoints(cmf, pane), AurumColors.accent, 2.5f)
         drawTimeAxis(textMeasurer, timestamps.win(viewport))
         scrubAt(viewport, cmf.size, size.width)?.let { sc ->
             val lines = buildList {
                 cmf.getOrNull(sc.idx)?.let {
-                    add(String.format(java.util.Locale.US, "CMF %+.2f", it) to AurumColors.gold)
+                    add(String.format(java.util.Locale.US, "CMF %+.2f", it) to AurumColors.accent)
                 }
             }
             drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
@@ -1828,13 +1828,13 @@ fun OscillatorDiagram(
             dashedLevel(pane.y(0.0), lineColor)
         }
 
-        strokeSeries(seriesPoints(series, pane), AurumColors.gold, 2.5f)
+        strokeSeries(seriesPoints(series, pane), AurumColors.accent, 2.5f)
 
         val lastIdx = series.indexOfLast { it != null }
         if (lastIdx >= 0) {
             series[lastIdx]?.let { v ->
                 val txt = "$label ${fmtVal(v)}"
-                val goldStyle = chartLabelStyle(AurumColors.gold)
+                val goldStyle = chartLabelStyle(AurumColors.accent)
                 val m = textMeasurer.measure(AnnotatedString(txt), goldStyle)
                 val ty = (pane.y(v) - m.size.height - 4f)
                     .coerceIn(2f, size.height - AXIS_H - m.size.height - 2f)
@@ -1848,7 +1848,7 @@ fun OscillatorDiagram(
         drawTimeAxis(textMeasurer, timestamps.win(viewport))
         scrubAt(viewport, series.size, size.width)?.let { sc ->
             val lines = buildList {
-                series.getOrNull(sc.idx)?.let { add("$label ${fmtVal(it)}" to AurumColors.gold) }
+                series.getOrNull(sc.idx)?.let { add("$label ${fmtVal(it)}" to AurumColors.accent) }
             }
             drawCrosshair(textMeasurer, sc.x, scrubTitle(timestamps.win(viewport), sc.idx), lines)
         }
@@ -1868,7 +1868,7 @@ fun TwoLineDiagram(
     timestamps: List<Long>,
     viewport: DiagramViewport,
     modifier: Modifier = Modifier,
-    aColor: Color = AurumColors.gold,
+    aColor: Color = AurumColors.accent,
     bColor: Color = AurumColors.info,
     refLevel: Double? = null,
     zeroLine: Boolean = false,

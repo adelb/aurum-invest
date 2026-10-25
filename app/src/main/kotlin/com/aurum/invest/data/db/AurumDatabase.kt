@@ -14,9 +14,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CacheEntity::class,
         BankEventEntity::class,
         WeeklyPickEntity::class,
-        EngineCallEntity::class
+        EngineCallEntity::class,
+        GoldLotEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class AurumDatabase : RoomDatabase() {
@@ -26,6 +27,7 @@ abstract class AurumDatabase : RoomDatabase() {
     abstract fun bankEventDao(): BankEventDao
     abstract fun picksDao(): PicksDao
     abstract fun engineCallDao(): EngineCallDao
+    abstract fun goldDao(): GoldDao
 
     companion object {
         /** v2: transactions gain the nullable realized-outcome override. */
@@ -103,13 +105,32 @@ abstract class AurumDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v7: the gold book. A NEW table (gold_lots) holding what the user
+         * bought at a Jordan shop; no existing table is touched.
+         */
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `gold_lots` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`kind` TEXT NOT NULL, `karat` INTEGER NOT NULL, " +
+                        "`qty` REAL NOT NULL, `pricePerUnit` REAL NOT NULL, " +
+                        "`makingPerUnit` REAL NOT NULL, `boughtAt` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, `note` TEXT NOT NULL, " +
+                        "`soldAt` INTEGER, `soldPricePerUnit` REAL)"
+                )
+            }
+        }
+
         // No destructive fallback: the user's ledger must survive every app
         // update — upgrades AND the v9→v10 rebuild alike. Any future schema
         // change MUST ship an explicit Migration.
         fun build(context: Context): AurumDatabase =
             Room.databaseBuilder(context, AurumDatabase::class.java, "aurum.db")
                 .addMigrations(
-                    MIGRATION_1_2, MIGRATION_2_5, MIGRATION_3_5, MIGRATION_4_5, MIGRATION_5_6
+                    MIGRATION_1_2, MIGRATION_2_5, MIGRATION_3_5, MIGRATION_4_5, MIGRATION_5_6,
+                    MIGRATION_6_7
                 )
                 .build()
     }

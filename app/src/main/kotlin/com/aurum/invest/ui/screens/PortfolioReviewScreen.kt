@@ -94,7 +94,7 @@ fun PortfolioReviewScreen(onBack: () -> Unit, onOpenAnalysis: (String) -> Unit) 
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = AurumColors.gold)
+                        CircularProgressIndicator(color = AurumColors.accent)
                         Spacer(Modifier.height(14.dp))
                         Text(
                             text = "Reading the whole book…",
@@ -147,7 +147,7 @@ private fun ReviewList(
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(
-                        color = AurumColors.gold,
+                        color = AurumColors.accent,
                         strokeWidth = 2.dp,
                         modifier = Modifier.size(14.dp)
                     )
@@ -214,7 +214,7 @@ private fun RollupCard(review: PortfolioBoardReview) {
                     review.boardTempPct == null -> AurumColors.textDim
                     review.boardTempPct >= 60 -> AurumColors.gain
                     review.boardTempPct <= 40 -> AurumColors.loss
-                    else -> AurumColors.gold
+                    else -> AurumColors.accent
                 }
             )
             Spacer(Modifier.width(8.dp))
@@ -291,7 +291,7 @@ private fun ActionsCard(review: PortfolioBoardReview) {
                     Text(
                         text = "${i + 1}.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = AurumColors.gold,
+                        color = AurumColors.accent,
                         modifier = Modifier.width(24.dp)
                     )
                     Text(
@@ -372,7 +372,7 @@ private fun HoldingReviewCard(h: HoldingBoardReview, onOpen: () -> Unit) {
                     text = "Trusted on this stock: ${h.trustedBull.size} bullish, " +
                         "${h.trustedBear.size} bearish",
                     style = MaterialTheme.typography.labelSmall,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
             }
         } else {
@@ -390,7 +390,7 @@ private fun HoldingReviewCard(h: HoldingBoardReview, onOpen: () -> Unit) {
                 Text(
                     text = "·",
                     style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.gold,
+                    color = AurumColors.accent,
                     modifier = Modifier.width(12.dp)
                 )
                 Text(
@@ -408,7 +408,7 @@ private fun HoldingReviewCard(h: HoldingBoardReview, onOpen: () -> Unit) {
 private fun ActionPill(action: BoardAction) {
     val (label, color) = when (action) {
         BoardAction.EXIT -> "EXIT" to AurumColors.loss
-        BoardAction.TRIM -> "TRIM" to AurumColors.gold
+        BoardAction.TRIM -> "TRIM" to AurumColors.accent
         BoardAction.WATCH -> "WATCH" to AurumColors.info
         BoardAction.ADD -> "ADD" to AurumColors.gain
         BoardAction.HOLD -> "HOLD" to AurumColors.textDim

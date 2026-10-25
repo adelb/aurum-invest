@@ -6,6 +6,11 @@ import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
 import com.aurum.invest.analytics.AdviceEngine
 import com.aurum.invest.analytics.BookContext
+import com.aurum.invest.analytics.GoldBook
+import com.aurum.invest.analytics.GoldEngine
+import com.aurum.invest.analytics.GoldLot
+import com.aurum.invest.analytics.ShopQuote
+import com.aurum.invest.analytics.SyndicateList
 import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.model.Advice
@@ -73,8 +78,26 @@ data class DashboardState(
      * as invested and booked — liquidity = total − invested + realized P/L,
      * computed in exactly one place ([WalletState.liquidityOf]).
      */
-    val wallet: WalletState = WalletState.UNSET
-)
+    val wallet: WalletState = WalletState.UNSET,
+    /** The gold book, valued at the Syndicate buy price (what a shop pays). */
+    val goldLots: List<GoldLot> = emptyList(),
+    val goldList: SyndicateList? = null,
+    val goldShop: ShopQuote? = null
+) {
+    val goldBook: GoldBook
+        get() = GoldEngine.book(goldLots, goldList, 1.0, goldShop, goldList?.worldAtList)
+
+    /**
+     * Everything, in dollars: the wallet's account value (liquidity plus
+     * holdings) — or the holdings alone when no wallet is set — plus the gold
+     * converted at the dinar's peg.
+     */
+    val netWorth: Double
+        get() {
+            val base = if (wallet.configured) wallet.netWorth else summary?.marketValue ?: 0.0
+            return base + goldBook.valueUsd
+        }
+}
 
 class DashboardViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -99,6 +122,13 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
         }
+        // The gold book: its lots from Room, its prices from the saved list.
+        viewModelScope.launch {
+            container.gold.observeLots().collect { lots ->
+                _state.update { it.copy(goldLots = lots) }
+            }
+        }
+        refreshGold()
         // The wallet inputs live in their own store — a top-up must re-derive
         // liquidity immediately, without waiting for a ledger change.
         viewModelScope.launch {
@@ -122,6 +152,15 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
     fun refresh() {
         forceFresh.set(true)
         refreshTick.update { it + 1 }
+        refreshGold()
+    }
+
+    private fun refreshGold() {
+        viewModelScope.launch {
+            val feed = runCatching { container.gold.list() }.getOrNull()
+            val shop = runCatching { container.gold.shopQuote() }.getOrNull()
+            _state.update { it.copy(goldList = feed?.list ?: it.goldList, goldShop = shop) }
+        }
     }
 
     /**
@@ -230,12 +269,14 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
             configured = runCatching { container.wallet.configured.first() }.getOrDefault(false),
             summary = summary
         )
-        _state.value = DashboardState(
-            loading = false,
-            summary = summary,
-            holdings = rows.sortedByDescending { it.view.marketValue },
-            book = PortfolioLens.build(openViews, sectors),
-            wallet = walletState
-        )
+        _state.update {
+            it.copy(
+                loading = false,
+                summary = summary,
+                holdings = rows.sortedByDescending { row -> row.view.marketValue },
+                book = PortfolioLens.build(openViews, sectors),
+                wallet = walletState
+            )
+        }
     }
 }

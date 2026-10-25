@@ -1,5 +1,6 @@
 package com.aurum.invest.ui.screens
 
+import com.aurum.invest.ui.components.CompanyLogo
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
@@ -238,7 +239,7 @@ private fun WatchlistMode(
                                 .padding(vertical = 48.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            CircularProgressIndicator(color = AurumColors.gold)
+                            CircularProgressIndicator(color = AurumColors.accent)
                         }
                     }
                 } else if (state.rows.isEmpty()) {
@@ -353,7 +354,7 @@ private fun TagSearch(
                             .padding(vertical = 40.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        CircularProgressIndicator(color = AurumColors.gold)
+                        CircularProgressIndicator(color = AurumColors.accent)
                     }
                 }
                 state.tagRows.isEmpty() && state.tagQuery.isBlank() -> item {
@@ -409,7 +410,7 @@ private fun SectorBrowse(
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(50))
-                        .background(if (selected) AurumColors.gold else AurumColors.surface)
+                        .background(if (selected) AurumColors.accent else AurumColors.surface)
                         .clickable { vm.selectSector(sector.name) }
                         .padding(horizontal = 14.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -418,7 +419,7 @@ private fun SectorBrowse(
                         Icon(
                             imageVector = Icons.Rounded.LocalFireDepartment,
                             contentDescription = "Trending sector",
-                            tint = if (selected) AurumColors.bg else AurumColors.gold,
+                            tint = if (selected) AurumColors.bg else AurumColors.accent,
                             modifier = Modifier.size(14.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
@@ -449,7 +450,7 @@ private fun SectorBrowse(
                             .padding(vertical = 40.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        CircularProgressIndicator(color = AurumColors.gold)
+                        CircularProgressIndicator(color = AurumColors.accent)
                     }
                 }
             } else {
@@ -487,7 +488,7 @@ private fun SectorPulseCard(state: StocksState) {
                 Icon(
                     imageVector = Icons.Rounded.LocalFireDepartment,
                     contentDescription = "Trending sector",
-                    tint = AurumColors.gold,
+                    tint = AurumColors.accent,
                     modifier = Modifier.size(16.dp)
                 )
             }
@@ -547,7 +548,7 @@ private fun SectorPulseCard(state: StocksState) {
                         } +
                         String.format(Locale.US, " — %.0f%% of the book", total),
                     style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.gold
+                    color = AurumColors.accent
                 )
             } else if (state.sectorRows.isNotEmpty()) {
                 Text(
@@ -607,10 +608,12 @@ private fun BrowseRowCard(
     val cardModifier = Modifier
         .fillMaxWidth()
         .let {
-            if (row.top) it.border(1.5.dp, AurumColors.gold, RoundedCornerShape(16.dp)) else it
+            if (row.top) it.border(1.5.dp, AurumColors.accent, RoundedCornerShape(20.dp)) else it
         }
     AurumCard(modifier = cardModifier, onClick = onOpen) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            CompanyLogo(symbol = row.symbol, size = 40.dp)
+            Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = row.symbol,
@@ -635,7 +638,7 @@ private fun BrowseRowCard(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         if (row.top) {
-                            PillTag(text = "Top 2 weeks", color = AurumColors.gold)
+                            PillTag(text = "Top 2 weeks", color = AurumColors.accent)
                         }
                         if (row.breakout != null) {
                             PillTag(text = "Next week", color = AurumColors.gain)
@@ -643,7 +646,7 @@ private fun BrowseRowCard(
                         row.heldPct?.let { held ->
                             PillTag(
                                 text = String.format(Locale.US, "Held · %.0f%%", held),
-                                color = AurumColors.gold
+                                color = AurumColors.accent
                             )
                         }
                     }
@@ -742,7 +745,7 @@ private fun BrowseRowCard(
                 Icon(
                     imageVector = Icons.Rounded.QueryStats,
                     contentDescription = "Analyze ${row.symbol}",
-                    tint = AurumColors.gold,
+                    tint = AurumColors.accent,
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -778,7 +781,7 @@ private fun SuggestionRow(symbol: String, name: String, onAdd: () -> Unit) {
         Icon(
             imageVector = Icons.Rounded.Add,
             contentDescription = "Add $symbol to watchlist",
-            tint = AurumColors.gold
+            tint = AurumColors.accent
         )
     }
 }
@@ -806,7 +809,9 @@ private fun WatchRowCard(
                     tint = if (row.pinned) AurumColors.gold else AurumColors.textDim
                 )
             }
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            CompanyLogo(symbol = row.symbol, size = 40.dp)
+            Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = row.symbol,
@@ -878,7 +883,7 @@ private fun WatchRowCard(
                         Text(
                             text = "Entry ≈ " + Fmt.money(entry),
                             style = MaterialTheme.typography.labelMedium,
-                            color = AurumColors.gold,
+                            color = AurumColors.accent,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -902,7 +907,7 @@ private fun WatchRowCard(
                     Icon(
                         imageVector = Icons.Rounded.QueryStats,
                         contentDescription = "Analyze ${row.symbol}",
-                        tint = AurumColors.gold,
+                        tint = AurumColors.accent,
                         modifier = Modifier.size(18.dp)
                     )
                 }
@@ -926,10 +931,10 @@ private fun stocksFieldColors(): TextFieldColors = OutlinedTextFieldDefaults.col
     unfocusedTextColor = AurumColors.text,
     focusedContainerColor = AurumColors.surface,
     unfocusedContainerColor = AurumColors.surface,
-    cursorColor = AurumColors.gold,
-    focusedBorderColor = AurumColors.gold,
+    cursorColor = AurumColors.accent,
+    focusedBorderColor = AurumColors.accent,
     unfocusedBorderColor = AurumColors.hairline,
-    focusedLabelColor = AurumColors.gold,
+    focusedLabelColor = AurumColors.accent,
     unfocusedLabelColor = AurumColors.textDim,
     focusedPlaceholderColor = AurumColors.textDim,
     unfocusedPlaceholderColor = AurumColors.textDim
@@ -989,7 +994,7 @@ private fun StudyMode(
                         Text(
                             text = symbol,
                             style = MaterialTheme.typography.titleSmall,
-                            color = AurumColors.gold
+                            color = AurumColors.accent
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
@@ -1009,7 +1014,7 @@ private fun StudyMode(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(18.dp),
-                            color = AurumColors.gold,
+                            color = AurumColors.accent,
                             strokeWidth = 2.dp
                         )
                         Spacer(modifier = Modifier.width(12.dp))
@@ -1083,14 +1088,14 @@ private fun StudyMode(
                             Icon(
                                 imageVector = Icons.Rounded.QueryStats,
                                 contentDescription = null,
-                                tint = AurumColors.gold,
+                                tint = AurumColors.accent,
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "Full 35-technique analysis of ${s.symbol}",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = AurumColors.gold
+                                color = AurumColors.accent
                             )
                         }
                     }
@@ -1148,7 +1153,7 @@ private fun StudyHeaderCard(s: StockStudy, onOpen: () -> Unit) {
                     color = when {
                         s.grade == null -> AurumColors.textDim
                         s.grade >= 80 -> AurumColors.gain
-                        s.grade >= 60 -> AurumColors.gold
+                        s.grade >= 60 -> AurumColors.accent
                         s.grade >= 40 -> AurumColors.textDim
                         else -> AurumColors.loss
                     }
@@ -1192,11 +1197,11 @@ private fun StudyProjectionCard(projections: List<PriceProjection>, price: Doubl
                     text = proj.label,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (selected) AurumColors.gold else AurumColors.textDim,
+                    color = if (selected) AurumColors.accent else AurumColors.textDim,
                     modifier = Modifier
                         .clip(RoundedCornerShape(50))
                         .background(
-                            if (selected) AurumColors.goldSoft else AurumColors.surfaceHigh
+                            if (selected) AurumColors.accentSoft else AurumColors.surfaceHigh
                         )
                         .clickable { selLabel = proj.label }
                         .padding(horizontal = 12.dp, vertical = 6.dp)
@@ -1268,7 +1273,7 @@ private fun StudyProjectionCard(projections: List<PriceProjection>, price: Doubl
                 Text(
                     text = proj.label,
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (proj.label == p.label) AurumColors.gold else AurumColors.textDim,
+                    color = if (proj.label == p.label) AurumColors.accent else AurumColors.textDim,
                     modifier = Modifier.widthIn(min = 64.dp)
                 )
                 Text(
@@ -1315,7 +1320,7 @@ private fun StudyHeldCard(h: HeldPosition, projections: List<PriceProjection>, s
                 label = "Value now",
                 value = Fmt.money(h.marketValue),
                 modifier = Modifier.weight(1f),
-                valueColor = AurumColors.gold
+                valueColor = AurumColors.accent
             )
             StatTile(
                 label = "Open P/L",
@@ -1391,7 +1396,7 @@ private fun ProjectionRangeBar(p: PriceProjection, price: Double) {
         )
         // The middle half.
         drawLine(
-            color = AurumColors.goldSoft,
+            color = AurumColors.accentSoft,
             start = Offset(x(p.q1Price), midY),
             end = Offset(x(p.q3Price), midY),
             strokeWidth = 12.dp.toPx(),
@@ -1399,7 +1404,7 @@ private fun ProjectionRangeBar(p: PriceProjection, price: Double) {
         )
         // The median tick.
         drawLine(
-            color = AurumColors.gold,
+            color = AurumColors.accent,
             start = Offset(x(p.medianPrice), midY - 10.dp.toPx()),
             end = Offset(x(p.medianPrice), midY + 10.dp.toPx()),
             strokeWidth = 2.5.dp.toPx(),
@@ -1446,7 +1451,7 @@ private fun StudyFactorRow(f: StudyFactor) {
                 color = when {
                     f.score == null -> AurumColors.textDim
                     f.score * 2 >= f.maxScore -> AurumColors.gain
-                    f.score * 4 >= f.maxScore -> AurumColors.gold
+                    f.score * 4 >= f.maxScore -> AurumColors.accent
                     else -> AurumColors.loss
                 }
             )

@@ -56,7 +56,11 @@ import com.aurum.invest.ui.components.SectionHeader
 import com.aurum.invest.ui.theme.AurumColors
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onOpenFeed: () -> Unit = {}) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    onOpenFeed: () -> Unit = {},
+    onOpenGoldPrices: () -> Unit = {}
+) {
     val vm: SettingsViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -103,6 +107,35 @@ fun SettingsScreen(onBack: () -> Unit, onOpenFeed: () -> Unit = {}) {
                         style = MaterialTheme.typography.headlineMedium,
                         color = AurumColors.text
                     )
+                }
+            }
+
+            item(key = "gold") {
+                Spacer(Modifier.height(20.dp))
+                SectionHeader(title = "Gold")
+                Spacer(Modifier.height(14.dp))
+                AurumCard(modifier = Modifier.fillMaxWidth(), onClick = onOpenGoldPrices) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Jordan prices and your shop’s quote",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = AurumColors.text
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "The Jewellers’ Syndicate list, re-read every 30 minutes. " +
+                                    "Gold counts toward net worth in dollars at the 0.709 peg.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AurumColors.textDim
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = AurumColors.textDim
+                        )
+                    }
                 }
             }
 
@@ -176,7 +209,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenFeed: () -> Unit = {}) {
                                 onClick = { BankNotificationListener.openSettings(context) },
                                 shape = RoundedCornerShape(12.dp),
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = AurumColors.gold,
+                                    containerColor = AurumColors.accent,
                                     contentColor = AurumColors.bg
                                 )
                             ) {
@@ -236,7 +269,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenFeed: () -> Unit = {}) {
                             onCheckedChange = { vm.setAutoImport(it) },
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = AurumColors.bg,
-                                checkedTrackColor = AurumColors.gold,
+                                checkedTrackColor = AurumColors.accent,
                                 uncheckedThumbColor = AurumColors.textDim,
                                 uncheckedTrackColor = AurumColors.surfaceHigh,
                                 uncheckedBorderColor = AurumColors.hairline
@@ -283,10 +316,10 @@ fun SettingsScreen(onBack: () -> Unit, onOpenFeed: () -> Unit = {}) {
 private fun settingsFieldColors(): TextFieldColors = OutlinedTextFieldDefaults.colors(
     focusedTextColor = AurumColors.text,
     unfocusedTextColor = AurumColors.text,
-    focusedBorderColor = AurumColors.gold,
+    focusedBorderColor = AurumColors.accent,
     unfocusedBorderColor = AurumColors.hairline,
-    cursorColor = AurumColors.gold,
-    focusedLabelColor = AurumColors.gold,
+    cursorColor = AurumColors.accent,
+    focusedLabelColor = AurumColors.accent,
     unfocusedLabelColor = AurumColors.textDim,
     focusedSupportingTextColor = AurumColors.textDim,
     unfocusedSupportingTextColor = AurumColors.textDim,
