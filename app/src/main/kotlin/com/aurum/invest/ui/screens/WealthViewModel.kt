@@ -6,7 +6,6 @@ import androidx.lifecycle.viewModelScope
 import com.aurum.invest.AurumApp
 import com.aurum.invest.analytics.BeatSpyEngine
 import com.aurum.invest.analytics.BookContext
-import com.aurum.invest.analytics.DeploymentPlan
 import com.aurum.invest.analytics.EngineRecordReport
 import com.aurum.invest.analytics.MarketRating
 import com.aurum.invest.analytics.MustBuyCandidate
@@ -34,7 +33,8 @@ import kotlinx.coroutines.withContext
 
 /**
  * The Wealth tab's state: the wealth engine's full evaluation, the market
- * pulse, the book, the weekly sector strategy, and the liquidity deployment.
+ * pulse, the book, the weekly sector strategy, the next session, the
+ * must-buys and the race against SPY.
  * No goal inputs, no target profits — the engine reads what IS (the ledger,
  * the wallet, the market) and answers what to do.
  */
@@ -45,16 +45,11 @@ data class WealthState(
     val pulseLoading: Boolean = true,
     /** The user's book by sector — same math as the dashboard allocation. */
     val book: BookContext = BookContext.EMPTY,
-    /** Sector classification for the pulse's suggested symbols. */
-    val pulseSectors: Map<String, String> = emptyMap(),
     /** This week's sector gaps + deployment split for this book. */
     val strategy: WeeklyStrategy? = null,
     val strategyLoading: Boolean = true,
     /** The wallet's uninvested cash; null until the user states a total. */
     val liquidity: Double? = null,
-    /** The liquidity-management answer: sectors, stocks, dollars, reserve. */
-    val deployPlan: DeploymentPlan? = null,
-    val deployLoading: Boolean = true,
     /** The wealth engine's evaluation: health, holdings, risk, actions. */
     val report: WealthReport? = null,
     val reportLoading: Boolean = true,
@@ -84,7 +79,6 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<WealthState> = _state.asStateFlow()
 
     private var strategyJob: Job? = null
-    private var deployJob: Job? = null
     private var reportJob: Job? = null
     private var nextSessionJob: Job? = null
     private var performanceJob: Job? = null
@@ -101,7 +95,6 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val pulse = wealth.getMarketPulse()
             _state.update { it.copy(pulse = pulse, pulseLoading = false, loading = false) }
-            classifyPulse(pulse)
         }
         // The user's book, kept live so every read survives new trades.
         viewModelScope.launch {
@@ -118,7 +111,6 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 refreshStrategy()
-                refreshDeployment()
                 refreshReport()
                 refreshPerformance()
             }
@@ -130,7 +122,6 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             container.wallet.total.collectLatest {
                 refreshStrategy()
-                refreshDeployment()
                 refreshReport()
             }
         }
@@ -401,34 +392,6 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** The liquidity-management answer, rebuilt from the wallet and the book. */
-    private fun refreshDeployment() {
-        deployJob?.cancel()
-        deployJob = viewModelScope.launch {
-            _state.update { it.copy(deployLoading = true) }
-            val liquidity = runCatching { container.wallet.liquidityNow() }.getOrNull()
-            val plan = wealth.getDeploymentPlan(liquidity ?: 0.0, _state.value.book)
-            _state.update {
-                it.copy(
-                    liquidity = liquidity,
-                    deployPlan = plan ?: it.deployPlan,
-                    deployLoading = false
-                )
-            }
-        }
-    }
-
-    /** Sector lookups for the pulse's suggested stocks (cached 30 days). */
-    private suspend fun classifyPulse(pulse: MarketRating?) {
-        if (pulse == null) return
-        val symbols = pulse.bestYesterday.map { it.symbol }.distinct()
-        if (symbols.isEmpty()) return
-        val sectors = container.market.getSectors(symbols)
-        if (sectors.isNotEmpty()) {
-            _state.update { it.copy(pulseSectors = it.pulseSectors + sectors) }
-        }
-    }
-
     /** Re-runs every engine from live data. */
     fun refresh() {
         if (_state.value.refreshing) return
@@ -438,9 +401,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                 _state.update { it.copy(pulseLoading = true) }
                 val pulse = wealth.recomputeMarketPulse()
                 _state.update { it.copy(pulse = pulse ?: it.pulse, pulseLoading = false) }
-                classifyPulse(pulse)
                 refreshStrategy()
-                refreshDeployment()
                 refreshReport()
                 refreshNextSession(force = true)
                 refreshPerformance(force = true)
