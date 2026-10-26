@@ -6,8 +6,10 @@ import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
+import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
@@ -43,6 +45,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -52,11 +55,15 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
@@ -73,6 +80,7 @@ import coil.size.Size
 import coil.transform.Transformation
 import com.aurum.invest.ui.theme.AurumColors
 import kotlin.math.min
+import kotlinx.coroutines.delay
 
 // ----------------------------------------------------------------- motion
 
@@ -104,6 +112,68 @@ fun Modifier.pressScale(
 
 /** The springy overshoot the Toss reveals settle with. */
 private val RevealEasing = CubicBezierEasing(0.3f, 1.3f, 0.5f, 1f)
+
+/**
+ * One screen's entrance. Blocks that compose with the screen rise in one
+ * after another; a block first scrolled into view later rises at once; and a
+ * block that has made its entrance never replays when it scrolls back. Create
+ * it where the content first appears (after a loading state), so the stagger
+ * starts when there is something to see.
+ */
+class Entrance internal constructor() {
+    internal val openedAt: Long = SystemClock.uptimeMillis()
+    internal val entered = HashSet<String>()
+}
+
+@Composable
+fun rememberEntrance(vararg keys: Any?): Entrance = remember(*keys) { Entrance() }
+
+/**
+ * Rises [distance] and fades in, [order] steps into the screen's [entrance].
+ * Read in the draw phase, so the stagger costs no recompositions.
+ */
+fun Modifier.riseIn(
+    entrance: Entrance,
+    id: String,
+    order: Int = 0,
+    distance: Dp = 18.dp
+): Modifier = composed {
+    val progress = remember(entrance, id) {
+        Animatable(if (entrance.entered.add(id)) 0f else 1f)
+    }
+    LaunchedEffect(entrance, id) {
+        if (progress.value < 1f) {
+            val since = (SystemClock.uptimeMillis() - entrance.openedAt).toInt()
+            val delayMs = (order * ENTRANCE_STAGGER_MS - since).coerceAtLeast(0)
+            progress.animateTo(1f, tween(ENTRANCE_MS, delayMillis = delayMs, easing = RevealEasing))
+        }
+    }
+    val rise = with(LocalDensity.current) { distance.toPx() }
+    graphicsLayer {
+        val p = progress.value
+        alpha = p.coerceIn(0f, 1f)
+        translationY = (1f - p) * rise
+    }
+}
+
+/** Pops in from half size with a quarter turn and a bouncy settle — for a logo or a badge. */
+fun Modifier.popIn(delayMs: Int = 0): Modifier = composed {
+    val progress = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        delay(delayMs.toLong())
+        progress.animateTo(1f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMediumLow))
+    }
+    graphicsLayer {
+        val p = progress.value
+        scaleX = 0.5f + 0.5f * p
+        scaleY = 0.5f + 0.5f * p
+        alpha = p.coerceIn(0f, 1f)
+        rotationZ = (1f - p) * -24f
+    }
+}
+
+private const val ENTRANCE_MS = 560
+private const val ENTRANCE_STAGGER_MS = 70
 
 /**
  * A screen's headline, said as a sentence, revealed word by word: each word
@@ -617,11 +687,87 @@ fun logoUrl(symbol: String): String =
     "https://financialmodelingprep.com/image-stock/${symbol.trim().uppercase()}.png"
 
 /**
+ * The Apple Stocks hand-off: when a row opens a stock, its logo flies from
+ * the row into the detail screen's header. Every on-screen [CompanyLogo]
+ * leaves its position here; opening a stock [arm]s the one for its symbol,
+ * and the detail screen [take]s it before its own header has laid out, so
+ * the flight starts exactly where the user tapped.
+ */
+object LogoFlight {
+    internal class Pad(val symbol: String) {
+        var bounds: Rect? = null
+    }
+
+    private val placed = HashMap<String, Pad>()
+    private var armed: Pair<String, Rect>? = null
+
+    internal fun place(pad: Pad, bounds: Rect) {
+        pad.bounds = bounds
+        placed[pad.symbol] = pad
+    }
+
+    /** A logo leaving the screen stops being a launch point. */
+    internal fun release(pad: Pad) {
+        if (placed[pad.symbol] === pad) placed.remove(pad.symbol)
+    }
+
+    /** Called as a stock is opened: remembers where its logo sits right now. */
+    fun arm(symbol: String) {
+        val key = symbol.trim().uppercase()
+        armed = placed[key]?.bounds?.let { key to it }
+    }
+
+    /** The launch point for [symbol], handed out once; null when it was opened from elsewhere. */
+    fun take(symbol: String): Rect? {
+        val launch = armed ?: return null
+        armed = null
+        return if (launch.first == symbol.trim().uppercase()) launch.second else null
+    }
+}
+
+/**
+ * Flies this element in from [from] (root coordinates) to wherever it lays
+ * out, as [progress] runs 0 → 1, scaling from the launch size to its own.
+ * Running [progress] back to 0 flies it home again.
+ */
+fun Modifier.flyFrom(from: Rect, progress: Animatable<Float, AnimationVector1D>): Modifier = composed {
+    val landing = remember { arrayOfNulls<Rect>(1) }
+    this
+        .onGloballyPositioned { landing[0] = it.boundsInRoot() }
+        .graphicsLayer {
+            val end = landing[0]
+            if (end == null || end.width <= 0f) {
+                // Not laid out yet: one invisible frame beats a jump.
+                alpha = 0f
+                return@graphicsLayer
+            }
+            val away = 1f - progress.value
+            transformOrigin = TransformOrigin(0f, 0f)
+            translationX = (from.left - end.left) * away
+            translationY = (from.top - end.top) * away
+            val scale = 1f + (from.width / end.width - 1f) * away
+            scaleX = scale
+            scaleY = scale
+        }
+}
+
+/**
  * The company's logo on a round badge. While it loads — or when a ticker has
- * no logo — the badge shows the first letter, so a row never jumps.
+ * no logo — the badge shows the first letter, so a row never jumps. As a
+ * [launchPad] (the default) it is where [LogoFlight] takes off from when its
+ * row opens the stock.
  */
 @Composable
-fun CompanyLogo(symbol: String, modifier: Modifier = Modifier, size: Dp = 44.dp) {
+fun CompanyLogo(
+    symbol: String,
+    modifier: Modifier = Modifier,
+    size: Dp = 44.dp,
+    launchPad: Boolean = true
+) {
+    val pad = remember(symbol) { LogoFlight.Pad(symbol.trim().uppercase()) }
+    if (launchPad) {
+        DisposableEffect(pad) { onDispose { LogoFlight.release(pad) } }
+    }
     val context = LocalContext.current
     val request = remember(symbol) {
         ImageRequest.Builder(context)
@@ -634,6 +780,10 @@ fun CompanyLogo(symbol: String, modifier: Modifier = Modifier, size: Dp = 44.dp)
     }
     Box(
         modifier = modifier
+            .then(
+                if (launchPad) Modifier.onGloballyPositioned { LogoFlight.place(pad, it.boundsInRoot()) }
+                else Modifier
+            )
             .size(size)
             .clip(CircleShape)
             .background(AurumColors.surfaceHigh),

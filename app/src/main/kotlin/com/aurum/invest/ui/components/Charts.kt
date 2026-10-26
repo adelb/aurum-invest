@@ -1,7 +1,18 @@
 package com.aurum.invest.ui.components
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -12,6 +23,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -190,174 +202,234 @@ fun ZoomablePriceChart(
         fontSize = 11.sp,
         fontWeight = FontWeight.SemiBold
     )
-    Canvas(modifier = modifier.diagramGestures(viewport)) {
-        if (closes.size < 2) return@Canvas
-        val start = viewport.start.coerceIn(0, closes.size - 2)
-        val count = viewport.count.coerceIn(2, closes.size - start)
-        val win = closes.subList(start, start + count)
-        val ts =
-            if (timestamps.size == closes.size) timestamps.subList(start, start + count)
-            else emptyList()
+    // The line draws itself in from the left the first time this series is
+    // shown (a new range re-keys the chart, so each range draws in), its head
+    // a dot running along the price. Once it lands, the last-price dot
+    // breathes on its own small layer, so the chart reads as live without
+    // redrawing its labels every frame.
+    val reveal = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        reveal.animateTo(1f, tween(REVEAL_MS, delayMillis = 120, easing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)))
+    }
+    val lastDot = remember { LastDot() }
+    val breath = rememberInfiniteTransition(label = "lastDot")
+    val halo by breath.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1800, easing = LinearEasing)),
+        label = "lastDotHalo"
+    )
+    Box(modifier = modifier) {
+        Canvas(modifier = Modifier.matchParentSize().diagramGestures(viewport)) {
+            lastDot.visible = false
+            if (closes.size < 2) return@Canvas
+            val drawn = reveal.value
+            val start = viewport.start.coerceIn(0, closes.size - 2)
+            val count = viewport.count.coerceIn(2, closes.size - start)
+            val win = closes.subList(start, start + count)
+            val ts =
+                if (timestamps.size == closes.size) timestamps.subList(start, start + count)
+                else emptyList()
 
-        val axisH = if (ts.isEmpty()) 0f else 28f
-        val chartH = size.height - axisH
-        val padY = 26f
-        val c = color ?: if (win.last() >= win.first()) AurumColors.gain else AurumColors.loss
-        val min = win.min()
-        val max = win.max()
-        val span = (max - min).takeIf { it > 1e-12 } ?: 1.0
-        val stepX = if (win.size > 1) size.width / (win.size - 1) else size.width
-        fun yOf(v: Double): Float =
-            padY + (1f - ((v - min) / span).toFloat()) * (chartH - 2 * padY)
-        val points = win.mapIndexed { i, v -> Offset(i * stepX, yOf(v)) }
+            val axisH = if (ts.isEmpty()) 0f else 28f
+            val chartH = size.height - axisH
+            val padY = 26f
+            val c = color ?: if (win.last() >= win.first()) AurumColors.gain else AurumColors.loss
+            val min = win.min()
+            val max = win.max()
+            val span = (max - min).takeIf { it > 1e-12 } ?: 1.0
+            val stepX = if (win.size > 1) size.width / (win.size - 1) else size.width
+            fun yOf(v: Double): Float =
+                padY + (1f - ((v - min) / span).toFloat()) * (chartH - 2 * padY)
+            val points = win.mapIndexed { i, v -> Offset(i * stepX, yOf(v)) }
 
-        // Price gridlines at the quartiles of the visible range.
-        for (frac in floatArrayOf(0.25f, 0.5f, 0.75f)) {
-            val y = padY + frac * (chartH - 2 * padY)
-            drawLine(
-                color = AurumColors.hairline.copy(alpha = 0.6f),
-                start = Offset(0f, y),
-                end = Offset(size.width, y),
-                strokeWidth = 1f
-            )
-        }
+            // Grid, baseline and labels fade in while the line draws.
+            val chrome = drawn.coerceIn(0f, 1f)
+            val labels = if (chrome < 1f) labelStyle.copy(color = labelStyle.color.copy(alpha = chrome)) else labelStyle
 
-        // Flat translucent fill under the line, then the line itself.
-        val linePath = buildSmoothPath(points)
-        val fillPath = Path().apply {
-            addPath(linePath)
-            lineTo(points.last().x, chartH)
-            lineTo(points.first().x, chartH)
-            close()
-        }
-        drawPath(fillPath, color = c.copy(alpha = 0.10f))
-        drawPath(linePath, color = c, style = Stroke(width = 4f, cap = StrokeCap.Round))
-
-        // Dashed baseline (previous close / avg cost) when inside the window.
-        if (baseline != null && baseline in min..max) {
-            val y = yOf(baseline)
-            drawLine(
-                color = AurumColors.textDim.copy(alpha = 0.55f),
-                start = Offset(0f, y),
-                end = Offset(size.width, y),
-                strokeWidth = 1.5f,
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f))
-            )
-        }
-
-        // Last-price dot only when the window reaches the newest bar.
-        if (start + count == closes.size) {
-            val last = points.last()
-            drawCircle(color = c.copy(alpha = 0.25f), radius = 14f, center = last)
-            drawCircle(color = c, radius = 6f, center = last)
-        }
-
-        // Visible min / max labels, right-aligned.
-        val maxText = AnnotatedString(Fmt.money(max))
-        val minText = AnnotatedString(Fmt.money(min))
-        val maxSize = textMeasurer.measure(maxText, labelStyle).size
-        drawText(
-            textMeasurer, maxText.text,
-            topLeft = Offset(size.width - maxSize.width - 4f, 2f),
-            style = labelStyle
-        )
-        val minSize = textMeasurer.measure(minText, labelStyle).size
-        drawText(
-            textMeasurer, minText.text,
-            topLeft = Offset(size.width - minSize.width - 4f, chartH - minSize.height - 2f),
-            style = labelStyle
-        )
-
-        // Date axis: first / middle / last visible bar. Intraday windows get
-        // times; multi-day windows get dates; a window that spans months or
-        // crosses a calendar year carries the YEAR — "Aug 19" on an all-history
-        // chart is a riddle, not a label. Labels that would land on each other
-        // are skipped, and repeats (three slots in the same month) collapse —
-        // a zoomed-in window shows one honest label instead of a pile-up.
-        if (ts.isNotEmpty()) {
-            val windowSpanMs = ts.last() - ts.first()
-            val intraday = windowSpanMs <= 48L * 3_600_000L
-            val monthsScale = windowSpanMs >= 300L * 86_400_000L
-            val crossesYears = !intraday &&
-                yearOf(ts.first()) != yearOf(ts.last())
-            fun axisLabel(t: Long): String = when {
-                intraday -> Fmt.timeShort(t)
-                monthsScale -> Fmt.dateWithYear(t)     // "Aug 2025"
-                crossesYears -> Fmt.dateShortYear(t)   // "Aug 19 '25"
-                else -> Fmt.dateShort(t)
-            }
-            val slots = listOf(0, win.size / 2, win.size - 1).distinct()
-            var prevRight = Float.NEGATIVE_INFINITY
-            var prevLabel: String? = null
-            for (i in slots) {
-                val labelText = axisLabel(ts[i])
-                if (labelText == prevLabel) continue
-                val text = AnnotatedString(labelText)
-                val w = textMeasurer.measure(text, labelStyle).size.width
-                val x = (i * stepX - w / 2f).coerceIn(0f, size.width - w)
-                if (x < prevRight + 16f) continue
-                drawText(
-                    textMeasurer, text.text,
-                    topLeft = Offset(x, chartH + 6f),
-                    style = labelStyle
+            // Price gridlines at the quartiles of the visible range.
+            for (frac in floatArrayOf(0.25f, 0.5f, 0.75f)) {
+                val y = padY + frac * (chartH - 2 * padY)
+                drawLine(
+                    color = AurumColors.hairline.copy(alpha = 0.6f * chrome),
+                    start = Offset(0f, y),
+                    end = Offset(size.width, y),
+                    strokeWidth = 1f
                 )
-                prevRight = x + w
-                prevLabel = labelText
+            }
+
+            // Flat translucent fill under the line, then the line itself — both
+            // cut at the reveal edge while the line is still drawing in.
+            val linePath = buildSmoothPath(points)
+            val fillPath = Path().apply {
+                addPath(linePath)
+                lineTo(points.last().x, chartH)
+                lineTo(points.first().x, chartH)
+                close()
+            }
+            val edge = size.width * drawn
+            clipRect(right = edge) {
+                drawPath(fillPath, color = c.copy(alpha = 0.10f))
+                drawPath(linePath, color = c, style = Stroke(width = 4f, cap = StrokeCap.Round))
+            }
+
+            // Dashed baseline (previous close / avg cost) when inside the window.
+            if (baseline != null && baseline in min..max) {
+                val y = yOf(baseline)
+                drawLine(
+                    color = AurumColors.textDim.copy(alpha = 0.55f * chrome),
+                    start = Offset(0f, y),
+                    end = Offset(size.width, y),
+                    strokeWidth = 1.5f,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f))
+                )
+            }
+
+            if (drawn < 1f) {
+                // The head of the line as it draws: on the price at the edge.
+                val at = (edge / stepX).coerceIn(0f, (points.size - 1).toFloat())
+                val i0 = at.toInt().coerceAtMost(points.size - 1)
+                val i1 = (i0 + 1).coerceAtMost(points.size - 1)
+                val t = at - i0
+                val head = Offset(edge, points[i0].y + (points[i1].y - points[i0].y) * t)
+                drawCircle(color = c.copy(alpha = 0.25f), radius = 14f, center = head)
+                drawCircle(color = c, radius = 6f, center = head)
+            } else if (start + count == closes.size) {
+                // Last-price dot only when the window reaches the newest bar.
+                val last = points.last()
+                drawCircle(color = c.copy(alpha = 0.25f), radius = 14f, center = last)
+                drawCircle(color = c, radius = 6f, center = last)
+                lastDot.center = last
+                lastDot.color = c
+                lastDot.visible = viewport.scrubFrac == null
+            }
+
+            // Visible min / max labels, right-aligned.
+            val maxText = AnnotatedString(Fmt.money(max))
+            val minText = AnnotatedString(Fmt.money(min))
+            val maxSize = textMeasurer.measure(maxText, labels).size
+            drawText(
+                textMeasurer, maxText.text,
+                topLeft = Offset(size.width - maxSize.width - 4f, 2f),
+                style = labels
+            )
+            val minSize = textMeasurer.measure(minText, labels).size
+            drawText(
+                textMeasurer, minText.text,
+                topLeft = Offset(size.width - minSize.width - 4f, chartH - minSize.height - 2f),
+                style = labels
+            )
+
+            // Date axis: first / middle / last visible bar. Intraday windows get
+            // times; multi-day windows get dates; a window that spans months or
+            // crosses a calendar year carries the YEAR — "Aug 19" on an all-history
+            // chart is a riddle, not a label. Labels that would land on each other
+            // are skipped, and repeats (three slots in the same month) collapse —
+            // a zoomed-in window shows one honest label instead of a pile-up.
+            if (ts.isNotEmpty()) {
+                val windowSpanMs = ts.last() - ts.first()
+                val intraday = windowSpanMs <= 48L * 3_600_000L
+                val monthsScale = windowSpanMs >= 300L * 86_400_000L
+                val crossesYears = !intraday &&
+                    yearOf(ts.first()) != yearOf(ts.last())
+                fun axisLabel(t: Long): String = when {
+                    intraday -> Fmt.timeShort(t)
+                    monthsScale -> Fmt.dateWithYear(t)     // "Aug 2025"
+                    crossesYears -> Fmt.dateShortYear(t)   // "Aug 19 '25"
+                    else -> Fmt.dateShort(t)
+                }
+                val slots = listOf(0, win.size / 2, win.size - 1).distinct()
+                var prevRight = Float.NEGATIVE_INFINITY
+                var prevLabel: String? = null
+                for (i in slots) {
+                    val labelText = axisLabel(ts[i])
+                    if (labelText == prevLabel) continue
+                    val text = AnnotatedString(labelText)
+                    val w = textMeasurer.measure(text, labels).size.width
+                    val x = (i * stepX - w / 2f).coerceIn(0f, size.width - w)
+                    if (x < prevRight + 16f) continue
+                    drawText(
+                        textMeasurer, text.text,
+                        topLeft = Offset(x, chartH + 6f),
+                        style = labels
+                    )
+                    prevRight = x + w
+                    prevLabel = labelText
+                }
+            }
+
+            // Crosshair: vertical hairline + marker + price/time bubble.
+            viewport.scrubFrac?.let { frac ->
+                val i = (frac * (win.size - 1)).roundToInt().coerceIn(0, win.size - 1)
+                val p = points[i]
+                drawLine(
+                    color = AurumColors.textDim.copy(alpha = 0.7f),
+                    start = Offset(p.x, 0f),
+                    end = Offset(p.x, chartH),
+                    strokeWidth = 1.5f
+                )
+                drawCircle(color = AurumColors.bg, radius = 8f, center = p)
+                drawCircle(color = c, radius = 5f, center = p)
+
+                val whenText =
+                    if (i < ts.size) {
+                        // Sub-daily bars deserve a time, daily bars a date — and a
+                        // window spanning years names the year, or the crosshair
+                        // answers "which August?" with a shrug.
+                        val barSpan = (ts.last() - ts.first()) / (ts.size - 1).coerceAtLeast(1)
+                        val subDaily = barSpan < 20L * 3_600_000L
+                        val longWindow = ts.last() - ts.first() >= 300L * 86_400_000L ||
+                            yearOf(ts.first()) != yearOf(ts.last())
+                        "  ·  " + when {
+                            subDaily -> Fmt.dateTime(ts[i])
+                            longWindow -> Fmt.dateFull(ts[i])
+                            else -> Fmt.dateShort(ts[i])
+                        }
+                    } else ""
+                val bubble = AnnotatedString(Fmt.money(win[i]) + whenText)
+                val bSize = textMeasurer.measure(bubble, bubbleStyle).size
+                val bx = (p.x - bSize.width / 2f).coerceIn(4f, size.width - bSize.width - 4f)
+                drawRoundRect(
+                    color = AurumColors.surfaceHigh,
+                    topLeft = Offset(bx - 8f, 0f),
+                    size = Size(bSize.width + 16f, bSize.height + 10f),
+                    cornerRadius = CornerRadius(8f, 8f)
+                )
+                drawRoundRect(
+                    color = AurumColors.hairline,
+                    topLeft = Offset(bx - 8f, 0f),
+                    size = Size(bSize.width + 16f, bSize.height + 10f),
+                    cornerRadius = CornerRadius(8f, 8f),
+                    style = Stroke(width = 1f)
+                )
+                drawText(
+                    textMeasurer, bubble.text,
+                    topLeft = Offset(bx, 5f),
+                    style = bubbleStyle
+                )
             }
         }
-
-        // Crosshair: vertical hairline + marker + price/time bubble.
-        viewport.scrubFrac?.let { frac ->
-            val i = (frac * (win.size - 1)).roundToInt().coerceIn(0, win.size - 1)
-            val p = points[i]
-            drawLine(
-                color = AurumColors.textDim.copy(alpha = 0.7f),
-                start = Offset(p.x, 0f),
-                end = Offset(p.x, chartH),
-                strokeWidth = 1.5f
-            )
-            drawCircle(color = AurumColors.bg, radius = 8f, center = p)
-            drawCircle(color = c, radius = 5f, center = p)
-
-            val whenText =
-                if (i < ts.size) {
-                    // Sub-daily bars deserve a time, daily bars a date — and a
-                    // window spanning years names the year, or the crosshair
-                    // answers "which August?" with a shrug.
-                    val barSpan = (ts.last() - ts.first()) / (ts.size - 1).coerceAtLeast(1)
-                    val subDaily = barSpan < 20L * 3_600_000L
-                    val longWindow = ts.last() - ts.first() >= 300L * 86_400_000L ||
-                        yearOf(ts.first()) != yearOf(ts.last())
-                    "  ·  " + when {
-                        subDaily -> Fmt.dateTime(ts[i])
-                        longWindow -> Fmt.dateFull(ts[i])
-                        else -> Fmt.dateShort(ts[i])
-                    }
-                } else ""
-            val bubble = AnnotatedString(Fmt.money(win[i]) + whenText)
-            val bSize = textMeasurer.measure(bubble, bubbleStyle).size
-            val bx = (p.x - bSize.width / 2f).coerceIn(4f, size.width - bSize.width - 4f)
-            drawRoundRect(
-                color = AurumColors.surfaceHigh,
-                topLeft = Offset(bx - 8f, 0f),
-                size = Size(bSize.width + 16f, bSize.height + 10f),
-                cornerRadius = CornerRadius(8f, 8f)
-            )
-            drawRoundRect(
-                color = AurumColors.hairline,
-                topLeft = Offset(bx - 8f, 0f),
-                size = Size(bSize.width + 16f, bSize.height + 10f),
-                cornerRadius = CornerRadius(8f, 8f),
-                style = Stroke(width = 1f)
-            )
-            drawText(
-                textMeasurer, bubble.text,
-                topLeft = Offset(bx, 5f),
-                style = bubbleStyle
+        // The breathing halo: one circle on its own layer, the only thing redrawn each frame.
+        Canvas(modifier = Modifier.matchParentSize()) {
+            if (!lastDot.visible) return@Canvas
+            val t = halo
+            drawCircle(
+                color = lastDot.color.copy(alpha = 0.35f * (1f - t)),
+                radius = 8f + 26f * t,
+                center = lastDot.center
             )
         }
     }
 }
+
+/** Where the main chart left its last-price dot, for the halo layer above it. */
+private class LastDot {
+    var center: Offset = Offset.Zero
+    var color: Color = Color.Transparent
+    var visible: Boolean = false
+}
+
+private const val REVEAL_MS = 900
 
 /** The calendar year of an epoch-millis stamp, for axis-label decisions. */
 private fun yearOf(ts: Long): Int {

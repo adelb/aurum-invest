@@ -51,6 +51,22 @@ object AurumColors {
     val lossSoft = Color(0x29FF5C6A)
 
     /**
+     * The wallet stack's two bright cards: stocks on a white card, gold on a
+     * gold one. Their ink is dark, and gain/loss on them take deeper shades
+     * that still read on a light ground.
+     */
+    val cardWhite = Color(0xFFF2F4F6)
+    val cardWhiteChip = Color(0xFFE5E8EB)
+    val inkDark = Color(0xFF17171C)
+    val inkDarkDim = Color(0xFF4E5968)
+    val gainOnLight = Color(0xFF0A7D4B)
+    val lossOnLight = Color(0xFFD22030)
+    val goldInk = Color(0xFF2B1D00)
+    val goldInkDim = Color(0xFF6B4E00)
+    val gainOnGold = Color(0xFF0B6B3E)
+    val lossOnGold = Color(0xFFB3261E)
+
+    /**
      * Allocation series. Four calm, distinguishable tones instead of a
      * rainbow; a fifth slice and beyond falls back to the quiet greys, since
      * past four the bar is read by its labels, not its colours.

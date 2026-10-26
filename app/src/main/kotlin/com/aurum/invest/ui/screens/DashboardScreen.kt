@@ -63,11 +63,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.aurum.invest.core.Dates
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.data.repo.TargetsRepository
 import com.aurum.invest.ui.components.ActionBadge
-import com.aurum.invest.ui.components.AnimatedMoney
 import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.ButtonTone
 import com.aurum.invest.ui.components.CompanyLogo
@@ -75,15 +73,12 @@ import com.aurum.invest.ui.components.EmptyState
 import com.aurum.invest.ui.components.ExtHoursChips
 import com.aurum.invest.ui.components.Hint
 import com.aurum.invest.ui.components.IconTap
-import com.aurum.invest.ui.components.Kv
-import com.aurum.invest.ui.components.KvGrid
 import com.aurum.invest.ui.components.Lead
 import com.aurum.invest.ui.components.Meter
 import com.aurum.invest.ui.components.MoreLink
 import com.aurum.invest.ui.components.SectionBand
 import com.aurum.invest.ui.components.SectionTitle
 import com.aurum.invest.ui.components.SegmentedToggle
-import com.aurum.invest.ui.components.Sentence
 import com.aurum.invest.ui.components.TossButton
 import com.aurum.invest.ui.components.TossChip
 import com.aurum.invest.ui.components.companyName
@@ -109,6 +104,11 @@ fun DashboardScreen(
     var showWalletDialog by remember { mutableStateOf(false) }
     var holdingsTab by rememberSaveable { mutableStateOf(0) }
     var allocTab by rememberSaveable { mutableStateOf(0) }
+    // Home's entrance — the figures counting in, the wallet's cards dropping
+    // and the gauge's needle swinging up — plays on the first visit only, not
+    // on every return from a stock.
+    var homeIntroDone by rememberSaveable { mutableStateOf(false) }
+    var gaugeSwung by rememberSaveable { mutableStateOf(false) }
 
     if (showWalletDialog) {
         WalletSetupDialog(
@@ -149,7 +149,14 @@ fun DashboardScreen(
                 )
             }
 
-            item { HomeHero(state = state) }
+            item {
+                NetWorthHero(
+                    state = state,
+                    rollIn = !homeIntroDone,
+                    swingIn = !gaugeSwung,
+                    onSwung = { gaugeSwung = true }
+                )
+            }
 
             item {
                 Spacer(Modifier.height(16.dp))
@@ -163,7 +170,14 @@ fun DashboardScreen(
 
             item {
                 SectionBand()
-                WalletSection(state = state, onEdit = { showWalletDialog = true })
+                WalletSection(
+                    state = state,
+                    intro = !homeIntroDone,
+                    onIntroDone = { homeIntroDone = true },
+                    onEdit = { showWalletDialog = true },
+                    onAddGold = onAddGold,
+                    onOpenGold = onOpenGold
+                )
             }
 
             if (state.holdings.isNotEmpty() || !state.goldBook.isEmpty) {
@@ -211,54 +225,6 @@ private fun HomeHeader(pendingAlerts: Int, onOpenFeed: () -> Unit, onSettings: (
     }
 }
 
-@Composable
-private fun HomeHero(state: DashboardState) {
-    val s = state.summary
-    Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
-        Sentence(
-            if (state.wallet.configured || !state.goldBook.isEmpty) "Your net worth is"
-            else "Your holdings are worth"
-        )
-        AnimatedMoney(
-            value = state.netWorth,
-            style = MaterialTheme.typography.displaySmall.copy(fontSize = 34.sp, lineHeight = 44.sp)
-        )
-        if (s != null && s.investedCost > 0.0) {
-            Spacer(Modifier.height(10.dp))
-            val sessionWord = if (Dates.usMarketOpenedToday()) "Today" else "Last session"
-            Text(
-                text = buildAnnotatedString {
-                    append(if (s.unrealizedPl >= 0) "Your stocks are up " else "Your stocks are down ")
-                    withStyle(SpanStyle(color = AurumColors.deltaColor(s.unrealizedPl), fontWeight = FontWeight.Bold)) {
-                        append(Fmt.moneyExact(kotlin.math.abs(s.unrealizedPl)))
-                        append(" (")
-                        append(Fmt.signedPct(s.unrealizedPl / s.investedCost * 100.0))
-                        append(")")
-                    }
-                    append(" on what you put in. $sessionWord they moved ")
-                    withStyle(SpanStyle(color = AurumColors.deltaColor(s.dayPl), fontWeight = FontWeight.Bold)) {
-                        append(Fmt.signedMoneyExact(s.dayPl))
-                    }
-                    append(".")
-                    val gold = state.goldBook
-                    if (gold.lots.isNotEmpty()) {
-                        append(" Your gold is ")
-                        withStyle(SpanStyle(color = AurumColors.deltaColor(gold.pl), fontWeight = FontWeight.Bold)) {
-                            append(Fmt.signedPct(gold.plPct))
-                        }
-                        append(".")
-                    }
-                },
-                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 22.sp),
-                color = AurumColors.textDim
-            )
-        } else if (state.loading && s == null) {
-            Spacer(Modifier.height(10.dp))
-            Lead("Pricing your book…")
-        }
-    }
-}
-
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ShortcutChips(
@@ -279,51 +245,28 @@ private fun ShortcutChips(
 }
 
 @Composable
-private fun WalletSection(state: DashboardState, onEdit: () -> Unit) {
-    val w = state.wallet
+private fun WalletSection(
+    state: DashboardState,
+    intro: Boolean,
+    onIntroDone: () -> Unit,
+    onEdit: () -> Unit,
+    onAddGold: () -> Unit,
+    onOpenGold: () -> Unit
+) {
     SectionTitle(
         title = "Your wallet",
-        subtitle = "The cash you committed to investing",
-        trailing = { MoreLink(if (w.configured) "Edit" else "Set up", onEdit) }
+        subtitle = "Cash, stocks and gold, all you own",
+        trailing = { MoreLink(if (state.wallet.configured) "Edit" else "Set up", onEdit) }
     )
-    if (!w.configured) {
-        Spacer(Modifier.height(10.dp))
-        Lead("Tell Aurum the cash you put in for investing, and it works out what is free to invest after every buy and sell.")
-        Spacer(Modifier.height(12.dp))
-        TossButton("Set your wallet", onClick = onEdit, tone = ButtonTone.SOFT, small = true)
-        return
-    }
-    Spacer(Modifier.height(16.dp))
-    // Every figure here rolls per digit as the live prices re-price the book.
-    KvGrid(
-        listOf(
-            Kv("Wallet", live = w.total),
-            Kv("Invested", live = w.invested),
-            Kv(
-                "Liquidity",
-                live = w.liquidity,
-                note = "free to invest",
-                valueColor = if (w.shortfall) AurumColors.loss else AurumColors.text
-            ),
-            Kv("Realized", live = w.realizedPl, liveSigned = true, note = "booked by your sells",
-                valueColor = AurumColors.deltaColor(w.realizedPl)),
-            Kv("Total P/L", live = w.totalPl, liveSigned = true, valueColor = AurumColors.deltaColor(w.totalPl)),
-            Kv("Account value", live = w.netWorth)
-        )
+    Spacer(Modifier.height(18.dp))
+    WalletStack(
+        state = state,
+        intro = intro,
+        onIntroDone = onIntroDone,
+        onEditWallet = onEdit,
+        onAddGold = onAddGold,
+        onOpenGold = onOpenGold
     )
-    Hint(
-        "Liquidity is what’s free: your wallet, minus what’s invested, plus what your sells " +
-            "booked. A sell returns its cost and its profit here."
-    )
-    if (w.shortfall) {
-        Text(
-            text = "Your ledger has ${Fmt.moneyExact(-w.liquidity)} more deployed than the stated " +
-                "wallet covers — raise the total if you’ve added money.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = AurumColors.loss,
-            modifier = Modifier.padding(top = 8.dp)
-        )
-    }
 }
 
 private data class Slice(val label: String, val sub: String, val value: Double)

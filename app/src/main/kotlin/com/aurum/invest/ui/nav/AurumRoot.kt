@@ -77,6 +77,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.aurum.invest.AurumApp
+import com.aurum.invest.ui.components.LogoFlight
 import com.aurum.invest.ui.screens.AddTransactionScreen
 import com.aurum.invest.ui.screens.AnalysisScreen
 import com.aurum.invest.ui.screens.BankFeedScreen
@@ -154,6 +155,12 @@ fun AurumRoot() {
         )
     }
 
+    // Opening a stock arms the logo flight from wherever its logo sits now.
+    val openDetail: (String) -> Unit = { symbol ->
+        LogoFlight.arm(symbol)
+        nav.navigate(Routes.detail(symbol))
+    }
+
     val backStack by nav.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
     val onTopDest = currentRoute == null || topDests.any { it.route == currentRoute }
@@ -215,34 +222,53 @@ fun AurumRoot() {
                 navController = nav,
                 startDestination = Routes.DASHBOARD,
                 modifier = Modifier.fillMaxSize(),
+                // A stock opens the Apple Stocks way: the list steps aside and
+                // fades while the detail fades in in place — it must not slide,
+                // or the logo flying into its header would land on a moving target.
                 enterTransition = {
-                    if (isTop(initialState.destination.route) && isTop(targetState.destination.route)) {
-                        fadeIn(tween(220, delayMillis = 60))
-                    } else {
-                        slideInHorizontally(tween(340, easing = FastOutSlowInEasing)) { it / 6 } +
-                            fadeIn(tween(260))
+                    when {
+                        isTop(initialState.destination.route) && isTop(targetState.destination.route) ->
+                            fadeIn(tween(220, delayMillis = 60))
+                        targetState.destination.route == Routes.DETAIL ->
+                            fadeIn(tween(300, delayMillis = 40))
+                        else ->
+                            slideInHorizontally(tween(340, easing = FastOutSlowInEasing)) { it / 6 } +
+                                fadeIn(tween(260))
                     }
                 },
                 exitTransition = {
-                    if (isTop(initialState.destination.route) && isTop(targetState.destination.route)) {
-                        fadeOut(tween(120))
-                    } else {
-                        slideOutHorizontally(tween(340, easing = FastOutSlowInEasing)) { -it / 10 } +
-                            fadeOut(tween(220))
+                    when {
+                        isTop(initialState.destination.route) && isTop(targetState.destination.route) ->
+                            fadeOut(tween(120))
+                        targetState.destination.route == Routes.DETAIL ->
+                            slideOutHorizontally(tween(420, easing = FastOutSlowInEasing)) { -it / 14 } +
+                                fadeOut(tween(300))
+                        else ->
+                            slideOutHorizontally(tween(340, easing = FastOutSlowInEasing)) { -it / 10 } +
+                                fadeOut(tween(220))
                     }
                 },
                 popEnterTransition = {
-                    slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { -it / 10 } +
-                        fadeIn(tween(240))
+                    if (initialState.destination.route == Routes.DETAIL) {
+                        // In place, so the logo flying home lands on its row.
+                        fadeIn(tween(260))
+                    } else {
+                        slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { -it / 10 } +
+                            fadeIn(tween(240))
+                    }
                 },
                 popExitTransition = {
-                    slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { it / 6 } +
-                        fadeOut(tween(200))
+                    if (initialState.destination.route == Routes.DETAIL) {
+                        fadeOut(tween(220))
+                    } else {
+                        slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { it / 6 } +
+                            fadeOut(tween(200))
+                    }
                 }
             ) {
                 composable(Routes.DASHBOARD) {
                     DashboardScreen(
-                        onOpenDetail = { nav.navigate(Routes.detail(it)) },
+                        onOpenDetail = openDetail,
                         onAdd = { nav.navigate(Routes.add()) },
                         onAddGold = { nav.navigate(Routes.goldAdd()) },
                         onOpenGold = {
@@ -310,20 +336,20 @@ fun AurumRoot() {
                 }
                 composable(Routes.STOCKS) {
                     StocksScreen(
-                        onOpenDetail = { nav.navigate(Routes.detail(it)) },
+                        onOpenDetail = openDetail,
                         onOpenAnalysis = { nav.navigate(Routes.analysis(it)) }
                     )
                 }
                 composable(Routes.PICKS) {
                     PicksScreen(
-                        onOpenDetail = { nav.navigate(Routes.detail(it)) },
+                        onOpenDetail = openDetail,
                         onOpenAnalysis = { nav.navigate(Routes.analysis(it)) }
                     )
                 }
                 composable(Routes.WEALTH) {
                     WealthScreen(
                         onOpenAnalysis = { nav.navigate(Routes.analysis(it)) },
-                        onOpenDetail = { nav.navigate(Routes.detail(it)) }
+                        onOpenDetail = openDetail
                     )
                 }
                 composable(Routes.FEED) {

@@ -324,7 +324,15 @@ fun AnimatedMoney(
     /** Movements below this are rounding noise and must not fire the flash. */
     epsilon: Double = 0.005,
     /** How the figure is written; dollars by default, [Fmt.jod] for gold. */
-    format: ((Double) -> String)? = null
+    format: ((Double) -> String)? = null,
+    /**
+     * Roll every wheel up from 0 when the figure first appears, the way a
+     * screen opening onto a balance counts it in. Later moves roll as usual.
+     */
+    rollIn: Boolean = false,
+    /** The flash after a rise / a fall; deeper shades on a light card. */
+    riseColor: Color = AurumColors.gain,
+    fallColor: Color = AurumColors.loss
 ) {
     val text = format?.invoke(value)
         ?: if (signed) Fmt.signedMoneyExact(value) else Fmt.moneyExact(value)
@@ -344,7 +352,7 @@ fun AnimatedMoney(
     }
     val color = lerp(
         baseColor,
-        if (direction >= 0) AurumColors.gain else AurumColors.loss,
+        if (direction >= 0) riseColor else fallColor,
         flash.value
     )
 
@@ -377,7 +385,8 @@ fun AnimatedMoney(
                         delayMs = (fromRight * ROLL_STAGGER_MS)
                             .coerceAtMost(ROLL_STAGGER_CAP_MS),
                         reel = reel,
-                        color = color
+                        color = color,
+                        rollIn = rollIn
                     )
                 } else {
                     // Currency symbol, sign, separators — nothing to turn.
@@ -409,25 +418,34 @@ private fun DigitWheel(
     up: Boolean,
     delayMs: Int,
     reel: DigitReel,
-    color: Color
+    color: Color,
+    rollIn: Boolean = false
 ) {
-    val position = remember { Animatable(digit.toFloat()) }
+    val position = remember { Animatable(if (rollIn) 0f else digit.toFloat()) }
+    // The first turn of a rolled-in figure is the count-in: slower, and from 0.
+    val intro = remember { booleanArrayOf(rollIn) }
     // The turn direction that applies is the one at the moment the wheel is
     // handed a new digit, not whatever it becomes while the wheel is turning.
     val turnUp = rememberUpdatedState(up)
 
     LaunchedEffect(digit) {
+        val countIn = intro[0]
+        intro[0] = false
         val here = position.value.mod(10f)
         // Travel the way the whole figure is moving, so a rising balance turns
         // every wheel up and a falling one turns them all down — mixed
         // directions inside one number look like a glitch, not a movement.
         val distance =
-            if (turnUp.value) (digit - here).mod(10f) else -((here - digit).mod(10f))
+            if (countIn || turnUp.value) (digit - here).mod(10f) else -((here - digit).mod(10f))
         if (abs(distance) < 1e-4f) return@LaunchedEffect
         position.snapTo(here)
         position.animateTo(
             targetValue = here + distance,
-            animationSpec = tween(ROLL_MS, delayMillis = delayMs, easing = FastOutSlowInEasing)
+            animationSpec = if (countIn) {
+                tween(ROLL_IN_MS, delayMillis = ROLL_IN_DELAY_MS + delayMs * 2, easing = FastOutSlowInEasing)
+            } else {
+                tween(ROLL_MS, delayMillis = delayMs, easing = FastOutSlowInEasing)
+            }
         )
         // Back into 0..9 once at rest. Invisible — the wheel shows this digit
         // either way — and it keeps the next turn's arithmetic small.
@@ -539,7 +557,9 @@ fun LiveStatTile(
     signed: Boolean = false,
     baseColor: Color = AurumColors.text,
     labelStyle: TextStyle = MaterialTheme.typography.labelMedium,
-    valueStyle: TextStyle = MaterialTheme.typography.titleMedium
+    valueStyle: TextStyle = MaterialTheme.typography.titleMedium,
+    format: ((Double) -> String)? = null,
+    rollIn: Boolean = false
 ) {
     Column(modifier = modifier) {
         Text(
@@ -553,7 +573,9 @@ fun LiveStatTile(
             value = value,
             style = valueStyle,
             baseColor = baseColor,
-            signed = signed
+            signed = signed,
+            format = format,
+            rollIn = rollIn
         )
     }
 }
@@ -563,6 +585,10 @@ private const val FLASH_MS = 850
 
 /** How long one wheel takes to turn onto its new digit. */
 private const val ROLL_MS = 420
+
+/** The count-in of a rolled-in figure: long enough to read as a reveal, not a tick. */
+private const val ROLL_IN_MS = 820
+private const val ROLL_IN_DELAY_MS = 120
 
 /**
  * How much later each more-significant place starts turning. On a real

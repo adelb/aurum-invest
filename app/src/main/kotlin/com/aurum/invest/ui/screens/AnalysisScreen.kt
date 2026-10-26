@@ -92,6 +92,8 @@ import com.aurum.invest.ui.components.SupportResistanceDiagram
 import com.aurum.invest.ui.components.TwoLineDiagram
 import com.aurum.invest.ui.components.WilliamsRDiagram
 import com.aurum.invest.ui.components.rememberDiagramViewport
+import com.aurum.invest.ui.components.rememberEntrance
+import com.aurum.invest.ui.components.riseIn
 import com.aurum.invest.ui.theme.AurumColors
 
 /** Which of the three analysis views is showing. */
@@ -180,12 +182,15 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
                 }
             }
             else -> {
+                // The analysis assembles itself once its numbers are in.
+                val entrance = rememberEntrance(state.symbol)
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 28.dp)
                 ) {
                     item {
                         SegmentedToggle(
+                            modifier = Modifier.riseIn(entrance, "tabs", order = 0),
                             options = listOf("Techniques", "Plan", "Beat SPY"),
                             selected = when (tab) {
                                 AnalysisTab.TECHNIQUES -> 0
@@ -207,12 +212,16 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
                         beatSpyItems(state)
                     } else if (tab == AnalysisTab.TECHNIQUES) {
                         item {
-                            OutlookCard(analysis = analysis, price = state.price)
+                            Box(modifier = Modifier.riseIn(entrance, "outlook", order = 1)) {
+                                OutlookCard(analysis = analysis, price = state.price)
+                            }
                             Spacer(Modifier.height(14.dp))
-                            AccuracyCard(
-                                evaluation = state.evaluation,
-                                loading = state.evaluationLoading
-                            )
+                            Box(modifier = Modifier.riseIn(entrance, "accuracy", order = 2)) {
+                                AccuracyCard(
+                                    evaluation = state.evaluation,
+                                    loading = state.evaluationLoading
+                                )
+                            }
                             Spacer(Modifier.height(12.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
@@ -252,14 +261,16 @@ fun AnalysisScreen(symbol: String, onBack: () -> Unit) {
                             } else ordered
                         visible.forEachIndexed { index, result ->
                             item {
-                                TechniqueCard(
-                                    result = result,
-                                    analysis = analysis,
-                                    style = priceStyle,
-                                    score = state.evaluation?.scores?.firstOrNull { it.key == result.key },
-                                    rank = ranking?.get(result.key),
-                                    onTapChart = { sheetKey = result.key }
-                                )
+                                Box(modifier = Modifier.riseIn(entrance, "technique-${result.key}", order = 3 + index)) {
+                                    TechniqueCard(
+                                        result = result,
+                                        analysis = analysis,
+                                        style = priceStyle,
+                                        score = state.evaluation?.scores?.firstOrNull { it.key == result.key },
+                                        rank = ranking?.get(result.key),
+                                        onTapChart = { sheetKey = result.key }
+                                    )
+                                }
                                 if (index < visible.lastIndex) {
                                     Spacer(Modifier.height(14.dp))
                                 }
