@@ -424,7 +424,13 @@ class YahooClient {
      * read from the search API's exact-symbol match — the one cookie-free
      * endpoint that carries it. Null when Yahoo doesn't classify the name.
      */
-    suspend fun fetchSector(symbol: String): String? = withContext(Dispatchers.IO) {
+    suspend fun fetchSector(symbol: String): String? = fetchProfile(symbol)?.first?.ifBlank { null }
+
+    /**
+     * v1 search API — the symbol's (sector, industry), either blank when Yahoo
+     * has none; null when the lookup itself failed.
+     */
+    suspend fun fetchProfile(symbol: String): Pair<String, String>? = withContext(Dispatchers.IO) {
         try {
             val url = "https://query1.finance.yahoo.com/v1/finance/search".toHttpUrl()
                 .newBuilder()
@@ -439,7 +445,8 @@ class YahooClient {
                 val q = quotes.optJSONObject(i) ?: continue
                 if (!q.optString("symbol").equals(symbol, ignoreCase = true)) continue
                 val sector = q.optString("sector", "").ifBlank { q.optString("sectorDisp", "") }
-                return@withContext sector.ifBlank { null }
+                val industry = q.optString("industry", "").ifBlank { q.optString("industryDisp", "") }
+                return@withContext sector to industry
             }
             null
         } catch (_: Exception) {

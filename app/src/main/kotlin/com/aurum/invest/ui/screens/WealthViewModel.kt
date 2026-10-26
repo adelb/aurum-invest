@@ -91,13 +91,29 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
         const val DAY_MS = 86_400_000L
     }
 
-    init {
-        viewModelScope.launch {
+    /**
+     * Where every engine here runs. The repositories parse JSON and crunch
+     * candles on the caller's dispatcher, so none of it may touch the main
+     * thread — that was the Wealth tab's first-open lag.
+     */
+    private val work = Dispatchers.Default
+
+    private var started = false
+
+    /**
+     * Starts every engine once. The app calls it a few seconds after launch so
+     * the tab is ready before it is opened; opening the tab calls it too, in
+     * case that comes first. Later calls do nothing.
+     */
+    fun start() {
+        if (started) return
+        started = true
+        viewModelScope.launch(work) {
             val pulse = wealth.getMarketPulse()
             _state.update { it.copy(pulse = pulse, pulseLoading = false, loading = false) }
         }
         // The user's book, kept live so every read survives new trades.
-        viewModelScope.launch {
+        viewModelScope.launch(work) {
             container.portfolio.observePositions().collectLatest { positions ->
                 val open = positions.filter { PortfolioRepository.isOpen(it) }
                 if (open.isEmpty()) {
@@ -106,8 +122,10 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
                     val quotes = container.market.getQuotes(open.map { it.symbol })
                     val views = open.map { PortfolioRepository.toView(it, quotes[it.symbol]) }
                     val sectors = container.market.getSectors(open.map { it.symbol })
+                    // Industries let the sector gaps tell semis from software inside Tech.
+                    val industries = container.market.getIndustries(open.map { it.symbol })
                     _state.update {
-                        it.copy(book = PortfolioLens.build(views, sectors), loading = false)
+                        it.copy(book = PortfolioLens.build(views, sectors, industries), loading = false)
                     }
                 }
                 refreshStrategy()
@@ -119,7 +137,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
         refreshRecord()
         refreshMustBuy()
         // A wallet change (top-up, first setup) re-sizes everything at once.
-        viewModelScope.launch {
+        viewModelScope.launch(work) {
             container.wallet.total.collectLatest {
                 refreshStrategy()
                 refreshReport()
@@ -130,7 +148,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
     /** The next-session scan — cache-served between the 20-minute recomputes. */
     private fun refreshNextSession(force: Boolean = false) {
         nextSessionJob?.cancel()
-        nextSessionJob = viewModelScope.launch {
+        nextSessionJob = viewModelScope.launch(work) {
             _state.update { it.copy(nextSessionLoading = true) }
             val ns =
                 if (force) wealth.recomputeNextSession(container.portfolio)
@@ -147,7 +165,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun refreshPerformance(force: Boolean = false) {
         performanceJob?.cancel()
-        performanceJob = viewModelScope.launch {
+        performanceJob = viewModelScope.launch(work) {
             _state.update { it.copy(performanceLoading = true) }
             val perf =
                 if (force) wealth.recomputePerformance(container.portfolio)
@@ -161,7 +179,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
     /** Scores every call whose sessions have played out, then grades the record. */
     private fun refreshRecord() {
         recordJob?.cancel()
-        recordJob = viewModelScope.launch {
+        recordJob = viewModelScope.launch(work) {
             runCatching { container.record.scorePending() }
             val record = runCatching { container.record.getRecord() }.getOrNull()
             if (record != null) _state.update { it.copy(record = record) }
@@ -178,7 +196,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun refreshMustBuy(quoteMaxAgeMs: Long = 300_000L) {
         mustBuyJob?.cancel()
-        mustBuyJob = viewModelScope.launch {
+        mustBuyJob = viewModelScope.launch(work) {
             _state.update {
                 it.copy(mustBuyLoading = true, mustBuyScanned = 0, mustBuyTotal = 0)
             }
@@ -368,7 +386,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
     /** The wealth engine's full evaluation — health, holdings, risk, actions. */
     private fun refreshReport() {
         reportJob?.cancel()
-        reportJob = viewModelScope.launch {
+        reportJob = viewModelScope.launch(work) {
             _state.update { it.copy(reportLoading = true) }
             val report = wealth.getWealthReport(container.wallet, container.portfolio)
             _state.update { it.copy(report = report ?: it.report, reportLoading = false) }
@@ -378,7 +396,7 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
     /** The week's sector split, sized from the wallet's real uninvested cash. */
     private fun refreshStrategy() {
         strategyJob?.cancel()
-        strategyJob = viewModelScope.launch {
+        strategyJob = viewModelScope.launch(work) {
             _state.update { it.copy(strategyLoading = true) }
             val liquidity = runCatching { container.wallet.liquidityNow() }.getOrNull()
             val strategy = wealth.getStrategy(_state.value.book, liquidity ?: 0.0)
@@ -394,9 +412,13 @@ class WealthViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Re-runs every engine from live data. */
     fun refresh() {
+        if (!started) {
+            start()
+            return
+        }
         if (_state.value.refreshing) return
         _state.update { it.copy(refreshing = true) }
-        viewModelScope.launch {
+        viewModelScope.launch(work) {
             try {
                 _state.update { it.copy(pulseLoading = true) }
                 val pulse = wealth.recomputeMarketPulse()

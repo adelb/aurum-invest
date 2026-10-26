@@ -13,6 +13,15 @@ data class SectorSlice(
 
 enum class NoteKind { HELD, CONCENTRATION, DIVERSIFIES }
 
+/** How much of the book sits in one trend theme, and which holdings carry it. */
+data class ThemeCoverage(
+    val pct: Double,
+    /** Held symbols counted toward the theme, largest first. */
+    val holders: List<String>,
+    /** Only exact watch-list membership could be counted (no sector or industry read). */
+    val membershipOnly: Boolean
+)
+
 /** A terse, number-backed portfolio note attached to a suggested stock. */
 data class PickNote(val text: String, val kind: NoteKind)
 
@@ -24,7 +33,8 @@ data class PickNote(val text: String, val kind: NoteKind)
 data class BookContext(
     val totalValue: Double,
     val heldWeights: Map<String, Double>,   // symbol -> % of book
-    val slices: List<SectorSlice>           // by value, descending
+    val slices: List<SectorSlice>,          // by value, descending
+    val industries: Map<String, String> = emptyMap()   // symbol -> Yahoo industry, where known
 ) {
     val isEmpty: Boolean get() = totalValue <= 0.0 || heldWeights.isEmpty()
 
@@ -44,47 +54,89 @@ object PortfolioLens {
     const val UNCLASSIFIED = "Unclassified"
 
     /**
-     * SectorTrends themes -> Yahoo sector names, ONLY where the mapping is
-     * unambiguous. Cross-sector themes (AI, quantum, nuclear, solar) are
-     * deliberately unmapped — claiming alignment there would be a guess.
+     * Themes that are a whole Yahoo sector: every holding in the sector counts.
      */
-    private val THEME_SECTORS: Map<String, Set<String>> = mapOf(
-        "semis" to setOf("Technology"),
-        "software" to setOf("Technology"),
+    private val SECTOR_THEMES: Map<String, Set<String>> = mapOf(
         "oil" to setOf("Energy"),
         "materials" to setOf("Basic Materials"),
-        "goldminers" to setOf("Basic Materials"),
         "banks" to setOf("Financial Services"),
         "health" to setOf("Healthcare"),
-        "biotech" to setOf("Healthcare"),
-        "defense" to setOf("Industrials"),
         "industrials" to setOf("Industrials"),
         "consumer" to setOf("Consumer Cyclical", "Consumer Defensive"),
         "utilities" to setOf("Utilities"),
         "media" to setOf("Communication Services"),
-        "autos" to setOf("Consumer Cyclical"),
-        "cyber" to setOf("Technology"),
         "reits" to setOf("Real Estate"),
-        "transport" to setOf("Industrials"),
         "staples" to setOf("Consumer Defensive")
-        // drones / crypto / space stay unmapped on purpose: cross-sector
-        // themes can only claim coverage from exact holdings membership.
     )
 
     /**
-     * Share of the book sitting in [themeKey]'s sectors, or null when the
-     * theme has no unambiguous sector mapping (AI, quantum, nuclear, solar) —
-     * callers must then measure coverage some other honest way rather than
-     * treating null as zero.
+     * Themes narrower than a sector, matched on the holding's Yahoo industry
+     * (lower-case fragments). A Technology holding is semis, software or
+     * neither by its industry — never cybersecurity just for being in Tech.
      */
-    fun themeCoveragePct(themeKey: String, book: BookContext): Double? {
-        val sectors = THEME_SECTORS[themeKey] ?: return null
-        if (book.isEmpty) return 0.0
-        return book.slices.filter { it.sector in sectors }.sumOf { it.weightPct }
+    private val THEME_INDUSTRIES: Map<String, List<String>> = mapOf(
+        "semis" to listOf("semiconductor"),
+        "software" to listOf("software"),
+        "biotech" to listOf("biotechnology"),
+        "autos" to listOf("auto manufacturers", "auto parts"),
+        "defense" to listOf("aerospace & defense"),
+        "transport" to listOf("railroads", "trucking", "airlines", "freight", "marine shipping"),
+        "goldminers" to listOf("gold"),
+        "nuclear" to listOf("uranium"),
+        "solar" to listOf("solar"),
+        // Power generation that Yahoo files under Industrials: fuel cells, grid gear.
+        "utilities" to listOf("electrical equipment", "solar", "uranium")
+    )
+
+    /** Themes whose watch-list members also count toward a broader theme. */
+    private val THEME_ALSO: Map<String, List<String>> = mapOf(
+        "utilities" to listOf("nuclear", "solar")
+    )
+
+    /**
+     * How much of the book already sits in [themeKey], and which holdings
+     * carry it. A holding counts when it is on the theme's own watch list,
+     * sits in a whole-sector theme's sector, or its industry names the
+     * theme. Cross-sector themes (AI, quantum, cybersecurity, drones) have
+     * neither a sector nor an industry, so only list membership counts there
+     * — and [ThemeCoverage.membershipOnly] says so.
+     */
+    fun themeCoverage(themeKey: String, book: BookContext): ThemeCoverage {
+        val sectors = SECTOR_THEMES[themeKey].orEmpty()
+        val industries = THEME_INDUSTRIES[themeKey].orEmpty()
+        val membershipOnly = sectors.isEmpty() && industries.isEmpty()
+        if (book.isEmpty) return ThemeCoverage(0.0, emptyList(), membershipOnly)
+        val members = (listOf(themeKey) + THEME_ALSO[themeKey].orEmpty())
+            .flatMap { key -> SectorTrends.WATCH[key].orEmpty().map { it.first } }
+            .toSet()
+        val sectorOf = book.slices.flatMap { slice -> slice.symbols.map { it to slice.sector } }.toMap()
+        val holders = book.heldWeights.entries
+            .filter { (symbol, _) ->
+                symbol in members ||
+                    sectorOf[symbol] in sectors ||
+                    book.industries[symbol]?.lowercase(Locale.US)?.let { industry ->
+                        industries.any { it in industry }
+                    } == true
+            }
+            .sortedByDescending { it.value }
+        return ThemeCoverage(
+            pct = holders.sumOf { it.value },
+            holders = holders.map { it.key },
+            membershipOnly = membershipOnly
+        )
     }
 
-    /** Slice the open positions by sector. Positions without a live value are skipped. */
-    fun build(views: List<PositionView>, sectors: Map<String, String>): BookContext {
+    /**
+     * Slice the open positions by sector. Positions without a live value are
+     * skipped. [industries] (symbol -> Yahoo industry) lets theme coverage
+     * tell semis from software inside one sector; leave it empty where no
+     * theme is read.
+     */
+    fun build(
+        views: List<PositionView>,
+        sectors: Map<String, String>,
+        industries: Map<String, String> = emptyMap()
+    ): BookContext {
         val open = views.filter { it.marketValue > 0.0 }
         val total = open.sumOf { it.marketValue }
         if (total <= 0.0) return BookContext.EMPTY
@@ -104,7 +156,7 @@ object PortfolioLens {
                 )
             }
             .sortedByDescending { it.value }
-        return BookContext(total, weights, slices)
+        return BookContext(total, weights, slices, industries.filterKeys { it in weights })
     }
 
     /**
@@ -136,9 +188,9 @@ object PortfolioLens {
             }
         }
 
-        val trendSectors = trendingKey?.let { THEME_SECTORS[it] }
-        if (trendSectors != null && !trendingLabel.isNullOrBlank()) {
-            val pct = book.slices.filter { it.sector in trendSectors }.sumOf { it.weightPct }
+        val trend = trendingKey?.let { themeCoverage(it, book) }?.takeIf { !it.membershipOnly }
+        if (trend != null && !trendingLabel.isNullOrBlank()) {
+            val pct = trend.pct
             out += if (pct >= 1.0) {
                 String.format(
                     Locale.US,

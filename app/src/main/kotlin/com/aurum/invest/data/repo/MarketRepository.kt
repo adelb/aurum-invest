@@ -350,6 +350,39 @@ class MarketRepository(
     }
 
     /**
+     * The symbol's Yahoo industry ("Semiconductors", "Auto Manufacturers") —
+     * finer than its sector, and cached 30 days the same way. The lookup that
+     * finds it also refreshes the sector. Null when Yahoo has none.
+     */
+    suspend fun getIndustry(symbol: String, maxAgeMs: Long = 30L * 24 * 3_600_000L): String? {
+        val key = "industry:$symbol"
+        val cached = readCache(key)
+        if (cached != null && System.currentTimeMillis() - cached.updatedAt <= maxAgeMs && cached.json.isNotBlank()) {
+            return cached.json
+        }
+        val fresh = yahoo.fetchProfile(symbol)
+        if (fresh != null) {
+            if (fresh.first.isNotBlank()) writeCache("sector:$symbol", fresh.first)
+            if (fresh.second.isNotBlank()) {
+                writeCache(key, fresh.second)
+                return fresh.second
+            }
+        }
+        return cached?.json?.takeIf { it.isNotBlank() }
+    }
+
+    suspend fun getIndustries(symbols: List<String>): Map<String, String> {
+        if (symbols.isEmpty()) return emptyMap()
+        return coroutineScope {
+            symbols.distinct()
+                .map { s -> async { s to getIndustry(s) } }
+                .awaitAll()
+                .mapNotNull { (s, industry) -> industry?.let { s to it } }
+                .toMap()
+        }
+    }
+
+    /**
      * Next earnings dates for many symbols, cached 12 hours per symbol. A
      * cached entry with no date means "checked, none known" (ETFs, funds) and
      * is served without a refetch; a symbol whose lookup failed is absent and

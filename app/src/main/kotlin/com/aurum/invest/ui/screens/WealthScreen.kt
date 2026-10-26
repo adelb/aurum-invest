@@ -18,6 +18,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -27,7 +28,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.Hint
 import com.aurum.invest.ui.theme.AurumColors
@@ -36,10 +36,17 @@ import com.aurum.invest.ui.theme.AurumColors
  * The Wealth tab: the portfolio's management desk, as one wallet of passes
  * ([WealthWallet]) — the score, what to do next, the sector gaps, the next
  * session, the must-buys, the market and the race against SPY.
+ *
+ * [vm] lives for the whole app, so the engines warm up before the tab is
+ * first opened and their results survive leaving it.
  */
 @Composable
-fun WealthScreen(onOpenAnalysis: (String) -> Unit, onOpenDetail: (String) -> Unit) {
-    val vm: WealthViewModel = viewModel()
+fun WealthScreen(
+    vm: WealthViewModel,
+    onOpenAnalysis: (String) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
+    LaunchedEffect(vm) { vm.start() }
     val state by vm.state.collectAsStateWithLifecycle()
     // The passes drop in once; coming back from a stock does not replay it.
     var introDone by rememberSaveable { mutableStateOf(false) }

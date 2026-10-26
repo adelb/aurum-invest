@@ -1,5 +1,6 @@
 package com.aurum.invest.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -8,6 +9,10 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -16,6 +21,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -31,6 +37,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ContentCut
@@ -54,7 +61,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -72,6 +78,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -87,12 +94,15 @@ import com.aurum.invest.analytics.ActionKind
 import com.aurum.invest.analytics.CheckState
 import com.aurum.invest.analytics.CurvePoint
 import com.aurum.invest.analytics.GapStatus
+import com.aurum.invest.analytics.HoldingEvaluation
+import com.aurum.invest.analytics.HoldingMove
 import com.aurum.invest.analytics.ManagementAction
 import com.aurum.invest.analytics.MarketCall
 import com.aurum.invest.analytics.MustBuyEngine
 import com.aurum.invest.analytics.MustBuyRow
 import com.aurum.invest.analytics.NextSessionPick
 import com.aurum.invest.analytics.PerformanceReport
+import com.aurum.invest.analytics.SectorGap
 import com.aurum.invest.core.Fmt
 import com.aurum.invest.ui.components.AnimatedMoney
 import com.aurum.invest.ui.components.CompanyLogo
@@ -157,7 +167,8 @@ private data class PassField(val label: String, val value: String, val color: Co
 
 private data class BackRow(val label: String, val value: String? = null, val line: String? = null, val color: Color? = null)
 
-private data class MoneySlice(val label: String, val amount: Double, val sharePct: Double, val color: Color)
+/** One slice of a split bar: its label, what it reads on the right, its share. */
+private data class SplitSlice(val label: String, val right: String, val sharePct: Double, val color: Color)
 
 private val PassShape = RoundedCornerShape(22.dp)
 private val HEADER_H = 54.dp
@@ -171,10 +182,12 @@ private val DropEasing = CubicBezierEasing(0.3f, 1.3f, 0.5f, 1f)
  * seven passes that manage the portfolio — the score, what to do next, the
  * sector gaps, the next session, the must-buys, the market and the race
  * against SPY. Each pass peeks out from under the next; tapping one brings it
- * to the front, and ⓘ turns the front pass over for the reasons behind it.
+ * to the front, where every row's ⓘ opens its full detail and the pass's own
+ * ⓘ turns it over for the reasons behind it.
  *
- * On the first visit ([intro]) the passes drop in one after another and the
- * figures count in; afterwards the wallet simply sits there.
+ * Only the front pass composes its face; the passes behind are just their
+ * label strips, so the wallet opens fast. On the first visit ([intro]) the
+ * passes drop in one after another and the figures count in.
  */
 @Composable
 fun WealthWallet(
@@ -206,11 +219,11 @@ fun WealthWallet(
             val place = order.indexOf(pass)
             val live = pass == front
             val content = when (pass) {
-                WealthPass.SCORE -> scorePass(state, live, intro)
+                WealthPass.SCORE -> scorePass(state, intro)
                 WealthPass.MOVES -> movesPass(state, live, onOpenDetail)
                 WealthPass.GAPS -> gapsPass(state, live, onOpenDetail)
                 WealthPass.NEXT_SESSION -> nextSessionPass(state, live, onOpenDetail)
-                WealthPass.MUST_BUY -> mustBuyPass(state, onOpenAnalysis)
+                WealthPass.MUST_BUY -> mustBuyPass(state, live, onOpenAnalysis)
                 WealthPass.MARKET -> marketPass(state, intro)
                 WealthPass.RACE -> racePass(state, live)
             }
@@ -308,9 +321,12 @@ private fun PassFrame(
                     }
             ) {
                 PassHeader(content)
-                content.face()
-                // Room for ⓘ in the corner.
-                Spacer(Modifier.height(64.dp))
+                // Behind, a pass is only its label: the face composes once it comes forward.
+                if (front) {
+                    content.face()
+                    // Room for ⓘ in the corner.
+                    Spacer(Modifier.height(64.dp))
+                }
             }
             if (content.ticket) {
                 Box(
@@ -442,7 +458,7 @@ private fun PassHeader(content: PassContent) {
 
 // ---------------------------------------------------------------- the passes
 
-private fun scorePass(state: WealthState, live: Boolean, intro: Boolean): PassContent {
+private fun scorePass(state: WealthState, intro: Boolean): PassContent {
     val report = state.report
     val score = report?.healthScore
     val tone = when {
@@ -453,9 +469,6 @@ private fun scorePass(state: WealthState, live: Boolean, intro: Boolean): PassCo
     val perf = state.performance
     val parts = report?.disciplines.orEmpty()
     val graded = parts.filter { it.score != null }
-    val weak = graded.filter { it.score!!.toFloat() / it.maxScore < 0.6f }
-        .sortedBy { it.score!!.toFloat() / it.maxScore }
-    val strong = graded.filter { it.score!!.toFloat() / it.maxScore >= 0.6f }
     return PassContent(
         tone = tone,
         title = "Wealth score",
@@ -473,6 +486,7 @@ private fun scorePass(state: WealthState, live: Boolean, intro: Boolean): PassCo
                     PassNote("Only ${pct1(report.coveragePct)} of the book could be measured this run.", tone)
                 }
                 else -> {
+                    var open by remember { mutableStateOf<String?>(null) }
                     PassFigure(score.toDouble(), { it.roundToInt().toString() }, "/ 100", 96.sp, tone, intro)
                     Text(
                         text = report.healthBand,
@@ -481,27 +495,33 @@ private fun scorePass(state: WealthState, live: Boolean, intro: Boolean): PassCo
                         modifier = Modifier.padding(horizontal = 18.dp)
                     )
                     Spacer(Modifier.height(14.dp))
-                    PassBars(graded.map { it.score!!.toFloat() / it.maxScore }, tone, live)
+                    PassBars(graded.map { it.score!!.toFloat() / it.maxScore }, tone)
                     Spacer(Modifier.height(16.dp))
-                    PassFields(
-                        parts.map { d ->
-                            PassField(partName(d.key, d.label), d.score?.let { "$it / ${d.maxScore}" } ?: "Not graded")
-                        },
-                        tone
-                    )
+                    parts.forEach { d ->
+                        DetailRow(
+                            title = d.label,
+                            tone = tone,
+                            live = false,
+                            open = open == d.key,
+                            onToggle = { open = if (open == d.key) null else d.key },
+                            right = d.score?.let { "$it / ${d.maxScore}" } ?: "Not graded",
+                            rightSub = d.score?.let { if (it.toFloat() / d.maxScore >= 0.6f) "holds it up" else "pulls it down" }
+                        ) {
+                            DetailText(d.detail, tone)
+                            if (d.fix.isNotBlank()) DetailText(d.fix, tone, strong = true)
+                        }
+                    }
                 }
             }
         },
         back = if (score == null) null else (@Composable {
+            val got = graded.sumOf { it.score!! }
+            val max = graded.sumOf { it.maxScore }
             BackSheet(
-                title = if (weak.isEmpty()) "What holds it up" else "What pulls it down",
-                sub = when {
-                    weak.isEmpty() -> "Every graded part scores at least 60%."
-                    strong.isEmpty() -> null
-                    else -> strong.joinToString(" and ") { "${partName(it.key, it.label)} ${it.score} of ${it.maxScore}" } +
-                        " hold it up."
-                },
-                rows = (weak.ifEmpty { strong }).map { BackRow(it.label, "${it.score} of ${it.maxScore}", it.detail) },
+                title = "How the score is made",
+                sub = "$score is $got of the $max points that could be measured, scaled to 100. " +
+                    "Parts without enough data are left out, never guessed.",
+                rows = report?.notes.orEmpty().map { BackRow(label = "", line = it) },
                 tone = tone
             )
         })
@@ -511,6 +531,8 @@ private fun scorePass(state: WealthState, live: Boolean, intro: Boolean): PassCo
 private fun movesPass(state: WealthState, live: Boolean, onOpenDetail: (String) -> Unit): PassContent {
     val report = state.report
     val actions = report?.actions.orEmpty().sortedBy { it.priority }
+    val evals = report?.holdings.orEmpty().associateBy { it.symbol }
+    val steady = report?.holdings.orEmpty().filter { e -> e.move == HoldingMove.HOLD && actions.none { it.symbol == e.symbol } }
     val tone = brightPass(AurumColors.accent, darkInk = false)
     return PassContent(
         tone = tone,
@@ -525,34 +547,56 @@ private fun movesPass(state: WealthState, live: Boolean, onOpenDetail: (String) 
                     else "Record a trade and the moves to make appear here.",
                     tone
                 )
-                actions.isEmpty() -> PassMessage("Nothing to do. Every holding is on its plan.", tone)
+                actions.isEmpty() && steady.isEmpty() -> PassMessage("Nothing to do. Every holding is on its plan.", tone)
                 else -> {
-                    val first = actions.first()
-                    LeadRow(
-                        symbol = first.symbol.ifEmpty { null },
-                        icon = moveIcon(first.kind),
-                        label = "First",
-                        title = moveTitle(first),
-                        amount = first.amount?.let { Fmt.moneyExact(it) }.orEmpty(),
-                        tone = tone,
-                        live = live,
-                        onClick = first.symbol.takeIf { it.isNotEmpty() }?.let { s -> { onOpenDetail(s) } }
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    actions.drop(1).take(4).forEach { a ->
-                        PassRow(
-                            symbol = a.symbol.ifEmpty { null },
-                            icon = moveIcon(a.kind),
-                            title = moveTitle(a),
-                            right = a.amount?.let { Fmt.moneyExact(it) },
+                    var open by remember { mutableStateOf<String?>(null) }
+                    actions.firstOrNull()?.let { first ->
+                        LeadRow(
+                            symbol = first.symbol.ifEmpty { null },
+                            icon = moveIcon(first.kind),
+                            label = "First",
+                            title = moveTitle(first),
+                            amount = first.amount?.let { Fmt.moneyExact(it) }.orEmpty(),
                             tone = tone,
                             live = live,
-                            onClick = a.symbol.takeIf { it.isNotEmpty() }?.let { s -> { onOpenDetail(s) } }
-                        )
+                            open = open == "move0",
+                            onToggle = { open = if (open == "move0") null else "move0" }
+                        ) { MoveDetail(first, evals, tone, onOpenDetail) }
+                        Spacer(Modifier.height(6.dp))
                     }
-                    val rest = actions.drop(5)
-                    if (rest.isNotEmpty()) {
-                        PassNote("Then " + rest.joinToString(", ") { lowerFirst(moveTitle(it)) } + ".", tone)
+                    actions.drop(1).forEachIndexed { i, a ->
+                        val key = "move${i + 1}"
+                        DetailRow(
+                            title = moveTitle(a),
+                            tone = tone,
+                            live = live,
+                            open = open == key,
+                            onToggle = { open = if (open == key) null else key },
+                            symbol = a.symbol.ifEmpty { null },
+                            icon = moveIcon(a.kind),
+                            sub = a.symbol.takeIf { it.isNotEmpty() }?.let { s -> evals[s]?.let { holdingLine(it) } },
+                            right = a.amount?.let { Fmt.moneyExact(it) }
+                        ) { MoveDetail(a, evals, tone, onOpenDetail) }
+                    }
+                    if (steady.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        PassCaption("Holding steady", tone)
+                        steady.forEach { e ->
+                            val key = "hold${e.symbol}"
+                            DetailRow(
+                                title = "Hold ${e.symbol}",
+                                tone = tone,
+                                live = live,
+                                open = open == key,
+                                onToggle = { open = if (open == key) null else key },
+                                symbol = e.symbol,
+                                sub = holdingLine(e),
+                                right = Fmt.moneyExact(e.marketValue)
+                            ) {
+                                HoldingFacts(e, tone)
+                                DetailLink("Open ${e.symbol}", tone) { onOpenDetail(e.symbol) }
+                            }
+                        }
                     }
                 }
             }
@@ -571,10 +615,11 @@ private fun movesPass(state: WealthState, live: Boolean, onOpenDetail: (String) 
 
 private fun gapsPass(state: WealthState, live: Boolean, onOpenDetail: (String) -> Unit): PassContent {
     val strategy = state.strategy
+    val book = state.book
     val tone = WhitePass
-    val open = strategy?.gaps.orEmpty().filter { it.status == GapStatus.MISSING || it.status == GapStatus.UNDER }
-    val covered = strategy?.gaps.orEmpty().filter { it.status == GapStatus.COVERED || it.status == GapStatus.OVER }
-    val sliceColors = listOf(AurumColors.accent, AurumColors.gain, AurumColors.inkDarkDim, AurumColors.textSub)
+    val gaps = strategy?.gaps.orEmpty()
+    val open = gaps.filter { it.status == GapStatus.MISSING || it.status == GapStatus.UNDER }
+    val sliceColors = listOf(AurumColors.accent, AurumColors.gain, AurumColors.inkDarkDim, AurumColors.textSub, AurumColors.loss)
     return PassContent(
         tone = tone,
         title = "Sector gaps",
@@ -594,31 +639,57 @@ private fun gapsPass(state: WealthState, live: Boolean, onOpenDetail: (String) -
                     tone
                 )
             } else {
+                var openRow by remember { mutableStateOf<String?>(null) }
                 PassMessage(strategy.headline, tone)
-                Spacer(Modifier.height(8.dp))
-                open.take(3).forEach { gap ->
+                if (!book.isEmpty) {
+                    Spacer(Modifier.height(14.dp))
+                    SplitBar(
+                        title = "Your book today · ${Fmt.moneyExact(book.totalValue)}",
+                        slices = book.slices.mapIndexed { i, s ->
+                            SplitSlice(
+                                label = "${s.sector} · ${s.symbols.joinToString(", ")}",
+                                right = pct1(s.weightPct),
+                                sharePct = s.weightPct,
+                                color = sliceColors[i % sliceColors.size]
+                            )
+                        },
+                        tone = tone,
+                        live = live
+                    )
+                }
+                Spacer(Modifier.height(14.dp))
+                PassCaption("This week's trending themes, against your book", tone)
+                gaps.forEach { gap ->
                     val lead = gap.picks.firstOrNull()
-                    PassRow(
-                        symbol = lead?.symbol,
-                        icon = Icons.Rounded.PieChart,
+                    DetailRow(
                         title = gap.label,
-                        sub = "You hold ${pct1(gap.heldPct)} · suggested ${pct1(gap.targetPct)}",
-                        right = signed1(gap.r5Pct),
-                        rightSub = "5 days",
-                        rightColor = if (gap.r5Pct >= 0) tone.gain else tone.loss,
                         tone = tone,
                         live = live,
-                        onClick = lead?.let { p -> { onOpenDetail(p.symbol) } }
-                    )
+                        open = openRow == gap.themeKey,
+                        onToggle = { openRow = if (openRow == gap.themeKey) null else gap.themeKey },
+                        symbol = lead?.symbol,
+                        icon = Icons.Rounded.PieChart,
+                        sub = "You hold ${pct1(gap.heldPct)} · suggested ${pct1(gap.targetPct)}",
+                        right = gapWord(gap.status),
+                        rightSub = "${signed1(gap.r5Pct)} in 5 days",
+                        rightColor = when (gap.status) {
+                            GapStatus.MISSING -> tone.loss
+                            GapStatus.COVERED -> tone.gain
+                            else -> tone.ink
+                        }
+                    ) {
+                        GapFacts(gap, book.heldWeights, tone)
+                        lead?.let { DetailLink("Open ${it.symbol}", tone) { onOpenDetail(it.symbol) } }
+                    }
                 }
                 if (strategy.allocations.isNotEmpty()) {
                     Spacer(Modifier.height(14.dp))
-                    MoneySplit(
+                    SplitBar(
                         title = "This week's money · ${Fmt.moneyExact(strategy.investable)}",
                         slices = strategy.allocations.mapIndexed { i, a ->
-                            MoneySlice(
+                            SplitSlice(
                                 label = a.lead?.let { "${a.label} via ${it.symbol}" } ?: a.label,
-                                amount = a.amount,
+                                right = "${Fmt.moneyExact(a.amount)} · ${pct1(a.sharePct)}",
                                 sharePct = a.sharePct,
                                 color = sliceColors[i % sliceColors.size]
                             )
@@ -629,26 +700,12 @@ private fun gapsPass(state: WealthState, live: Boolean, onOpenDetail: (String) -
                 }
             }
         },
-        back = if (strategy == null || (strategy.allocations.isEmpty() && covered.isEmpty())) null else (@Composable {
+        back = if (strategy == null || strategy.notes.isEmpty()) null else (@Composable {
             BackSheet(
-                title = "Why these names",
-                sub = "Each gap is filled by the strongest name in its theme this week.",
-                rows = strategy.allocations.mapNotNull { a ->
-                    a.lead?.let { p ->
-                        BackRow(
-                            label = "${p.symbol} · ${a.label}",
-                            value = if (p.entry < p.price - 0.005) "wait for ${Fmt.moneyExact(p.entry)}"
-                            else Fmt.moneyExact(p.price),
-                            line = p.reason
-                        )
-                    }
-                }.take(4) + covered.take(1).map {
-                    BackRow(
-                        label = "${it.label} is covered",
-                        value = pct1(it.heldPct),
-                        line = "You hold ${pct1(it.heldPct)} against ${pct1(it.targetPct)} suggested."
-                    )
-                },
+                title = "How the gaps are read",
+                sub = "A holding counts toward a theme when it is on the theme's own list, sits in the theme's " +
+                    "sector, or its industry names the theme.",
+                rows = strategy.notes.map { BackRow(label = "", line = it) },
                 tone = tone
             )
         })
@@ -680,6 +737,9 @@ private fun nextSessionPass(state: WealthState, live: Boolean, onOpenDetail: (St
                 )
                 lead == null -> PassMessage("No name cleared the gates for the next session.", tone)
                 else -> {
+                    var open by remember { mutableStateOf<String?>(null) }
+                    PassNote("${report.headline} ${report.sessionNote}", tone, top = 0.dp)
+                    Spacer(Modifier.height(8.dp))
                     LeadRow(
                         symbol = lead.symbol,
                         icon = null,
@@ -687,10 +747,9 @@ private fun nextSessionPass(state: WealthState, live: Boolean, onOpenDetail: (St
                         title = lead.symbol,
                         amount = Fmt.moneyExact(lead.price),
                         tone = tone,
-                        live = live,
-                        onClick = { onOpenDetail(lead.symbol) }
+                        live = live
                     )
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(12.dp))
                     PassFields(
                         listOf(
                             PassField("Entry", Fmt.moneyExact(lead.entry)),
@@ -702,60 +761,39 @@ private fun nextSessionPass(state: WealthState, live: Boolean, onOpenDetail: (St
                         ),
                         tone
                     )
-                    val rest = picks.filter { it.symbol != lead.symbol }.take(3)
-                    if (rest.isNotEmpty()) {
-                        Spacer(Modifier.height(14.dp))
-                        PassCaption("Also positioned", tone)
-                        rest.forEach { p ->
-                            PassRow(
-                                symbol = p.symbol,
-                                icon = null,
-                                title = "${p.symbol} · ${p.score}",
-                                sub = followThrough(p),
-                                right = signed1(p.dayChangePct),
-                                rightSub = "last session",
-                                tone = tone,
-                                live = live,
-                                onClick = { onOpenDetail(p.symbol) }
-                            )
+                    Spacer(Modifier.height(14.dp))
+                    PassCaption("Every positioned name · ⓘ for its full read", tone)
+                    picks.forEachIndexed { i, p ->
+                        DetailRow(
+                            title = "${i + 1}. ${p.symbol} · ${p.score}",
+                            tone = tone,
+                            live = live,
+                            open = open == p.symbol,
+                            onToggle = { open = if (open == p.symbol) null else p.symbol },
+                            symbol = p.symbol,
+                            sub = if (p.alert) "Cleared every gate · ${followThrough(p)}" else followThrough(p),
+                            right = Fmt.moneyExact(p.price),
+                            rightSub = "${signed1(p.dayChangePct)} last session"
+                        ) {
+                            PickFacts(p, tone)
+                            DetailLink("Open ${p.symbol}", tone) { onOpenDetail(p.symbol) }
                         }
                     }
                 }
             }
         },
-        back = lead?.let { p ->
-            @Composable {
-                BackSheet(
-                    title = "Why ${p.symbol}",
-                    sub = report?.sessionNote,
-                    rows = listOfNotNull(
-                        BackRow(
-                            "Last session", signed1(p.dayChangePct),
-                            String.format(
-                                Locale.US, "Closed at %.0f%% of its range on %.1f× volume.",
-                                p.closePosPct, p.volumeRatio
-                            )
-                        ),
-                        BackRow(
-                            "Technique board", "${p.techBullish} of ${p.techTotal}",
-                            p.rel20Pct?.let { "${signedPts(it)} against SPY over 20 sessions." }
-                        ),
-                        p.riskReward?.let { rr ->
-                            BackRow(
-                                "Risk to reward", String.format(Locale.US, "%.1f", rr),
-                                if (rr < 1.0) "The reward is thinner than the risk: size it small." else null
-                            )
-                        },
-                        p.extNote.takeIf { it.isNotEmpty() }?.let { BackRow("Before the open", line = it) }
-                    ),
-                    tone = tone
-                )
-            }
-        }
+        back = if (report == null || report.notes.isEmpty()) null else (@Composable {
+            BackSheet(
+                title = "How the picks are scored",
+                sub = report.sessionNote,
+                rows = report.notes.map { BackRow(label = "", line = it) },
+                tone = tone
+            )
+        })
     )
 }
 
-private fun mustBuyPass(state: WealthState, onOpenAnalysis: (String) -> Unit): PassContent {
+private fun mustBuyPass(state: WealthState, live: Boolean, onOpenAnalysis: (String) -> Unit): PassContent {
     val report = state.mustBuy
     val rows = report?.rows.orEmpty()
     val tone = darkPass(AurumColors.surfaceHigh)
@@ -778,20 +816,9 @@ private fun mustBuyPass(state: WealthState, onOpenAnalysis: (String) -> Unit): P
                 )
                 rows.isEmpty() -> PassMessage("Nothing cleared enough checks today. Cash waits.", tone)
                 else -> {
+                    var open by remember { mutableStateOf<String?>(null) }
                     LogoTiles(rows.take(3), tone, onOpenAnalysis)
-                    rows.drop(3).take(3).forEach { r ->
-                        PassRow(
-                            symbol = r.symbol,
-                            icon = null,
-                            title = "${r.symbol} · ${pts1(r.totalPoints)} pts",
-                            sub = r.name,
-                            right = Fmt.moneyExact(r.price),
-                            tone = tone,
-                            live = false,
-                            onClick = { onOpenAnalysis(r.symbol) }
-                        )
-                    }
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(14.dp))
                     PassFields(
                         listOf(
                             PassField("Scanned", report.scanned.toString()),
@@ -800,21 +827,32 @@ private fun mustBuyPass(state: WealthState, onOpenAnalysis: (String) -> Unit): P
                         ),
                         tone
                     )
+                    Spacer(Modifier.height(14.dp))
+                    PassCaption("Every seat · ⓘ for its checks", tone)
+                    rows.forEach { r ->
+                        DetailRow(
+                            title = "${r.rank}. ${r.symbol} · ${pts1(r.totalPoints)} pts",
+                            tone = tone,
+                            live = live,
+                            open = open == r.symbol,
+                            onToggle = { open = if (open == r.symbol) null else r.symbol },
+                            symbol = r.symbol,
+                            sub = "Passed ${r.passed} of ${r.measured} · ${r.name}",
+                            right = Fmt.moneyExact(r.price),
+                            rightSub = r.dayChangePct?.let { "${signed1(it)} today" }
+                        ) {
+                            MustBuyFacts(r, tone)
+                            DetailLink("Full analysis & SPY race", tone) { onOpenAnalysis(r.symbol) }
+                        }
+                    }
                 }
             }
         },
-        back = if (rows.isEmpty()) null else (@Composable {
+        back = if (report == null) null else (@Composable {
             BackSheet(
-                title = "How each one scored",
-                sub = "A green-zone entry against SPY weighs the most.",
-                rows = rows.take(4).map { r ->
-                    BackRow(
-                        label = "${r.symbol} · ${pts1(r.totalPoints)} pts",
-                        value = "${r.passed} of ${r.measured}",
-                        line = r.checks.filter { it.state == CheckState.PASS }.joinToString(" · ") { it.label }
-                            .ifEmpty { "No check passed outright." }
-                    )
-                },
+                title = "How a seat is won",
+                sub = report.caveat,
+                rows = report.notes.map { BackRow(label = "", line = it) },
                 tone = tone
             )
         })
@@ -844,35 +882,48 @@ private fun marketPass(state: WealthState, intro: Boolean): PassContent {
                     text = pulse.headline,
                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, fontWeight = FontWeight.Bold, lineHeight = 19.sp),
                     color = tone.dim,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = 18.dp)
                 )
                 Spacer(Modifier.height(16.dp))
-                val fields = buildList {
-                    add(PassField("VIX", pulse.vix?.let { String.format(Locale.US, "%.1f", it) } ?: "—"))
-                    pulse.vixChange5d?.let {
-                        add(
-                            PassField(
-                                "VIX, 5 days", String.format(Locale.US, "%+.1f pts", it),
-                                if (it > 0) tone.loss else tone.gain
+                PassFields(
+                    buildList {
+                        add(PassField("VIX", pulse.vix?.let { String.format(Locale.US, "%.1f", it) } ?: "—"))
+                        pulse.vixChange5d?.let {
+                            add(
+                                PassField(
+                                    "VIX, 5 days", String.format(Locale.US, "%+.1f pts", it),
+                                    if (it > 0) tone.loss else tone.gain
+                                )
                             )
-                        )
-                    }
-                    add(PassField("Above 50-day", "${pulse.breadthAbove50Pct.roundToInt()}% of ${pulse.scannedCount}"))
-                    pulse.indexes.take(3).forEach {
-                        add(PassField("${it.name}, 5d", signed1(it.r5Pct), if (it.r5Pct >= 0) tone.gain else tone.loss))
-                    }
+                        }
+                        add(PassField("Above 50-day", "${pulse.breadthAbove50Pct.roundToInt()}% of ${pulse.scannedCount}"))
+                        add(PassField("Rose last session", "${pulse.advancersPct.roundToInt()}%"))
+                    },
+                    tone
+                )
+                Spacer(Modifier.height(10.dp))
+                pulse.indexes.forEach { ix ->
+                    PassRow(
+                        symbol = null,
+                        icon = null,
+                        title = ix.name,
+                        tone = tone,
+                        live = false,
+                        sub = "${signed1(ix.r20Pct)} in 20 days · ${signed1(ix.vs50Pct)} vs its 50-day",
+                        right = signed1(ix.r5Pct),
+                        rightSub = "5 days",
+                        rightColor = if (ix.r5Pct >= 0) tone.gain else tone.loss
+                    )
                 }
-                PassFields(fields.take(6), tone)
+                PassNote(pulse.advice, tone)
             }
         },
         back = pulse?.let { p ->
             @Composable {
                 BackSheet(
                     title = "What the market says",
-                    sub = p.advice,
-                    rows = p.reasons.take(5).map { BackRow(label = "", line = it) },
+                    sub = null,
+                    rows = p.reasons.map { BackRow(label = "", line = it) },
                     tone = tone
                 )
             }
@@ -899,16 +950,21 @@ private fun racePass(state: WealthState, live: Boolean): PassContent {
                 RaceRoute(perf, tone)
                 Spacer(Modifier.height(16.dp))
                 PassFields(
-                    listOf(
-                        PassField("Gap", signedPts(perf.edgePct), if (perf.edgePct >= 0) tone.gain else tone.loss),
-                        PassField("Departed", Fmt.dateShort(perf.startTs)),
-                        PassField("Arrived", Fmt.dateShort(perf.endTs))
-                    ),
+                    buildList {
+                        add(PassField("Gap", signedPts(perf.edgePct), if (perf.edgePct >= 0) tone.gain else tone.loss))
+                        add(PassField("Departed", Fmt.dateShort(perf.startTs)))
+                        add(PassField("Arrived", Fmt.dateShort(perf.endTs)))
+                        add(PassField("Deepest fall", "-" + Fmt.pct(perf.maxDrawdownPct), tone.loss))
+                        perf.twrAnnPct?.let { add(PassField("A year, at this pace", Fmt.signedPct(it))) }
+                        perf.mwrAnnPct?.let { add(PassField("Money-weighted, a year", Fmt.signedPct(it))) }
+                        add(PassField("Measured", Fmt.pct(perf.coveragePct)))
+                    },
                     tone
                 )
                 Spacer(Modifier.height(10.dp))
                 Perforation(tone)
                 RaceChart(perf.curve, tone, live)
+                PassNote(perf.headline, tone)
             }
         },
         back = perf?.let { p ->
@@ -924,9 +980,10 @@ private fun racePass(state: WealthState, live: Boolean): PassContent {
                         ),
                         BackRow("You put in", Fmt.moneyExact(p.investedIn)),
                         BackRow("You took out", Fmt.moneyExact(p.takenOut)),
-                        BackRow("Deepest fall", "-" + Fmt.pct(p.maxDrawdownPct), color = tone.loss),
-                        if (p.coveragePct < 99.5) BackRow("Measured", Fmt.pct(p.coveragePct) + " of the book") else null
-                    ),
+                        if (p.droppedSymbols.isNotEmpty()) {
+                            BackRow("Left out", p.droppedSymbols.joinToString(", "), "No price history could be read for these.")
+                        } else null
+                    ) + p.notes.map { BackRow(label = "", line = it) } + BackRow(label = "", line = p.caveat),
                     tone = tone
                 )
             }
@@ -934,9 +991,173 @@ private fun racePass(state: WealthState, live: Boolean): PassContent {
     )
 }
 
+// ---------------------------------------------------------------- row details
+
+/** A move in full: why, then the holding's evaluation and a way into the stock. */
+@Composable
+private fun MoveDetail(
+    a: ManagementAction,
+    evals: Map<String, HoldingEvaluation>,
+    tone: PassTone,
+    onOpenDetail: (String) -> Unit
+) {
+    DetailText(a.detail, tone)
+    a.symbol.takeIf { it.isNotEmpty() }?.let { s ->
+        evals[s]?.let { HoldingFacts(it, tone, shown = a.detail) }
+        DetailLink("Open $s", tone) { onOpenDetail(s) }
+    }
+}
+
+/**
+ * A holding's evaluation: the board, the trend, the stop, the earnings date.
+ * [shown] is a reason already printed above, left out of the list.
+ */
+@Composable
+private fun HoldingFacts(e: HoldingEvaluation, tone: PassTone, shown: String? = null) {
+    DetailFields(
+        listOfNotNull(
+            PassField("Value", Fmt.moneyExact(e.marketValue)),
+            PassField("Since bought", Fmt.signedPct(e.unrealizedPlPct), if (e.unrealizedPlPct >= 0) tone.gain else tone.loss),
+            PassField("Of the book", pct1(e.weightPct)),
+            if (e.boardTotal > 0) PassField("Board bullish", "${e.boardBullish} of ${e.boardTotal}") else null,
+            e.rsi?.let { PassField("RSI", String.format(Locale.US, "%.0f", it)) },
+            e.above50?.let { PassField("50-day line", if (it) "Above" else "Below", if (it) tone.gain else tone.loss) },
+            e.above200?.let { PassField("200-day line", if (it) "Above" else "Below", if (it) tone.gain else tone.loss) },
+            e.trailStop?.let { PassField("Trailing stop", Fmt.moneyExact(it)) },
+            e.stopDistancePct?.let { PassField("Stop room", pct1(it)) },
+            e.nextEarningsTs?.let { PassField(if (e.earningsEstimate) "Earnings, estimated" else "Earnings", Fmt.dateShort(it)) },
+            PassField("Conviction", "${e.conviction}%")
+        ),
+        tone
+    )
+    e.reasons.filter { it != shown }.forEach { DetailText(it, tone) }
+}
+
+/** A next-session pick in full: its levels, its odds, its board and its notes. */
+@Composable
+private fun PickFacts(p: NextSessionPick, tone: PassTone) {
+    DetailFields(
+        listOfNotNull(
+            PassField("Entry", Fmt.moneyExact(p.entry)),
+            PassField("Target", Fmt.moneyExact(p.target)),
+            PassField("Stop", Fmt.moneyExact(p.stop)),
+            PassField("Closed higher", if (p.probUpPct >= 0) "${p.probUpPct}%" else "Not measured"),
+            PassField("Similar days", p.analogDays.toString()),
+            PassField("Avg next day", if (p.analogDays > 0) Fmt.signedPct(p.avgNextDayPct) else "—"),
+            PassField("Next-session range", "${signed1(p.expectedLowPct)} / ${signed1(p.expectedHighPct)}"),
+            PassField("Board bullish", "${p.techBullish} of ${p.techTotal}"),
+            PassField("RSI", String.format(Locale.US, "%.0f", p.rsi)),
+            PassField("Volume", String.format(Locale.US, "%.1f×", p.volumeRatio)),
+            p.rel20Pct?.let { PassField("vs SPY, 20 days", signedPts(it)) },
+            p.riskReward?.let { PassField("Risk to reward", String.format(Locale.US, "%.1f", it)) },
+            p.vwapDistPct?.let { PassField("vs VWAP", signed1(it)) }
+        ),
+        tone
+    )
+    if (p.sector.isNotBlank()) DetailText("Sector: ${p.sector}", tone, strong = true)
+    DetailText(p.reason, tone)
+    listOf(p.heldNote, p.extNote, p.flowNote, p.newsNote.takeIf { it.isNotBlank() }?.let { "News: $it" }.orEmpty())
+        .filter { it.isNotBlank() }
+        .forEach { DetailText(it, tone, strong = true) }
+}
+
+/** A must-buy seat's every check, then what backs it. */
+@Composable
+private fun MustBuyFacts(r: MustBuyRow, tone: PassTone) {
+    r.checks.forEach { c ->
+        Row(verticalAlignment = Alignment.Top) {
+            Box(
+                modifier = Modifier
+                    .padding(top = 5.dp)
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(
+                        when (c.state) {
+                            CheckState.PASS -> tone.gain
+                            CheckState.FAIL -> tone.loss
+                            CheckState.UNMEASURED -> tone.dim
+                        }
+                    )
+            )
+            Spacer(Modifier.width(8.dp))
+            Column {
+                Text(
+                    text = "${c.label} · ${pts1(c.weight)} pt",
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, fontWeight = FontWeight.ExtraBold),
+                    color = tone.ink
+                )
+                Text(
+                    text = c.detail,
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 17.sp),
+                    color = tone.dim
+                )
+            }
+        }
+    }
+    DetailFields(
+        listOfNotNull(
+            PassField("Checks", "${pts1(r.checkPoints)} of ${pts1(r.checkMax)}"),
+            PassField("Backing", "${pts1(r.backingPoints)} pts"),
+            r.beatSharePct?.let { PassField("Months beating SPY", "${it.roundToInt()}%") },
+            r.edgeEntry?.let { PassField("Green-zone entry", Fmt.moneyExact(it)) }
+        ),
+        tone
+    )
+    if (r.backing.isNotEmpty()) {
+        DetailText(
+            "Backed by " + r.backing.joinToString(" · ") { b ->
+                "${b.source} ×${String.format(Locale.US, "%.1f", b.multiplier)}" +
+                    if (b.measured) " (${b.gradedCalls} graded)" else ""
+            },
+            tone
+        )
+    }
+}
+
+/** A theme against the book: who in the book carries it, and the name that would fill it. */
+@Composable
+private fun GapFacts(gap: SectorGap, weights: Map<String, Double>, tone: PassTone) {
+    DetailText(
+        if (gap.holders.isEmpty()) "Nothing you hold is in this theme."
+        else "In your book: " + gap.holders.joinToString(" · ") { s -> "$s ${pct1(weights[s] ?: 0.0)}" },
+        tone,
+        strong = true
+    )
+    if (gap.coverageFromHoldings) {
+        DetailText("This theme has no clean sector or industry, so only stocks on its own list count.", tone)
+    }
+    DetailFields(
+        listOf(
+            PassField("${gap.etf}, 5 days", signed1(gap.r5Pct), if (gap.r5Pct >= 0) tone.gain else tone.loss),
+            PassField("${gap.etf}, 20 days", signed1(gap.r20Pct), if (gap.r20Pct >= 0) tone.gain else tone.loss),
+            PassField("Suggested", pct1(gap.targetPct))
+        ),
+        tone
+    )
+    gap.picks.firstOrNull()?.let { p ->
+        DetailText("Strongest name: ${p.symbol} · ${p.name}", tone, strong = true)
+        DetailFields(
+            listOf(
+                PassField("Price", Fmt.moneyExact(p.price)),
+                PassField(if (p.entry < p.price - 0.005) "Wait for" else "Entry", Fmt.moneyExact(p.entry)),
+                PassField("3 days", signed1(p.r3Pct)),
+                PassField("20 days", signed1(p.r20Pct)),
+                PassField("RSI", String.format(Locale.US, "%.0f", p.rsi)),
+                PassField("Board bullish", "${p.techBullish} of ${p.techTotal}")
+            ),
+            tone
+        )
+        DetailText(p.reason, tone)
+        if (p.newsNote.isNotBlank()) DetailText("News: ${p.newsNote}", tone)
+    }
+    if (gap.picks.size > 1) {
+        DetailText("Also passing: " + gap.picks.drop(1).joinToString(", ") { it.symbol }, tone)
+    }
+}
+
 // ---------------------------------------------------------------- pieces
 
-/** Plays once each time its pass comes to the front; a pass behind sits finished. */
+/** Plays once each time its pass comes to the front. */
 @Composable
 private fun rememberReveal(live: Boolean, delayMs: Int = 250, durationMs: Int = 900): Float {
     val reveal = remember { Animatable(0f) }
@@ -997,12 +1218,12 @@ private fun PassMessage(text: String, tone: PassTone) {
 }
 
 @Composable
-private fun PassNote(text: String, tone: PassTone) {
+private fun PassNote(text: String, tone: PassTone, top: Dp = 12.dp) {
     Text(
         text = text,
         style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, lineHeight = 19.sp),
         color = tone.dim,
-        modifier = Modifier.padding(start = 18.dp, end = 64.dp, top = 12.dp)
+        modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = top)
     )
 }
 
@@ -1018,9 +1239,14 @@ private fun PassCaption(text: String, tone: PassTone) {
 
 /** Three fields to a row, the last one right-aligned, the way a Wallet pass lays them out. */
 @Composable
-private fun PassFields(fields: List<PassField>, tone: PassTone) {
+private fun PassFields(
+    fields: List<PassField>,
+    tone: PassTone,
+    gutter: Dp = 18.dp,
+    valueSize: TextUnit = 16.sp
+) {
     Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = gutter),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         fields.chunked(3).forEach { row ->
@@ -1041,7 +1267,7 @@ private fun PassFields(fields: List<PassField>, tone: PassTone) {
                             )
                             Text(
                                 text = field.value,
-                                style = MaterialTheme.typography.titleSmall.copy(fontSize = 16.sp, fontWeight = FontWeight.ExtraBold),
+                                style = MaterialTheme.typography.titleSmall.copy(fontSize = valueSize, fontWeight = FontWeight.ExtraBold),
                                 color = field.color ?: tone.ink,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
@@ -1054,10 +1280,52 @@ private fun PassFields(fields: List<PassField>, tone: PassTone) {
     }
 }
 
+/** The fields inside an opened row: the same grid, flush with the row's text. */
+@Composable
+private fun DetailFields(fields: List<PassField>, tone: PassTone) =
+    PassFields(fields, tone, gutter = 0.dp, valueSize = 14.sp)
+
+@Composable
+private fun DetailText(text: String, tone: PassTone, strong: Boolean = false) {
+    if (text.isBlank()) return
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall.copy(
+            fontSize = 13.sp,
+            lineHeight = 19.sp,
+            fontWeight = if (strong) FontWeight.Bold else FontWeight.Normal
+        ),
+        color = if (strong) tone.ink else tone.dim
+    )
+}
+
+@Composable
+private fun DetailLink(text: String, tone: PassTone, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.ExtraBold),
+            color = tone.ink
+        )
+        Icon(
+            Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+            contentDescription = null,
+            tint = tone.ink,
+            modifier = Modifier.size(18.dp)
+        )
+    }
+}
+
 /** One bar per graded part of the score, filling as the pass comes forward. */
 @Composable
-private fun PassBars(fractions: List<Float>, tone: PassTone, live: Boolean) {
-    val grow = rememberReveal(live, delayMs = 500, durationMs = 1000)
+private fun PassBars(fractions: List<Float>, tone: PassTone) {
+    val grow = rememberReveal(true, delayMs = 500, durationMs = 1000)
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -1102,7 +1370,10 @@ private fun RowMark(symbol: String?, icon: ImageVector?, size: Dp, tone: PassTon
     }
 }
 
-/** The pass's lead line: a big logo, a big name, and what it is worth. */
+/**
+ * The pass's lead line: a big logo, a big name, and what it is worth. Given
+ * [detail], it carries an ⓘ and opens that detail underneath.
+ */
 @Composable
 private fun LeadRow(
     symbol: String?,
@@ -1112,12 +1383,44 @@ private fun LeadRow(
     amount: String,
     tone: PassTone,
     live: Boolean,
-    onClick: (() -> Unit)?
+    open: Boolean = false,
+    onToggle: (() -> Unit)? = null,
+    detail: (@Composable ColumnScope.() -> Unit)? = null
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        LeadHead(symbol, icon, label, title, amount, tone, live, open, onToggle)
+        if (detail != null) {
+            AnimatedVisibility(
+                visible = open,
+                enter = expandVertically(spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
+                exit = shrinkVertically(spring(dampingRatio = 1f, stiffness = Spring.StiffnessMedium)) + fadeOut()
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(start = 88.dp, end = 18.dp, bottom = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    content = detail
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LeadHead(
+    symbol: String?,
+    icon: ImageVector?,
+    label: String,
+    title: String,
+    amount: String,
+    tone: PassTone,
+    live: Boolean,
+    open: Boolean,
+    onToggle: (() -> Unit)?
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onToggle != null) Modifier.clickable(onClick = onToggle) else Modifier)
             .padding(horizontal = 18.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1146,34 +1449,36 @@ private fun LeadRow(
                 color = tone.ink
             )
         }
+        if (onToggle != null) {
+            Spacer(Modifier.width(10.dp))
+            InfoDot(open, tone)
+        }
     }
 }
 
+/** The head of a pass row: mark, title and sub, and the figure on the right. */
 @Composable
-private fun PassRow(
+private fun RowHead(
     symbol: String?,
     icon: ImageVector?,
     title: String,
     tone: PassTone,
     live: Boolean,
-    sub: String? = null,
-    right: String? = null,
-    rightSub: String? = null,
-    rightColor: Color? = null,
-    onClick: (() -> Unit)? = null
+    sub: String?,
+    right: String?,
+    rightSub: String?,
+    rightColor: Color?,
+    modifier: Modifier = Modifier,
+    trailing: @Composable () -> Unit = {}
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 18.dp)
-            .drawBehind { drawLine(tone.rule, Offset.Zero, Offset(size.width, 0f), 1.dp.toPx()) }
-            .heightIn(min = 50.dp)
-            .padding(vertical = 6.dp),
+        modifier = modifier.fillMaxWidth().heightIn(min = 52.dp).padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        RowMark(symbol, icon, 32.dp, tone, live)
-        Spacer(Modifier.width(10.dp))
+        if (symbol != null || icon != null) {
+            RowMark(symbol, icon, 32.dp, tone, live)
+            Spacer(Modifier.width(10.dp))
+        }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
@@ -1211,6 +1516,99 @@ private fun PassRow(
                 }
             }
         }
+        trailing()
+    }
+}
+
+@Composable
+private fun PassRow(
+    symbol: String?,
+    icon: ImageVector?,
+    title: String,
+    tone: PassTone,
+    live: Boolean,
+    sub: String? = null,
+    right: String? = null,
+    rightSub: String? = null,
+    rightColor: Color? = null
+) {
+    RowHead(
+        symbol, icon, title, tone, live, sub, right, rightSub, rightColor,
+        modifier = Modifier
+            .padding(horizontal = 18.dp)
+            .drawBehind { drawLine(tone.rule, Offset.Zero, Offset(size.width, 0f), 1.dp.toPx()) }
+    )
+}
+
+/**
+ * A pass row that opens in place: a tap on the row or its ⓘ shows the full
+ * detail underneath, and a second tap folds it away.
+ */
+@Composable
+private fun DetailRow(
+    title: String,
+    tone: PassTone,
+    live: Boolean,
+    open: Boolean,
+    onToggle: () -> Unit,
+    symbol: String? = null,
+    icon: ImageVector? = null,
+    sub: String? = null,
+    right: String? = null,
+    rightSub: String? = null,
+    rightColor: Color? = null,
+    detail: @Composable ColumnScope.() -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 18.dp)
+            .drawBehind { drawLine(tone.rule, Offset.Zero, Offset(size.width, 0f), 1.dp.toPx()) }
+    ) {
+        RowHead(
+            symbol, icon, title, tone, live, sub, right, rightSub, rightColor,
+            modifier = Modifier
+                .clickable(onClick = onToggle)
+                .semantics {
+                    role = Role.Button
+                    stateDescription = if (open) "Details shown" else "Details hidden"
+                }
+        ) {
+            Spacer(Modifier.width(10.dp))
+            InfoDot(open, tone)
+        }
+        AnimatedVisibility(
+            visible = open,
+            enter = expandVertically(spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
+            exit = shrinkVertically(spring(dampingRatio = 1f, stiffness = Spring.StiffnessMedium)) + fadeOut()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = if (symbol != null || icon != null) 42.dp else 0.dp, bottom = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                content = detail
+            )
+        }
+    }
+}
+
+/** The small ⓘ at the end of a row: outlined while folded, filled while open. */
+@Composable
+private fun InfoDot(open: Boolean, tone: PassTone) {
+    Box(
+        modifier = Modifier
+            .size(26.dp)
+            .clip(CircleShape)
+            .background(if (open) tone.ink else Color.Transparent)
+            .border(1.5.dp, if (open) tone.ink else tone.dim, CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "i",
+            style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp, fontWeight = FontWeight.ExtraBold),
+            color = if (open) tone.ground else tone.ink
+        )
     }
 }
 
@@ -1354,9 +1752,9 @@ private fun RaceChart(curve: List<CurvePoint>, tone: PassTone, live: Boolean) {
     }
 }
 
-/** Where a sum of money goes: one bar split by share, and a line per slice. */
+/** A whole split into shares: one bar, and a line per slice. */
 @Composable
-private fun MoneySplit(title: String, slices: List<MoneySlice>, tone: PassTone, live: Boolean) {
+private fun SplitBar(title: String, slices: List<SplitSlice>, tone: PassTone, live: Boolean) {
     val reveal = rememberReveal(live, delayMs = 400, durationMs = 900)
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp)) {
         Text(
@@ -1378,14 +1776,14 @@ private fun MoneySplit(title: String, slices: List<MoneySlice>, tone: PassTone, 
             clipRect(right = size.width * reveal) {
                 slices.forEach { s ->
                     val w = (usable * (s.sharePct / total)).toFloat()
-                    drawRoundRect(s.color, Offset(x, 0f), Size(w, size.height), CornerRadius(0f, 0f))
+                    drawRect(s.color, Offset(x, 0f), Size(w, size.height))
                     x += w + gap
                 }
             }
         }
         Spacer(Modifier.height(4.dp))
         slices.forEach { s ->
-            Row(modifier = Modifier.fillMaxWidth().height(22.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(modifier = Modifier.fillMaxWidth().heightIn(min = 22.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(s.color))
                 Text(
                     text = s.label,
@@ -1396,7 +1794,7 @@ private fun MoneySplit(title: String, slices: List<MoneySlice>, tone: PassTone, 
                     modifier = Modifier.padding(start = 8.dp).weight(1f)
                 )
                 Text(
-                    text = "${Fmt.moneyExact(s.amount)} · ${pct1(s.sharePct)}",
+                    text = s.right,
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, fontWeight = FontWeight.ExtraBold),
                     color = tone.ink,
                     maxLines = 1
@@ -1438,9 +1836,7 @@ private fun BackSheet(title: String, sub: String?, rows: List<BackRow>, tone: Pa
                 Text(
                     text = row.line.orEmpty(),
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, lineHeight = 18.sp),
-                    color = tone.dim,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                    color = tone.dim
                 )
             }
         } else {
@@ -1472,8 +1868,6 @@ private fun BackSheet(title: String, sub: String?, rows: List<BackRow>, tone: Pa
                             fontWeight = if (row.label.isBlank()) FontWeight.SemiBold else FontWeight.Normal
                         ),
                         color = if (row.label.isBlank()) tone.ink else tone.dim,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(top = if (row.label.isBlank()) 0.dp else 2.dp)
                     )
                 }
@@ -1504,15 +1898,15 @@ private fun moveIcon(kind: ActionKind): ImageVector = when (kind) {
     ActionKind.DIVERSIFY -> Icons.Rounded.PieChart
 }
 
-/** The score's parts by the short names a pass has room for. */
-private fun partName(key: String, label: String): String = when (key) {
-    "concentration" -> "Spread"
-    "risk" -> "Risk"
-    "trend" -> "Trend"
-    "cash" -> "Cash"
-    "performance" -> "Return"
-    "record" -> "Trade record"
-    else -> label
+/** A holding's one-line read for a row: its share of the book and its run since the buy. */
+private fun holdingLine(e: HoldingEvaluation): String =
+    "${pct1(e.weightPct)} of the book · ${signed1(e.unrealizedPlPct)}"
+
+private fun gapWord(status: GapStatus): String = when (status) {
+    GapStatus.MISSING -> "Missing"
+    GapStatus.UNDER -> "Light"
+    GapStatus.COVERED -> "Covered"
+    GapStatus.OVER -> "Heavy"
 }
 
 private fun callOf(call: MarketCall?): Pair<String, Color>? = when (call) {
@@ -1523,10 +1917,8 @@ private fun callOf(call: MarketCall?): Pair<String, Color>? = when (call) {
 }
 
 private fun followThrough(p: NextSessionPick): String =
-    if (p.probUpPct >= 0 && p.analogDays > 0) "Closed higher ${p.probUpPct}% of ${p.analogDays} similar days"
-    else "Too few similar days to measure"
-
-private fun lowerFirst(s: String): String = s.replaceFirstChar { it.lowercase(Locale.US) }
+    if (p.probUpPct >= 0 && p.analogDays > 0) "${p.probUpPct}% up · ${p.analogDays} similar days"
+    else "Too few similar days"
 
 private fun pct1(v: Double): String = String.format(Locale.US, "%.1f%%", v)
 

@@ -47,7 +47,9 @@ data class SectorGap(
     val status: GapStatus,
     /** True when coverage came from exact holdings membership, not a sector map. */
     val coverageFromHoldings: Boolean,
-    val picks: List<SectorPick>
+    val picks: List<SectorPick>,
+    /** Your holdings counted toward the theme, largest first. */
+    val holders: List<String> = emptyList()
 )
 
 /** One line of the weekly deployment plan. */
@@ -78,10 +80,12 @@ data class WeeklyStrategy(
  * split this week's money across them.
  *
  * Integrity rules:
- *  - Coverage is measured, never assumed. A theme with an unambiguous sector
- *    mapping uses the book's real sector weights; a cross-sector theme (AI,
- *    quantum, nuclear, solar) can only claim coverage from exact holdings
- *    membership, and says so via [SectorGap.coverageFromHoldings].
+ *  - Coverage is measured, never assumed. A holding counts toward a theme
+ *    when it is on the theme's watch list, sits in a whole-sector theme's
+ *    sector, or its Yahoo industry names the theme
+ *    ([PortfolioLens.themeCoverage]); a cross-sector theme (AI, quantum,
+ *    cybersecurity) can only claim coverage from exact holdings membership,
+ *    and says so via [SectorGap.coverageFromHoldings].
  *  - New money is steered toward trending themes the book is thin in — the
  *    weight is trend strength scaled by how much room is left.
  *  - A theme with no stock that passes the technique board contributes no
@@ -126,6 +130,7 @@ class SectorStrategy(
                         put("target", g.targetPct)
                         put("status", g.status.name)
                         put("fromHoldings", g.coverageFromHoldings)
+                        put("holders", JSONArray(g.holders))
                         put("picks", JSONArray().apply { g.picks.forEach { put(pickJson(it)) } })
                     })
                 }
@@ -208,7 +213,10 @@ class SectorStrategy(
                             status = runCatching { GapStatus.valueOf(g.optString("status")) }
                                 .getOrDefault(GapStatus.MISSING),
                             coverageFromHoldings = g.optBoolean("fromHoldings", false),
-                            picks = picks
+                            picks = picks,
+                            holders = g.optJSONArray("holders")?.let { a ->
+                                (0 until a.length()).map { a.getString(it) }
+                            }.orEmpty()
                         )
                     )
                 }
@@ -262,8 +270,8 @@ class SectorStrategy(
         return try {
             val top = trends.take(TOP_THEMES)
 
-            // Coverage per theme, measured two ways depending on what is honest.
-            val coverage = top.associate { it.key to coverageOf(it.key, book) }
+            // Coverage per theme, from holdings' list membership, sector or industry.
+            val coverage = top.associate { it.key to PortfolioLens.themeCoverage(it.key, book) }
 
             // Targets: trend strength shared across the top themes, capped so no
             // single theme is ever proposed as more than a third of the book.
@@ -279,7 +287,8 @@ class SectorStrategy(
             }.toMap()
 
             val gaps = top.map { t ->
-                val (heldPct, fromHoldings) = coverage[t.key] ?: (0.0 to false)
+                val held = coverage[t.key]
+                val heldPct = held?.pct ?: 0.0
                 val target = targets[t.key] ?: 0.0
                 SectorGap(
                     themeKey = t.key,
@@ -295,8 +304,9 @@ class SectorStrategy(
                         heldPct > target * 1.6 -> GapStatus.OVER
                         else -> GapStatus.COVERED
                     },
-                    coverageFromHoldings = fromHoldings,
-                    picks = picksByTheme[t.key].orEmpty()
+                    coverageFromHoldings = held?.membershipOnly ?: false,
+                    picks = picksByTheme[t.key].orEmpty(),
+                    holders = held?.holders.orEmpty()
                 )
             }.sortedWith(
                 // Missing-and-trending first: that is the actionable end.
@@ -342,22 +352,6 @@ class SectorStrategy(
         } catch (_: Exception) {
             null
         }
-    }
-
-    // --------------------------------------------------------------- coverage
-
-    /**
-     * How much of the book sits in [themeKey], and whether that number came
-     * from exact holdings membership (true) or the sector map (false).
-     */
-    private fun coverageOf(themeKey: String, book: BookContext): Pair<Double, Boolean> {
-        if (book.isEmpty) return 0.0 to false
-        val mapped = PortfolioLens.themeCoveragePct(themeKey, book)
-        if (mapped != null) return mapped to false
-        // No clean sector mapping — only exact membership can be claimed.
-        val members = SectorTrends.WATCH[themeKey].orEmpty().map { it.first }.toSet()
-        val pct = book.heldWeights.filterKeys { it in members }.values.sum()
-        return pct to true
     }
 
     // ------------------------------------------------------------ stock picks
@@ -518,8 +512,8 @@ class SectorStrategy(
                 "the theme is trending but its representative names do not pass the technique board."
         }
         if (gaps.any { it.coverageFromHoldings }) {
-            out += "Cross-sector themes (AI, quantum, nuclear, solar) have no clean sector " +
-                "classification, so their coverage counts only stocks you hold from that theme's list."
+            out += "Cross-sector themes (AI, quantum, cybersecurity, drones) have no clean sector " +
+                "or industry, so their coverage counts only stocks you hold from that theme's list."
         }
         if (allocations.isNotEmpty()) {
             out += "Amounts split this week's money by theme strength scaled by how much room " +

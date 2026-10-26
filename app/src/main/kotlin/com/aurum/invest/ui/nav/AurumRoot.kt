@@ -94,8 +94,10 @@ import com.aurum.invest.ui.screens.ReportsScreen
 import com.aurum.invest.ui.screens.SettingsScreen
 import com.aurum.invest.ui.screens.StocksScreen
 import com.aurum.invest.ui.screens.WealthScreen
+import com.aurum.invest.ui.screens.WealthViewModel
 import com.aurum.invest.ui.theme.AurumColors
 import kotlin.math.abs
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -139,10 +141,19 @@ private val TOP_ROUTES = setOf(Routes.DASHBOARD, Routes.STOCKS, Routes.GOLD, Rou
 private const val HIDE_AFTER_PX = 48f
 private const val SHOW_AFTER_PX = 16f
 
+/** How long Home gets to itself before the Wealth engines start warming up. */
+private const val WEALTH_WARMUP_MS = 4_000L
+
 @Composable
 fun AurumRoot() {
     val nav = rememberNavController()
     val rootVm: RootViewModel = viewModel()
+    // App-scoped so the Wealth engines warm up behind Home and keep their results.
+    val wealthVm: WealthViewModel = viewModel()
+    LaunchedEffect(wealthVm) {
+        delay(WEALTH_WARMUP_MS)
+        wealthVm.start()
+    }
     val pending by rootVm.pendingCount.collectAsStateWithLifecycle()
 
     val topDests = remember {
@@ -348,6 +359,7 @@ fun AurumRoot() {
                 }
                 composable(Routes.WEALTH) {
                     WealthScreen(
+                        vm = wealthVm,
                         onOpenAnalysis = { nav.navigate(Routes.analysis(it)) },
                         onOpenDetail = openDetail
                     )
