@@ -275,6 +275,14 @@ class StocksViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { watch.remove(symbol) }
     }
 
+    /** Undo for a removal: the name comes back, pinned again if it was. */
+    fun restore(symbol: String, name: String, pinned: Boolean) {
+        viewModelScope.launch {
+            watch.add(symbol, name)
+            if (pinned) watch.setPinned(symbol, true)
+        }
+    }
+
     /** Star toggle on browse rows: watched -> removed, unwatched -> added. */
     fun toggleWatch(symbol: String, name: String) {
         viewModelScope.launch {

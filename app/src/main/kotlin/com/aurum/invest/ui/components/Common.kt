@@ -603,7 +603,7 @@ private const val ROLL_STAGGER_MS = 22
  */
 private const val ROLL_STAGGER_CAP_MS = 130
 
-private fun adviceColor(action: AdviceAction): Color = when (action) {
+fun adviceColor(action: AdviceAction): Color = when (action) {
     AdviceAction.STRONG_BUY, AdviceAction.BUY -> AurumColors.gain
     AdviceAction.WAIT -> AurumColors.textDim
     AdviceAction.HOLD -> AurumColors.textSub

@@ -6,6 +6,7 @@ import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
+import android.graphics.drawable.BitmapDrawable
 import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
@@ -48,7 +49,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -76,11 +79,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import coil.request.SuccessResult
 import coil.size.Size
 import coil.transform.Transformation
+import androidx.core.graphics.drawable.toBitmap
+import coil.imageLoader
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.Dispatchers
 import com.aurum.invest.ui.theme.AurumColors
 import kotlin.math.min
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 // ----------------------------------------------------------------- motion
 
@@ -891,6 +900,91 @@ private object LogoBadge : Transformation {
         canvas.drawBitmap(input, null, RectF(left, top, left + dw, top + dh), paint)
         return out
     }
+}
+
+/**
+ * A company's own brand colour, read from its logo, for surfaces that wear it
+ * (the Stocks tab's passes). Each symbol is measured once per session: the
+ * logo's opaque, saturated pixels are bucketed and the biggest bucket's
+ * average wins. A mark with no strong colour (a black or grey wordmark)
+ * measures as none, and the pass keeps a neutral ground.
+ */
+object LogoTint {
+    private val known = ConcurrentHashMap<String, Int>()
+    private const val NONE = 0
+
+    private fun key(symbol: String) = symbol.trim().uppercase()
+
+    fun isKnown(symbol: String): Boolean = known.containsKey(key(symbol))
+
+    /** The measured colour; null while unread and for a colourless mark. */
+    fun cached(symbol: String): Color? = known[key(symbol)]?.takeIf { it != NONE }?.let { Color(it) }
+
+    internal fun put(symbol: String, argb: Int) {
+        known[key(symbol)] = argb
+    }
+
+    internal fun measure(bitmap: Bitmap): Int {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w <= 0 || h <= 0) return NONE
+        val pixels = IntArray(w * h)
+        bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
+        // Bucket -> count, red, green and blue sums.
+        val buckets = HashMap<Int, IntArray>()
+        var solid = 0
+        var coloured = 0
+        for (p in pixels) {
+            if ((p ushr 24) < 128) continue
+            solid++
+            val r = (p shr 16) and 0xFF
+            val g = (p shr 8) and 0xFF
+            val b = p and 0xFF
+            val hi = maxOf(r, g, b)
+            val lo = minOf(r, g, b)
+            // Greys, black and white carry no brand colour.
+            if (hi - lo < 40 || hi < 40) continue
+            coloured++
+            val acc = buckets.getOrPut((r / 32) * 64 + (g / 32) * 8 + b / 32) { IntArray(4) }
+            acc[0]++
+            acc[1] += r
+            acc[2] += g
+            acc[3] += b
+        }
+        if (solid == 0 || coloured < solid * 0.12) return NONE
+        val best = buckets.values.maxByOrNull { it[0] } ?: return NONE
+        val n = best[0]
+        return (0xFF shl 24) or ((best[1] / n) shl 16) or ((best[2] / n) shl 8) or (best[3] / n)
+    }
+}
+
+/**
+ * The brand colour of [symbol]'s logo, or null until it is read (and for a
+ * colourless mark). A logo that fails to load is not remembered, so the next
+ * visit tries again.
+ */
+@Composable
+fun rememberLogoTint(symbol: String): Color? {
+    val context = LocalContext.current
+    var tint by remember(symbol) { mutableStateOf(LogoTint.cached(symbol)) }
+    LaunchedEffect(symbol) {
+        if (LogoTint.isKnown(symbol)) {
+            tint = LogoTint.cached(symbol)
+            return@LaunchedEffect
+        }
+        val request = ImageRequest.Builder(context)
+            .data(logoUrl(symbol))
+            // Reading pixels needs a software bitmap.
+            .allowHardware(false)
+            .size(96)
+            .build()
+        val result = context.imageLoader.execute(request) as? SuccessResult ?: return@LaunchedEffect
+        val bitmap = (result.drawable as? BitmapDrawable)?.bitmap ?: result.drawable.toBitmap()
+        val argb = withContext(Dispatchers.Default) { LogoTint.measure(bitmap) }
+        LogoTint.put(symbol, argb)
+        tint = LogoTint.cached(symbol)
+    }
+    return tint
 }
 
 /**
