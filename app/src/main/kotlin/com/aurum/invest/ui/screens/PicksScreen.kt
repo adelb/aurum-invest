@@ -51,6 +51,7 @@ import com.aurum.invest.analytics.NoteKind
 import com.aurum.invest.analytics.PickNote
 import com.aurum.invest.analytics.PortfolioLens
 import com.aurum.invest.analytics.TechniqueVerdict
+import com.aurum.invest.analytics.TurnPick
 import com.aurum.invest.ui.components.AurumCard
 import com.aurum.invest.ui.components.AurumRefreshBox
 import com.aurum.invest.ui.components.DeltaPct
@@ -71,7 +72,7 @@ private enum class PicksTab(val key: String) {
     ENTRIES(PicksViewModel.TAB_ENTRIES),
     POWER(PicksViewModel.TAB_POWER),
     WEEKLY(PicksViewModel.TAB_WEEKLY),
-    SPY(PicksViewModel.TAB_SPY),
+    TURN(PicksViewModel.TAB_TURN),
     /** The 2% desk — its own screen and view model, hosted as the sixth desk. */
     TWO("two")
 }
@@ -102,7 +103,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
             )
         }
         ScrollTabs(
-            options = listOf("Today", "Entries", "Power", "Weekly", "vs SPY", "2%"),
+            options = listOf("Today", "Entries", "Power", "Weekly", "Turn", "2%"),
             selected = tab.ordinal,
             onSelect = { tab = PicksTab.entries[it] }
         )
@@ -123,7 +124,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                         PicksTab.ENTRIES -> "Best Entries"
                         PicksTab.POWER -> "Power Hour"
                         PicksTab.WEEKLY -> "Weekly Picks"
-                        PicksTab.SPY -> "Green vs SPY"
+                        PicksTab.TURN -> "The Turn"
                         PicksTab.TWO -> "2%"
                     },
                     style = MaterialTheme.typography.headlineMedium,
@@ -135,15 +136,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                         PicksTab.ENTRIES -> "Market-wide entry-price scan"
                         PicksTab.POWER -> "Buy 2:30–4:00 PM ET · sell into tomorrow"
                         PicksTab.WEEKLY -> state.weekLabel
-                        PicksTab.SPY -> when {
-                            state.spyLoading || state.spyRefreshing ->
-                                if (state.spyTotal > 0) {
-                                    "Racing today's picks — ${state.spyScanned} of ${state.spyTotal}"
-                                } else "Racing today's picks against SPY"
-                            state.spyTotal > 0 ->
-                                "${state.spyRows.size} of ${state.spyTotal} picks priced in the green"
-                            else -> "Every current pick raced against the index"
-                        }
+                        PicksTab.TURN -> "MACD about to cross up · Hull not turned yet"
                         PicksTab.TWO -> ""
                     },
                     style = MaterialTheme.typography.bodyMedium,
@@ -155,7 +148,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 PicksTab.ENTRIES -> state.entryRefreshing
                 PicksTab.POWER -> state.powerRefreshing
                 PicksTab.WEEKLY -> state.refreshing
-                PicksTab.SPY -> state.spyRefreshing || state.spyLoading
+                PicksTab.TURN -> state.turnRefreshing || state.turnLoading
                 PicksTab.TWO -> false
             }
             // Fixed 48dp slot so the header doesn't shift when the
@@ -175,7 +168,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                                 PicksTab.ENTRIES -> vm.refreshEntries()
                                 PicksTab.POWER -> vm.refreshPower()
                                 PicksTab.WEEKLY -> vm.refresh()
-                                PicksTab.SPY -> vm.refreshSpy()
+                                PicksTab.TURN -> vm.refreshTurn()
                                 PicksTab.TWO -> Unit
                             }
                         }
@@ -197,7 +190,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 PicksTab.ENTRIES -> state.entryRefreshing
                 PicksTab.POWER -> state.powerRefreshing
                 PicksTab.WEEKLY -> state.refreshing
-                PicksTab.SPY -> state.spyRefreshing
+                PicksTab.TURN -> state.turnRefreshing
                 PicksTab.TWO -> false
             },
             onRefresh = {
@@ -206,7 +199,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                     PicksTab.ENTRIES -> vm.refreshEntries()
                     PicksTab.POWER -> vm.refreshPower()
                     PicksTab.WEEKLY -> vm.refresh()
-                    PicksTab.SPY -> vm.refreshSpy()
+                    PicksTab.TURN -> vm.refreshTurn()
                     PicksTab.TWO -> Unit
                 }
             },
@@ -222,7 +215,7 @@ fun PicksScreen(onOpenDetail: (String) -> Unit, onOpenAnalysis: (String) -> Unit
                 PicksTab.ENTRIES -> entryItems(state, onOpenDetail, onOpenAnalysis, vm::refreshEntries)
                 PicksTab.POWER -> powerItems(state, onOpenDetail, onOpenAnalysis, vm::refreshPower)
                 PicksTab.WEEKLY -> weeklyItems(state, onOpenDetail, onOpenAnalysis, vm::refresh)
-                PicksTab.SPY -> spyGreenItems(state, onOpenDetail, onOpenAnalysis, vm::refreshSpy)
+                PicksTab.TURN -> turnItems(state, onOpenDetail, onOpenAnalysis, vm::refreshTurn)
                 PicksTab.TWO -> Unit
             }
         }
@@ -1088,16 +1081,16 @@ private fun PickCard(
     }
 }
 
-// ---------------------------------------------------------------- spy tab
+// ---------------------------------------------------------------- turn tab
 
-private fun androidx.compose.foundation.lazy.LazyListScope.spyGreenItems(
+private fun androidx.compose.foundation.lazy.LazyListScope.turnItems(
     state: PicksState,
     onOpenDetail: (String) -> Unit,
     onOpenAnalysis: (String) -> Unit,
     onRefresh: () -> Unit
 ) {
     when {
-        state.spyRows.isEmpty() && (state.spyLoading || state.spyRefreshing) -> item {
+        state.turnRows.isEmpty() && (state.turnLoading || state.turnRefreshing) -> item {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1108,91 +1101,58 @@ private fun androidx.compose.foundation.lazy.LazyListScope.spyGreenItems(
                     CircularProgressIndicator(color = AurumColors.accent)
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(
-                        text = "Racing today's picks against SPY — five years of " +
-                            "paired windows each…",
+                        text = "Reading MACD and Hull across the market…",
                         style = MaterialTheme.typography.bodyMedium,
                         color = AurumColors.textDim
                     )
-                    if (state.spyTotal > 0) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "${state.spyScanned} of ${state.spyTotal} raced",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = AurumColors.textDim
-                        )
-                    }
                 }
             }
         }
-        state.spyRows.isEmpty() && state.spyTotal == 0 -> item {
+        state.turnRows.isEmpty() && state.turnScanned == 0 -> item {
             EmptyState(
-                title = "No picks to race",
-                message = "No pick list holds anything today, so there is nothing to " +
-                    "put against the index yet.",
-                actionLabel = "Race now",
+                title = "The scan couldn't run",
+                message = "No price history loaded this run, so nothing was read. " +
+                    "Scan again once the connection is back.",
+                actionLabel = "Scan again",
                 onAction = onRefresh
             )
         }
-        state.spyRows.isEmpty() && state.spyUnraced == state.spyTotal -> item {
+        state.turnRows.isEmpty() -> item {
             EmptyState(
-                title = "The race couldn't run",
-                message = "None of the ${state.spyTotal} picks could be raced — the " +
-                    "history didn't load this run, or every listing is too young to " +
-                    "share enough sessions with SPY. Race again once the connection " +
-                    "is back.",
-                actionLabel = "Race again",
-                onAction = onRefresh
-            )
-        }
-        state.spyRows.isEmpty() -> item {
-            EmptyState(
-                title = "Nothing in the green today",
-                message = "Every current pick trades above its soft-quartile edge " +
-                    "against SPY — at these prices the index keeps the ticket. " +
-                    "Race again after prices move.",
-                actionLabel = "Race again",
+                title = "Nothing in the turn today",
+                message = "Read ${state.turnScanned} stocks: none has a MACD deep under zero " +
+                    "closing on its signal while the close sits above a still-falling HMA(20).",
+                actionLabel = "Scan again",
                 onAction = onRefresh
             )
         }
         else -> {
             item {
                 Text(
-                    text = "The stocks now in the picks, raced against SPY over five " +
-                        "years of paired windows — listed only when today's price sits " +
-                        "in the GREEN entry zone, where even a soft (Q1) measured month " +
-                        "beats the index's median over the same days.",
+                    text = "Stocks one step before the turn confirms: MACD at least 1% of price " +
+                        "under zero, still below its signal by no more than 0.3% of price with " +
+                        "the gap closing, and the close back above an HMA(20) that has not " +
+                        "turned up yet. Deepest washout first.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AurumColors.textDim
                 )
             }
-            items(state.spyRows, key = { "spy-${it.symbol}" }) { row ->
-                SpyGreenCard(
-                    row = row,
-                    onOpen = { onOpenDetail(row.symbol) },
-                    onAnalyze = { onOpenAnalysis(row.symbol) },
-                    note = noteFor(state, row.symbol)
+            items(state.turnRows, key = { "t-${it.symbol}" }) { pick ->
+                TurnPickCard(
+                    pick = pick,
+                    onOpen = { onOpenDetail(pick.symbol) },
+                    onAnalyze = { onOpenAnalysis(pick.symbol) },
+                    note = noteFor(state, pick.symbol),
+                    ext = state.extHours[pick.symbol]
                 )
-            }
-            if (state.spyLoading || state.spyRefreshing) {
-                item {
-                    Text(
-                        text = "Still racing — ${state.spyScanned} of ${state.spyTotal} " +
-                            "picks raced…",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = AurumColors.textDim
-                    )
-                }
             }
             item {
                 Text(
-                    text = "Raced ${state.spyScanned} picks: ${state.spyRows.size} in " +
-                        "the green" +
-                        (if (state.spyUnraced > 0) {
-                            ", ${state.spyUnraced} without enough shared history to race"
-                        } else "") +
-                        ". Every level is a percentile of the stock's own paired past " +
-                        "windows against SPY — a measured record, never a promise. " +
-                        "Decision support, not financial advice.",
+                    text = "Read ${state.turnScanned} stocks, ${state.turnRows.size} in the turn. " +
+                        "The same MACD(12,26,9) and HMA(20) as the 35-technique board, on daily " +
+                        "closes. A cross that is close is not a cross that happens — open the " +
+                        "analysis for each technique's own record on the stock. Decision " +
+                        "support, not financial advice.",
                     style = MaterialTheme.typography.labelSmall,
                     color = AurumColors.textDim
                 )
@@ -1202,11 +1162,12 @@ private fun androidx.compose.foundation.lazy.LazyListScope.spyGreenItems(
 }
 
 @Composable
-private fun SpyGreenCard(
-    row: SpyGreenRow,
+private fun TurnPickCard(
+    pick: TurnPick,
     onOpen: () -> Unit,
     onAnalyze: () -> Unit,
-    note: PickNote? = null
+    note: PickNote? = null,
+    ext: ExtendedHours? = null
 ) {
     AurumCard(
         modifier = Modifier
@@ -1214,102 +1175,113 @@ private fun SpyGreenCard(
             .animateContentSize(),
         onClick = onOpen
     ) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(
-                text = row.symbol,
-                style = MaterialTheme.typography.titleMedium,
-                color = AurumColors.text
-            )
-            if (row.name.isNotBlank()) {
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = row.name,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AurumColors.textDim,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            PillTag(
-                text = String.format(Locale.US, "+%.1f%% room in the green", row.headroomPct),
-                color = AurumColors.gain
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            PillTag(
-                text = String.format(
-                    Locale.US, "%.0f%% beat share · %s", row.beatSharePct, row.horizonLabel
-                ),
-                color = when (row.verdict) {
-                    TechniqueVerdict.BULLISH -> AurumColors.gain
-                    TechniqueVerdict.BEARISH -> AurumColors.loss
-                    TechniqueVerdict.NEUTRAL -> AurumColors.textDim
+        Row(verticalAlignment = Alignment.Top) {
+            RankedLogo(symbol = pick.symbol, rank = pick.rank)
+            Spacer(modifier = Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        text = pick.symbol,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AurumColors.text
+                    )
+                    if (pick.name.isNotBlank()) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = pick.name,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AurumColors.textDim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
-            )
-        }
-        Spacer(modifier = Modifier.height(10.dp))
-        EntryZoneBar(row.edgeEntry, row.breakevenEntry, row.price)
-        Spacer(modifier = Modifier.height(10.dp))
-        Row(modifier = Modifier.fillMaxWidth()) {
-            StatTile(
-                label = "Soft-quartile edge",
-                value = "≤ " + Fmt.money(row.edgeEntry),
-                valueColor = AurumColors.gain,
-                modifier = Modifier.weight(1f),
-                maxLines = 1
-            )
-            StatTile(
-                label = "Median edge",
-                value = "≤ " + Fmt.money(row.breakevenEntry),
-                valueColor = AurumColors.accent,
-                modifier = Modifier.weight(1f),
-                maxLines = 1
-            )
-            StatTile(
-                label = "Price now",
-                value = Fmt.money(row.price),
-                modifier = Modifier.weight(1f),
-                maxLines = 1
-            )
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = String.format(
-                Locale.US,
-                "Median measured %s: %+.1f%% vs SPY %+.1f%% over %d paired windows.",
-                row.horizonLabel, row.stockMedianPct, row.spyMedianPct, row.analogCount
-            ),
-            style = MaterialTheme.typography.bodySmall,
-            color = AurumColors.textDim
-        )
-        if (row.sources.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "In the picks: " + row.sources.joinToString(" · "),
-                style = MaterialTheme.typography.labelSmall,
-                color = AurumColors.textDim
-            )
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.heightIn(min = 40.dp).clickable { onAnalyze() }
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.QueryStats,
-                contentDescription = null,
-                tint = AurumColors.accent,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = "Full SPY race",
-                style = MaterialTheme.typography.labelMedium,
-                color = AurumColors.accent
-            )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PillTag(
+                        text = String.format(Locale.US, "MACD %.1f%% under zero", -pick.macdPct),
+                        color = AurumColors.accent
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    PillTag(
+                        text = if (pick.histRisingDays == 1) "Closing 1 session"
+                        else "Closing ${pick.histRisingDays} sessions",
+                        color = AurumColors.gain
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    StatTile(
+                        label = "Price",
+                        value = Fmt.money(pick.price),
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1
+                    )
+                    StatTile(
+                        label = "Today",
+                        value = Fmt.signedPct(pick.dayChangePct),
+                        modifier = Modifier.weight(1f),
+                        valueColor = if (pick.dayChangePct >= 0) AurumColors.gain else AurumColors.loss,
+                        maxLines = 1
+                    )
+                    StatTile(
+                        label = "HMA 20",
+                        value = Fmt.money(pick.hma),
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    StatTile(
+                        label = "MACD",
+                        value = String.format(Locale.US, "%.2f", pick.macd),
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1
+                    )
+                    StatTile(
+                        label = "Signal",
+                        value = String.format(Locale.US, "%.2f", pick.signal),
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1
+                    )
+                    StatTile(
+                        label = "Gap",
+                        value = String.format(Locale.US, "%.3f", pick.histogram),
+                        modifier = Modifier.weight(1f),
+                        valueColor = AurumColors.accent,
+                        maxLines = 1
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = pick.reason,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AurumColors.textDim
+                )
+                if (ext?.preMarketPct != null || ext?.postMarketPct != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ExtHoursChips(ext = ext)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.heightIn(min = 40.dp).clickable { onAnalyze() }
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.QueryStats,
+                        contentDescription = null,
+                        tint = AurumColors.accent,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Full 35-technique analysis",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = AurumColors.accent
+                    )
+                }
+            }
         }
         PortfolioNoteTag(note)
     }

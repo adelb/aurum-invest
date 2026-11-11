@@ -8,6 +8,8 @@ import com.aurum.invest.analytics.IntradayPicker
 import com.aurum.invest.analytics.PowerPicker
 import com.aurum.invest.analytics.PreMarketPick
 import com.aurum.invest.analytics.PreMarketPicker
+import com.aurum.invest.analytics.TurnPicker
+import com.aurum.invest.analytics.TurnScan
 import com.aurum.invest.analytics.WeeklyPicker
 import com.aurum.invest.core.Dates
 import com.aurum.invest.data.db.CacheDao
@@ -226,6 +228,45 @@ class PicksRepository(
             picks
         } catch (_: Exception) {
             getIntraday(targetPct)
+        }
+    }
+
+    // ---- turn picks (cache-backed, one scan per calendar day) --------------------
+
+    private fun turnKey(): String = "turnpicks:" + Dates.todayIso()
+
+    /** Today's stored turn scan (no computation). Null when none is stored. */
+    suspend fun getTurn(): TurnScan? = try {
+        cacheDao.get(turnKey())?.let { TurnPicker.fromJson(it.json) }?.takeIf { it.scanned > 0 }
+    } catch (_: Exception) {
+        null
+    }
+
+    /** Today's turn scan, running + storing it when none exists yet. */
+    suspend fun ensureTurn(): TurnScan = getTurn() ?: recomputeTurn()
+
+    /**
+     * Re-runs the market-wide turn scan and replaces today's stored one. A scan
+     * that read stocks and found none is stored too — that is an answer; a
+     * scan that read nothing is a failure and is not.
+     */
+    suspend fun recomputeTurn(): TurnScan {
+        return try {
+            val scan = TurnPicker(market).computeScan(Dates.todayIso())
+            if (scan.scanned > 0) {
+                cacheDao.put(
+                    CacheEntity(
+                        key = turnKey(),
+                        json = TurnPicker.toJson(scan),
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+                scan
+            } else {
+                getTurn() ?: scan
+            }
+        } catch (_: Exception) {
+            getTurn() ?: TurnScan.EMPTY
         }
     }
 

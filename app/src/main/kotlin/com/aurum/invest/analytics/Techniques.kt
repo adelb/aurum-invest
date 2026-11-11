@@ -2292,6 +2292,15 @@ object Techniques {
         return wmaNullable(diff.toList(), sqrt(period.toDouble()).roundToInt().coerceAtLeast(2))
     }
 
+    /** The board's own HMA([period]) line, for scans that read it without the full board. */
+    fun hullLine(closes: List<Double>, period: Int = 20): List<Double?> = hullSeries(closes, period)
+
+    /** The board's own MACD(12,26,9) as (line, signal, histogram). */
+    fun macdLines(closes: List<Double>): Triple<List<Double?>, List<Double?>, List<Double?>> {
+        val s = macdSeries(closes)
+        return Triple(s.macd, s.signal, s.histogram)
+    }
+
     private fun hullResult(price: Double, data: HullData): TechniqueResult {
         val name = "Hull Moving Average"
         val n = data.closes.size
